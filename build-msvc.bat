@@ -1,0 +1,37 @@
+@echo off
+setlocal EnableExtensions
+cd /d "%~dp0"
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" (
+    echo [ERROR] vswhere.exe not found. Install Visual Studio Build Tools.
+    exit /b 1
+)
+set "VSROOT="
+for /f "usebackq tokens=*" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%I"
+if not defined VSROOT (
+    echo [ERROR] MSVC C++ tools not found. Add Desktop development with C++.
+    exit /b 1
+)
+call "%VSROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul
+if errorlevel 1 exit /b 1
+if not exist build mkdir build
+pushd build
+echo [1/4] Building AROGUE.exe...
+cl /nologo /std:c++17 /O1 /Os /GL /Gw /Gy /MT /utf-8 /GR- /W4 /DUNICODE /D_UNICODE ..\src\main.cpp ..\src\game.cpp /Fe:AROGUE.exe /link /LTCG /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF user32.lib gdi32.lib winmm.lib
+if errorlevel 1 (popd & exit /b 1)
+echo [2/4] Building and running deterministic smoke tests...
+cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- /W4 ..\src\smoke.cpp ..\src\game.cpp /Fe:smoke.exe /link /OPT:REF /OPT:ICF user32.lib
+if errorlevel 1 (popd & exit /b 1)
+smoke.exe
+if errorlevel 1 (popd & exit /b 1)
+echo [3/4] Running heuristic balance sample...
+cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- ..\src\balance.cpp ..\src\game.cpp /Fe:balance.exe /link /OPT:REF /OPT:ICF user32.lib
+if errorlevel 1 (popd & exit /b 1)
+balance.exe
+if errorlevel 1 (popd & exit /b 1)
+for %%A in (AROGUE.exe) do set "EXESIZE=%%~zA"
+set /a PERCENT=EXESIZE*100/1474560
+echo [4/4] AROGUE.exe: %EXESIZE% bytes ^(%PERCENT%%% of 1,474,560 bytes^)
+popd
+exit /b 0
+
