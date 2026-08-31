@@ -714,16 +714,16 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
 static void DrawDeck(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
-    Text(dc, panel.left + 28, panel.top + 18, L"CURRENT DISK FACES", C_GREEN, gFontLarge);
-    wchar_t b[64]; wsprintfW(b, L"DECK %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
-    Text(dc, panel.left + 320, panel.top + 28, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+    Text(dc, panel.left + 28, panel.top + 18, L"보유 중인 디스크 면", C_GREEN, gFontLarge);
+    wchar_t b[64]; wsprintfW(b, L"덱 %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
+    Text(dc, panel.left + 28, panel.top + 58, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
     RECT close = DeckCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
     TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     DrawFaceGrid(dc, 0);
 
     TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20),
-        L"현재 보유한 18개 면입니다 (조회 전용). ESC로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+        L"현재 보유한 18개 면입니다 (조회 전용). 취소 키로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 }
 
 static void DrawGuide(HDC dc, int width, int height) {
