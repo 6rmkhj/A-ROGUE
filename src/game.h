@@ -60,6 +60,10 @@ struct GameState {
     int rewardKinds[3];
     int rewardValues[3];
     int selectedReward;
+    int rewardIsTsr;              // 1 = 보스 보상: 카드 0~2가 면이 아니라 TSR
+    uint8_t tsrInstalled[TSR_COUNT];
+    uint8_t keybUsedThisTurn;
+    uint8_t tsrReserved[2];
     int lastDamage;
     int lastBlock;
     int lastTurnDamageDealt;
@@ -71,6 +75,7 @@ struct GameState {
     int combatsWon;
     int facesInstalled;
     int sectorsRepaired;
+    int tsrsInstalled;
     int pruneAdvancePending;
     wchar_t logs[5][96];
 };
@@ -85,14 +90,22 @@ void SelectEnemy(GameState* game, int enemyIndex);
 void EndTurn(GameState* game);
 void SelectReward(GameState* game, int rewardIndex);
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex);
+void InstallTsr(GameState* game, int rewardIndex);
 void RepairSector(GameState* game);
 void SkipReward(GameState* game);
 void PruneFace(GameState* game, int dieIndex, int faceIndex);
+void UninstallTsr(GameState* game, int tsrIndex);
 void ConfirmPrune(GameState* game);
+void KeybReroll(GameState* game, int dieIndex);
 
 int FaceCost(const Face* face);
 int FacePower(const Face* face);
 int DeckBytes(const GameState* game);
+int TsrBytes(const GameState* game);
+int UsedBytes(const GameState* game);
+int IsTsrInstalled(const GameState* game, int tsr);
+int InstalledTsrCount(const GameState* game);
+int InstalledTsrAt(const GameState* game, int slot);
 int EffectiveCapacity(const GameState* game);
 int SectorRepairAmount(const GameState* game);
 int NonEmptyFaceCount(const GameState* game);

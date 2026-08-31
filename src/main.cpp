@@ -206,8 +206,16 @@ static void ExecuteCombatTurn() {
     else PlaySfx(SFX_EXECUTE);
 }
 
+static void KeybRerollSelected() {
+    if (!gRolled || gGame.keybUsedThisTurn || gGame.selectedDie < 0) return;
+    if (!IsTsrInstalled(&gGame, TSR_KEYB)) return;
+    KeybReroll(&gGame, gGame.selectedDie);
+    PlaySfxPitched(SFX_DIE_LOCK, 3);
+}
+
 static void ClickCombat(int x, int y) {
     if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
+    if (IsTsrInstalled(&gGame, TSR_KEYB) && Inside(KeybButtonRect(), x, y)) { KeybRerollSelected(); return; }
     if (!gRolled) return;
     for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
@@ -233,12 +241,22 @@ static void ClickReward(int x, int y) {
         if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); }
         return;
     }
+    if (gGame.rewardIsTsr) {
+        // 보스 전리품: 카드 클릭 한 번으로 즉시 상주한다.
+        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { InstallTsr(&gGame, i); PlaySfx(SFX_REWARD_SET); return; }
+        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
+        return;
+    }
     for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlaySfx(SFX_REWARD_SET); return; }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
 }
 
 static void ClickPrune(int x, int y) {
+    int tsrCount = InstalledTsrCount(&gGame);
+    for (int i = 0; i < tsrCount && i < 4; ++i) if (Inside(PruneTsrRect(i), x, y)) {
+        UninstallTsr(&gGame, InstalledTsrAt(&gGame, i)); PlaySfx(SFX_PRUNE); return;
+    }
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { PruneFace(&gGame, d, f); PlaySfx(SFX_PRUNE); return; }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlaySfx(SFX_CONFIRM); }
 }
@@ -270,6 +288,7 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) return 200 + i;
         for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) return 300 + i;
         if (Inside(EndTurnRect(), x, y)) return 400;
+        if (IsTsrInstalled(&gGame, TSR_KEYB) && Inside(KeybButtonRect(), x, y)) return 410;
         return -1;
     }
     if (gGame.phase == PHASE_REWARD) {
@@ -279,6 +298,8 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (gGame.phase == PHASE_PRUNE) {
+        int tsrCount = InstalledTsrCount(&gGame);
+        for (int i = 0; i < tsrCount && i < 4; ++i) if (Inside(PruneTsrRect(i), x, y)) return 640 + i;
         for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
         return -1;
@@ -342,10 +363,14 @@ static void HandleKey(WPARAM key) {
         if (key == 'R') BeginRead();
         else if (!gRolled) { /* sector not read yet */ }
         else if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlaySfxPitched(SFX_DIE_PICK, gGame.selectedDie * 2); }
+        else if (key == 'K') KeybRerollSelected();
         else if (key == VK_SPACE) ExecuteCombatTurn();
         else if (key == VK_ESCAPE && gGame.selectedDie >= 0) UnassignDie(&gGame, gGame.selectedDie);
     } else if (gGame.phase == PHASE_REWARD) {
-        if (key >= '1' && key <= '3') SelectReward(&gGame, (int)(key - '1'));
+        if (key >= '1' && key <= '3') {
+            if (gGame.rewardIsTsr) { InstallTsr(&gGame, (int)(key - '1')); PlaySfx(SFX_REWARD_SET); }
+            else SelectReward(&gGame, (int)(key - '1'));
+        }
         else if (key == '4') { if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); } }
         else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }

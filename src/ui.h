@@ -63,6 +63,8 @@ RECT ReadButtonRect();
 RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
+RECT KeybButtonRect();
+RECT PruneTsrRect(int i);
 
 int DieForSlotUI(int slot);
 int CanRepairSector();

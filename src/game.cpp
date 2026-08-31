@@ -63,6 +63,36 @@ int DeckBytes(const GameState* game) {
     return total;
 }
 
+int IsTsrInstalled(const GameState* game, int tsr) {
+    return tsr >= 0 && tsr < TSR_COUNT && game->tsrInstalled[tsr];
+}
+
+int TsrBytes(const GameState* game) {
+    int total = 0;
+    for (int i = 0; i < TSR_COUNT; ++i) if (game->tsrInstalled[i]) total += TSR_INFO[i].cost;
+    return total;
+}
+
+// 면과 상주 프로그램이 같은 용량 풀을 나눠 쓴다. 한도 비교는 전부 이 값으로 한다.
+int UsedBytes(const GameState* game) {
+    return DeckBytes(game) + TsrBytes(game);
+}
+
+int InstalledTsrCount(const GameState* game) {
+    int total = 0;
+    for (int i = 0; i < TSR_COUNT; ++i) if (game->tsrInstalled[i]) ++total;
+    return total;
+}
+
+int InstalledTsrAt(const GameState* game, int slot) {
+    for (int i = 0; i < TSR_COUNT; ++i) {
+        if (!game->tsrInstalled[i]) continue;
+        if (slot == 0) return i;
+        --slot;
+    }
+    return -1;
+}
+
 int IsModifierActive(const GameState* game, int modifier) {
     return game->modifierA == modifier || game->modifierB == modifier;
 }
@@ -80,6 +110,7 @@ int EffectiveCapacity(const GameState* game) {
     int capacity = FLOOR_CAPACITY[floor];
     if (IsModifierActive(game, MOD_OVERALLOC)) capacity += 60;
     capacity += DrivePerkValue(game, PERK_CAPACITY);
+    if (IsTsrInstalled(game, TSR_HIMEM)) capacity += TSR_INFO[TSR_HIMEM].value;
     return capacity;
 }
 
@@ -192,6 +223,11 @@ static void BeginTurn(GameState* game) {
     game->playerBlock = 0;
     game->lastDamage = 0;
     game->lastBlock = 0;
+    game->keybUsedThisTurn = 0;
+    if (game->turn == 1 && IsTsrInstalled(game, TSR_SMARTDRV)) {
+        game->playerBlock = TSR_INFO[TSR_SMARTDRV].value;
+        PushLog2(game, L"%s: 선제 캐시 방어도 +%d.", TSR_INFO[TSR_SMARTDRV].name, game->playerBlock);
+    }
     RollDice(game);
     ApplyFragmentation(game);
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) PlanEnemy(game, &game->enemies[i], i);
@@ -318,6 +354,10 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
 
 static void ApplyFragmentation(GameState* game) {
     if (!IsModifierActive(game, MOD_FRAGMENTATION)) return;
+    if (IsTsrInstalled(game, TSR_DEFRAG)) {
+        for (int i = 0; i < 3; ++i) game->dice[i].disabled = 0;
+        return;
+    }
     int fragmented = 0;
     for (int i = 0; i < 3; ++i) game->dice[i].disabled = 0;
     for (int i = 1; i < 3; ++i) {
@@ -501,6 +541,29 @@ static void GenerateRewards(GameState* game) {
         game->rewardKinds[i] = kind;
         game->rewardValues[i] = kind == FACE_NUMBER ? 7 + RandomRange(game, 4) : FACE_INFO[kind].power;
     }
+    game->rewardIsTsr = 0;
+    game->selectedReward = -1;
+}
+
+// 보스 전리품: 아직 설치하지 않은 TSR 중에서 3개를 제시한다. 특정 손상에
+// 대항하는 TSR은 이번 런에 그 손상이 있을 때만 후보가 된다 (죽은 카드 방지).
+// 풀 최소 크기: 6 - 대항 2종 - 기설치 1개 = 3이라 항상 세 장이 나온다.
+static void GenerateTsrRewards(GameState* game) {
+    int pool[TSR_COUNT], count = 0;
+    for (int i = 0; i < TSR_COUNT; ++i) {
+        if (game->tsrInstalled[i]) continue;
+        if (TSR_INFO[i].counters >= 0 && !IsModifierActive(game, TSR_INFO[i].counters)) continue;
+        pool[count++] = i;
+    }
+    for (int i = count - 1; i > 0; --i) {
+        int j = RandomRange(game, i + 1);
+        int swap = pool[i]; pool[i] = pool[j]; pool[j] = swap;
+    }
+    for (int i = 0; i < 3; ++i) {
+        game->rewardKinds[i] = count > 0 ? pool[i % count] : TSR_HIMEM;
+        game->rewardValues[i] = TSR_INFO[game->rewardKinds[i]].cost;
+    }
+    game->rewardIsTsr = 1;
     game->selectedReward = -1;
 }
 
@@ -516,6 +579,17 @@ static void CombatWon(GameState* game) {
         int hpBefore = game->playerHp;
         game->playerHp = ClampInt(game->playerHp + heal, 0, game->playerMaxHp);
         if (game->playerHp > hpBefore) PushLog2(game, L"%s 특성: 체력 %d 회복.", DRIVE_INFO[game->selectedDrive].letter, game->playerHp - hpBefore);
+    }
+    if (IsTsrInstalled(game, TSR_UNDELETE)) {
+        int hpBefore = game->playerHp;
+        game->playerHp = ClampInt(game->playerHp + TSR_INFO[TSR_UNDELETE].value, 0, game->playerMaxHp);
+        if (game->playerHp > hpBefore) PushLog2(game, L"%s: 체력 %d 복원.", TSR_INFO[TSR_UNDELETE].name, game->playerHp - hpBefore);
+    }
+    if (game->encounter == 2) {
+        GenerateTsrRewards(game);
+        game->phase = PHASE_REWARD;
+        PushLog(game, L"보스 전리품: 상주 프로그램 하나를 설치할 수 있습니다.");
+        return;
     }
     GenerateRewards(game);
     game->phase = PHASE_REWARD;
@@ -576,7 +650,7 @@ void EndTurn(GameState* game) {
 }
 
 void SelectReward(GameState* game, int rewardIndex) {
-    if (game->phase != PHASE_REWARD || rewardIndex < 0 || rewardIndex >= 3) return;
+    if (game->phase != PHASE_REWARD || game->rewardIsTsr || rewardIndex < 0 || rewardIndex >= 3) return;
     game->selectedReward = rewardIndex;
 }
 
@@ -596,10 +670,10 @@ static void DamageRandomFace(GameState* game) {
 }
 
 static void ContinueAfterReward(GameState* game) {
-    if (DeckBytes(game) > EffectiveCapacity(game)) {
+    if (UsedBytes(game) > EffectiveCapacity(game)) {
         game->phase = PHASE_PRUNE;
         game->pruneAdvancePending = 1;
-        PushLog(game, L"현재 층 용량 초과: 면을 비워 한도에 맞추십시오.");
+        PushLog(game, L"현재 층 용량 초과: 면이나 상주 프로그램을 정리하십시오.");
         return;
     }
     if (game->encounter < 2) {
@@ -613,16 +687,19 @@ static void ContinueAfterReward(GameState* game) {
         game->phase = PHASE_VICTORY;
         return;
     }
-    if (IsModifierActive(game, MOD_BAD_SECTOR)) DamageRandomFace(game);
-    if (DeckBytes(game) > EffectiveCapacity(game)) {
+    if (IsModifierActive(game, MOD_BAD_SECTOR)) {
+        if (IsTsrInstalled(game, TSR_SCANDISK)) PushLog2(game, L"%s: 배드 섹터 손상을 차단했습니다.", TSR_INFO[TSR_SCANDISK].name, 0);
+        else DamageRandomFace(game);
+    }
+    if (UsedBytes(game) > EffectiveCapacity(game)) {
         game->phase = PHASE_PRUNE;
         game->pruneAdvancePending = 0;
-        PushLog(game, L"용량 초과: 면을 비워 다음 층 한도에 맞추십시오.");
+        PushLog(game, L"용량 초과: 다음 층 한도에 맞게 정리하십시오.");
     } else StartCombat(game);
 }
 
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
-    if (game->phase != PHASE_REWARD || game->selectedReward < 0) return;
+    if (game->phase != PHASE_REWARD || game->rewardIsTsr || game->selectedReward < 0) return;
     if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return;
     int reward = game->selectedReward;
     Face* face = &game->dice[dieIndex].faces[faceIndex];
@@ -630,6 +707,19 @@ void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     face->value = (uint8_t)game->rewardValues[reward];
     ++game->facesInstalled;
     PushLog2(game, L"%s 면 설치. 현재 덱 %dB.", FACE_INFO[face->kind].name, DeckBytes(game));
+    ContinueAfterReward(game);
+}
+
+// 보스 전리품 카드를 클릭하면 그 자리에서 상주가 시작된다. 면과 달리
+// 교체 없이 순수하게 더해지므로, 청구서는 다음 층의 좁아진 한도에서 돌아온다.
+void InstallTsr(GameState* game, int rewardIndex) {
+    if (game->phase != PHASE_REWARD || !game->rewardIsTsr) return;
+    if (rewardIndex < 0 || rewardIndex >= 3) return;
+    int tsr = game->rewardKinds[rewardIndex];
+    if (tsr < 0 || tsr >= TSR_COUNT || game->tsrInstalled[tsr]) return;
+    game->tsrInstalled[tsr] = 1;
+    ++game->tsrsInstalled;
+    PushLog2(game, L"%s 상주 시작. 사용 %dB.", TSR_INFO[tsr].name, UsedBytes(game));
     ContinueAfterReward(game);
 }
 
@@ -664,9 +754,31 @@ void PruneFace(GameState* game, int dieIndex, int faceIndex) {
     PushLog(game, L"면을 삭제해 용량을 확보했습니다.");
 }
 
+// 정리 화면에서 상주 프로그램을 종료해 용량을 되찾는다. HIMEM을 내리면
+// 한도도 함께 줄지만, 면은 언제든 0B까지 비울 수 있어 막다른 길은 없다.
+void UninstallTsr(GameState* game, int tsrIndex) {
+    if (game->phase != PHASE_PRUNE) return;
+    if (tsrIndex < 0 || tsrIndex >= TSR_COUNT || !game->tsrInstalled[tsrIndex]) return;
+    game->tsrInstalled[tsrIndex] = 0;
+    PushLog2(game, L"%s 종료. 사용 %dB.", TSR_INFO[tsrIndex].name, UsedBytes(game));
+}
+
+// KEYB: 판독이 끝난 뒤 턴마다 한 번, 선택한 주사위를 다시 굴린다.
+// 굴림이 바뀌므로 조각화 중복 판정도 다시 계산한다.
+void KeybReroll(GameState* game, int dieIndex) {
+    if (game->phase != PHASE_COMBAT || !IsTsrInstalled(game, TSR_KEYB)) return;
+    if (game->keybUsedThisTurn || dieIndex < 0 || dieIndex >= 3) return;
+    game->dice[dieIndex].rolledFace = (uint8_t)RandomRange(game, 6);
+    game->keybUsedThisTurn = 1;
+    ApplyFragmentation(game);
+    wchar_t buffer[96];
+    wsprintfW(buffer, L"KEYB: 주사위 %d 재입력 → 출력 %d.", dieIndex + 1, FacePower(RolledFace(game, dieIndex)));
+    PushLog(game, buffer);
+}
+
 void ConfirmPrune(GameState* game) {
     if (game->phase != PHASE_PRUNE) return;
-    if (DeckBytes(game) > EffectiveCapacity(game)) {
+    if (UsedBytes(game) > EffectiveCapacity(game)) {
         PushLog(game, L"아직 층 용량을 초과합니다.");
         return;
     }

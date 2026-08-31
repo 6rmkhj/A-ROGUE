@@ -86,8 +86,8 @@ static void DrawHeader(HDC dc, int width) {
         }
         wsprintfW(b, L"체력 %d/%d", gGame.playerHp, gGame.playerMaxHp);
         Text(dc, width - 440, 14, b, gGame.playerHp <= 10 ? C_RED : C_TEXT, gFontMedium);
-        wsprintfW(b, L"덱 %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
-        Text(dc, width - 305, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+        wsprintfW(b, L"용량 %dB / %dB", UsedBytes(&gGame), EffectiveCapacity(&gGame));
+        Text(dc, width - 305, 14, b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
     }
     RECT guide = GuideButtonRect(width); int hover = Inside(guide, gMouse.x, gMouse.y);
     Panel(dc, guide, gGuideOpen ? RGB(32, 82, 67) : hover ? RGB(27, 48, 52) : C_PANEL_2, gGuideOpen || hover ? C_GREEN : C_LINE);
@@ -125,7 +125,37 @@ RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 408, left 
 RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 574, left + 184, 695); }
 RECT EndTurnRect() { return MakeRect(696, 616, 896, 679); }
 RECT ReadButtonRect() { return MakeRect(696, 544, 896, 600); }
+RECT KeybButtonRect() { return MakeRect(696, 685, 896, 732); }
 int DieForSlotUI(int slot) { for (int d = 0; d < 3; ++d) if (gGame.dice[d].assignedSlot == slot) return d; return -1; }
+
+// 설치된 상주 프로그램은 비어 있는 적 슬롯에 세로로 나열한다.
+// 현재 전투는 적이 하나라 슬롯 1이 항상 비지만, 다중 적에도 안전하게
+// enemyCount 다음 슬롯을 쓴다. 적이 가득 차면 표시만 생략된다.
+static void DrawTsrPanel(HDC dc) {
+    int count = InstalledTsrCount(&gGame);
+    if (count <= 0 || gGame.enemyCount >= 3) return;
+    RECT r = EnemyRect(gGame.enemyCount);
+    Panel(dc, r, RGB(12, 19, 26), C_LINE);
+    Text(dc, r.left + 12, r.top + 10, L"상주 프로그램", C_GREEN, gFontSmall);
+    wchar_t b[64]; wsprintfW(b, L"%dB", TsrBytes(&gGame));
+    TextRect(dc, MakeRect(r.right - 70, r.top + 10, r.right - 12, r.top + 30), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    for (int i = 0; i < count && i < 3; ++i) {
+        int tsr = InstalledTsrAt(&gGame, i);
+        if (tsr < 0) break;
+        int top = r.top + 40 + i * 68;
+        Fill(dc, MakeRect(r.left + 12, top - 8, r.right - 12, top - 7), RGB(28, 40, 50));
+        Text(dc, r.left + 12, top, TSR_INFO[tsr].name, (COLORREF)TSR_INFO[tsr].color, gFontSmall);
+        wsprintfW(b, L"%dB", TSR_INFO[tsr].cost);
+        TextRect(dc, MakeRect(r.right - 60, top, r.right - 12, top + 20), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        if (tsr == TSR_KEYB) {
+            TextRect(dc, MakeRect(r.left + 12, top + 21, r.right - 12, top + 58),
+                gGame.keybUsedThisTurn ? L"이번 턴 사용됨" : L"재굴림 대기 중",
+                gGame.keybUsedThisTurn ? C_DIM : C_YELLOW, gFontSmall, DT_WORDBREAK);
+        } else {
+            TextRect(dc, MakeRect(r.left + 12, top + 21, r.right - 12, top + 58), TSR_INFO[tsr].description, C_DIM, gFontSmall, DT_WORDBREAK);
+        }
+    }
+}
 
 static void DrawEnemy(HDC dc, int index) {
     const EnemyState* enemy = &gGame.enemies[index]; const EnemyInfo* info = &ENEMY_INFO[enemy->kind]; RECT r = EnemyRect(index);
@@ -220,6 +250,7 @@ static void DrawSidebar(HDC dc, int width, int height) {
 static void DrawCombat(HDC dc, int width, int height) {
     SyncEnemyDamage();
     for (int i = 0; i < gGame.enemyCount; ++i) DrawEnemy(dc, i);
+    DrawTsrPanel(dc);
     if (gGame.hasTurnResult) {
         wchar_t result[128];
         wsprintfW(result, L"최근 실행  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d",
@@ -234,6 +265,19 @@ static void DrawCombat(HDC dc, int width, int height) {
     RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y) && gRolled;
     Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
     TextRect(dc, end, L"실행 [스페이스]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (IsTsrInstalled(&gGame, TSR_KEYB)) {
+        RECT keyb = KeybButtonRect();
+        int canReroll = gRolled && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0;
+        int hoverKeyb = canReroll && Inside(keyb, gMouse.x, gMouse.y);
+        COLORREF accent = (COLORREF)TSR_INFO[TSR_KEYB].color;
+        Panel(dc, keyb, canReroll ? (hoverKeyb ? RGB(52, 34, 46) : RGB(36, 25, 34)) : C_PANEL, canReroll ? accent : C_LINE);
+        wchar_t b[64];
+        if (gGame.keybUsedThisTurn) lstrcpyW(b, L"KEYB 사용됨");
+        else if (!gRolled) lstrcpyW(b, L"KEYB · 판독 후");
+        else if (gGame.selectedDie < 0) lstrcpyW(b, L"KEYB · 주사위 선택");
+        else wsprintfW(b, L"주사위 %d 재굴림 [K]", gGame.selectedDie + 1);
+        TextRect(dc, keyb, b, canReroll ? accent : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     DrawSidebar(dc, width, height);
 }
 
@@ -384,10 +428,6 @@ static void DrawTurnCalculation(HDC dc) {
         L"계산 완료 · 계속하려면 화면을 클릭하세요", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
-// 카드 0~2는 설치할 면, 마지막 카드는 면 대신 체력을 얻는 섹터 복구다.
-#define REWARD_CARD_COUNT 4
-#define REWARD_REPAIR 3
-
 RECT RewardRect(int i, int width) {
     int cardWidth = 220, gap = 28, total = cardWidth * REWARD_CARD_COUNT + gap * (REWARD_CARD_COUNT - 1);
     int left = (width - total) / 2 + i * (cardWidth + gap);
@@ -411,9 +451,29 @@ static void DrawFaceGrid(HDC dc, int mode) {
 }
 
 static void DrawReward(HDC dc, int width, int height) {
-    TextRect(dc, MakeRect(0, 76, width, 102), L"전투 완료  →  [현재: 보상 선택]  →  면 교체 또는 섹터 복구  →  다음 전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(0, 96, width, 122), L"면을 설치하거나, 대신 섹터를 복구해 체력을 얻으십시오", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
-    for (int i = 0; i < 3; ++i) {
+    if (gGame.rewardIsTsr) {
+        TextRect(dc, MakeRect(0, 76, width, 102), L"보스 삭제 완료  →  [현재: 전리품 선택]  →  상주 프로그램 설치  →  다음 층", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(0, 96, width, 122), L"상주 프로그램은 면과 용량을 나눠 씁니다 · 카드를 클릭하면 즉시 설치됩니다", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    } else {
+        TextRect(dc, MakeRect(0, 76, width, 102), L"전투 완료  →  [현재: 보상 선택]  →  면 교체 또는 섹터 복구  →  다음 전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(0, 96, width, 122), L"면을 설치하거나, 대신 섹터를 복구해 체력을 얻으십시오", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    }
+    for (int i = 0; i < 3 && gGame.rewardIsTsr; ++i) {
+        RECT r = RewardRect(i, width); int hover = Inside(r, gMouse.x, gMouse.y), tsr = gGame.rewardKinds[i];
+        const TsrInfo* info = &TSR_INFO[tsr];
+        Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)info->color : C_LINE);
+        wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
+        TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), info->name, (COLORREF)info->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        wchar_t b[64]; wsprintfW(b, L"상주  ·  %dB", info->cost);
+        TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(r.left + 12, r.top + 88, r.right - 12, r.top + 122), info->description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+        // 설치 후 사용량을 미리 보여주고, 한도를 넘게 되면 경고한다.
+        int after = UsedBytes(&gGame) + info->cost;
+        int over = after > EffectiveCapacity(&gGame);
+        wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
+        TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b, over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    }
+    for (int i = 0; i < 3 && !gGame.rewardIsTsr; ++i) {
         RECT r = RewardRect(i, width); int selected = gGame.selectedReward == i, hover = Inside(r, gMouse.x, gMouse.y), kind = gGame.rewardKinds[i];
         Panel(dc, r, selected ? RGB(31, 55, 48) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
@@ -438,21 +498,37 @@ static void DrawReward(HDC dc, int width, int height) {
         wsprintfW(b, L"면 대신 회복\n현재 %d / %d", gGame.playerHp, gGame.playerMaxHp);
         TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
-    Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
+    if (gGame.rewardIsTsr) { Text(dc, 56, 304, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
+    else { Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0); }
     RECT skip = ContinueRect(width, height); Panel(dc, skip, C_PANEL_2, C_LINE); TextRect(dc, skip, L"건너뛰기 [취소]", C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+RECT PruneTsrRect(int i) { int left = 150 + i * 180; return MakeRect(left, 252, left + 164, 320); }
+
 static void DrawPrune(HDC dc, int width, int height) {
-    wchar_t b[160]; wsprintfW(b, L"%d층 진입 한도: %dB  ·  현재: %dB", gGame.floor + 1, EffectiveCapacity(&gGame), DeckBytes(&gGame));
-    TextRect(dc, MakeRect(0, 92, width, 132), b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제됩니다. 손상 면도 원래 비용을 차지합니다.\n한도 이하가 되면 다음 층으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
-    DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int ready = DeckBytes(&gGame) <= EffectiveCapacity(&gGame) && NonEmptyFaceCount(&gGame) > 0;
+    wchar_t b[160]; wsprintfW(b, L"%d층 진입 한도: %dB  ·  현재: %dB", gGame.floor + 1, EffectiveCapacity(&gGame), UsedBytes(&gGame));
+    TextRect(dc, MakeRect(0, 92, width, 132), b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제되고, 상주 프로그램을 클릭하면 종료됩니다.\n한도 이하가 되면 다음으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
+    int tsrCount = InstalledTsrCount(&gGame);
+    if (tsrCount > 0) {
+        Text(dc, 56, 272, L"상주 프로그램", C_GREEN, gFontMedium);
+        for (int i = 0; i < tsrCount && i < 4; ++i) {
+            int tsr = InstalledTsrAt(&gGame, i);
+            if (tsr < 0) break;
+            RECT r = PruneTsrRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
+            Panel(dc, r, hover ? RGB(46, 28, 32) : C_PANEL, hover ? C_RED : C_LINE);
+            TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name, (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
+            wsprintfW(b, hover ? L"%dB · 종료" : L"%dB", TSR_INFO[tsr].cost);
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        }
+    }
+    DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int ready = UsedBytes(&gGame) <= EffectiveCapacity(&gGame) && NonEmptyFaceCount(&gGame) > 0;
     Panel(dc, confirm, ready ? RGB(28, 70, 57) : C_PANEL_2, ready ? C_GREEN : C_LINE); TextRect(dc, confirm, L"계속 [엔터]", ready ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), victory ? L"디스크 복구 완료" : L"시스템 정지", victory ? C_GREEN : C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    wchar_t b[192]; wsprintfW(b, L"전투 %d회 완료  ·  면 %d개 설치  ·  섹터 복구 %d회  ·  최종 덱 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, DeckBytes(&gGame));
+    wchar_t b[192]; wsprintfW(b, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
     TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
 }
 
@@ -460,8 +536,13 @@ static void DrawDeck(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
     Text(dc, panel.left + 28, panel.top + 18, L"보유 중인 디스크 면", C_GREEN, gFontLarge);
-    wchar_t b[64]; wsprintfW(b, L"덱 %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
-    Text(dc, panel.left + 28, panel.top + 58, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+    wchar_t b[160]; wsprintfW(b, L"덱 %dB + 상주 %dB = %dB / %dB", DeckBytes(&gGame), TsrBytes(&gGame), UsedBytes(&gGame), EffectiveCapacity(&gGame));
+    Text(dc, panel.left + 28, panel.top + 58, b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+    if (InstalledTsrCount(&gGame) > 0) {
+        lstrcpyW(b, L"상주:");
+        for (int i = 0; i < TSR_COUNT; ++i) if (gGame.tsrInstalled[i]) { lstrcatW(b, L"  "); lstrcatW(b, TSR_INFO[i].name); }
+        Text(dc, panel.left + 440, panel.top + 58, b, C_DIM, gFontSmall);
+    }
     RECT close = DeckCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
     TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -493,12 +574,12 @@ static void DrawGuide(HDC dc, int width, int height) {
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
         L"볼륨 선택  런 시작 시 드라이브마다 손상 2종 공개 + 고유 특성 1개\n배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 204, L"덱·보상·용량", C_YELLOW, gFontMedium);
+    Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"18개 면의 비용 합이 덱 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체하거나, 면 대신 섹터 복구를 골라 체력을 회복할 수 있습니다. 현재 층 및 다음 층 한도를 넘으면 빈 면(0B)이 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 전투 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상시 효과를 주는 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
-        L"클릭 / 1·2·3  선택\n4  보상 화면에서 섹터 복구\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기\nF3  보유 면 조회", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"클릭 / 1·2·3  선택\n4  보상 화면에서 섹터 복구\nK  KEYB 재굴림 (선택한 주사위)\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 void PaintGame(HWND window) {

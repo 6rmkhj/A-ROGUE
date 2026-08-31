@@ -128,6 +128,37 @@ static const int FLOOR_CAPACITY[3] = {240, 180, 130};
 // 보상 대신 선택하는 섹터 복구의 회복량. 층이 깊어질수록 피해가 커지므로 함께 오른다.
 static const int SECTOR_REPAIR_HEAL[3] = {10, 13, 16};
 
+// 상주 프로그램(TSR): 보스 처치 보상으로만 설치되며, 면과 같은 용량 풀을
+// 나눠 쓰면서 상시 효과를 낸다. 층이 내려가 한도가 조여들면 정리 화면에서
+// 면처럼 제거(언인스톨)할 수 있다.
+enum TsrKind {
+    TSR_HIMEM = 0,   // 용량 한도 +60B
+    TSR_DEFRAG,      // 조각화 무효
+    TSR_SCANDISK,    // 층 하강 시 배드 섹터 손상 무효
+    TSR_UNDELETE,    // 전투 승리 시 체력 회복
+    TSR_SMARTDRV,    // 전투 첫 턴 방어도
+    TSR_KEYB,        // 턴마다 한 번 선택한 주사위 재굴림
+    TSR_COUNT
+};
+
+struct TsrInfo {
+    const wchar_t* name;
+    const wchar_t* description; // 카드/패널 한 줄 요약
+    int cost;                   // 바이트 (면과 같은 용량 풀)
+    int value;                  // 효과 수치
+    int counters;               // 대항하는 ModifierKind, -1 = 항상 유효
+    uint32_t color;
+};
+
+static const TsrInfo TSR_INFO[TSR_COUNT] = {
+    {L"HIMEM.SYS", L"용량 한도 +60B",                 20, 60, -1,                AR_COLOR(255, 204, 75)},
+    {L"DEFRAG",    L"조각화 비활성을 무효화",          22,  0, MOD_FRAGMENTATION, AR_COLOR(83, 170, 255)},
+    {L"SCANDISK",  L"층 하강 시 배드 섹터 손상 무효",  24,  0, MOD_BAD_SECTOR,    AR_COLOR(95, 225, 176)},
+    {L"UNDELETE",  L"전투 승리 시 체력 6 회복",        26,  6, -1,                AR_COLOR(182, 96, 220)},
+    {L"SMARTDRV",  L"전투 첫 턴 방어도 +6",            28,  6, -1,                AR_COLOR(90, 190, 230)},
+    {L"KEYB",      L"턴마다 한 번 주사위 재굴림 [K]",  30,  1, -1,                AR_COLOR(255, 139, 209)}
+};
+
 enum DrivePerk {
     PERK_MAX_HP = 0,     // 시작 최대 체력 증감 (perkValue = 증감량)
     PERK_CAPACITY,       // 모든 층 용량 한도 가산 (perkValue = 바이트)

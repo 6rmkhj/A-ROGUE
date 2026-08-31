@@ -21,9 +21,10 @@ static int RunCompleteGame(int modifierA, int modifierB, unsigned int seed) {
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive) game.enemies[i].hp = 1;
             AssignDieToSlot(&game, 0, SLOT_ATTACK); AssignDieToSlot(&game, 1, SLOT_AMPLIFY); AssignDieToSlot(&game, 2, SLOT_DEFEND); EndTurn(&game);
         } else if (game.phase == PHASE_REWARD) {
-            SelectReward(&game, 0); InstallSelectedReward(&game, game.facesInstalled % 3, game.facesInstalled % 6);
+            if (game.rewardIsTsr) InstallTsr(&game, 0);
+            else { SelectReward(&game, 0); InstallSelectedReward(&game, game.facesInstalled % 3, game.facesInstalled % 6); }
         } else if (game.phase == PHASE_PRUNE) {
-            while (DeckBytes(&game) > EffectiveCapacity(&game)) {
+            while (UsedBytes(&game) > EffectiveCapacity(&game)) {
                 int index = MostExpensiveFace(&game); if (index < 0) return 5; PruneFace(&game, index / 6, index % 6);
             }
             ConfirmPrune(&game);
@@ -31,7 +32,8 @@ static int RunCompleteGame(int modifierA, int modifierB, unsigned int seed) {
     }
     if (game.phase != PHASE_VICTORY) return 2;
     if (game.combatsWon != 9) return 3;
-    if (game.facesInstalled != 8) return 4;
+    if (game.facesInstalled != 6) return 4;    // 일반 전투 6회 = 면 보상 6개
+    if (game.tsrsInstalled != 2) return 6;     // 보스 2회 = 상주 프로그램 2개
     return 0;
 }
 
@@ -127,6 +129,84 @@ int main() {
     }
     ConfirmPrune(&firstFloorCap);
     if (firstFloorCap.phase != PHASE_COMBAT || firstFloorCap.floor != 0 || firstFloorCap.encounter != 1) return Fail("floor 1 prune must resume at the next encounter");
+
+    GameState tsr; NewRun(&tsr, 0x75720001u); tsr.modifierA = MOD_BAD_SECTOR; tsr.modifierB = MOD_CHECKSUM;
+    tsr.encounter = 2; StartCombat(&tsr);
+    tsr.playerHp = 999; tsr.playerMaxHp = 999; tsr.enemies[0].hp = 1;
+    AssignDieToSlot(&tsr, 0, SLOT_ATTACK); EndTurn(&tsr);
+    if (tsr.phase != PHASE_REWARD || !tsr.rewardIsTsr) return Fail("boss kill must offer resident program loot");
+    for (int i = 0; i < 3; ++i) {
+        int kind = tsr.rewardKinds[i];
+        if (kind < 0 || kind >= TSR_COUNT) return Fail("tsr loot must be a valid program");
+        if (TSR_INFO[kind].counters >= 0 && !IsModifierActive(&tsr, TSR_INFO[kind].counters)) return Fail("counter tsr must not appear without its modifier");
+        for (int j = 0; j < i; ++j) if (tsr.rewardKinds[j] == kind) return Fail("tsr loot must be distinct");
+    }
+    int lootKind = tsr.rewardKinds[1], usedBeforeLoot = UsedBytes(&tsr);
+    InstallTsr(&tsr, 1);
+    if (!IsTsrInstalled(&tsr, lootKind) || tsr.tsrsInstalled != 1) return Fail("installing loot must register the program");
+    if (UsedBytes(&tsr) != usedBeforeLoot + TSR_INFO[lootKind].cost) return Fail("resident programs must consume capacity");
+    if (tsr.floor != 1 || tsr.phase != PHASE_COMBAT) return Fail("boss loot must advance to the next floor");
+
+    GameState himem; NewRun(&himem, 0x75720002u); himem.modifierA = MOD_BAD_SECTOR; himem.modifierB = MOD_CHECKSUM;
+    himem.tsrInstalled[TSR_HIMEM] = 1;
+    if (EffectiveCapacity(&himem) != 240 + TSR_INFO[TSR_HIMEM].value) return Fail("himem must extend the capacity");
+    if (UsedBytes(&himem) != 63 + TSR_INFO[TSR_HIMEM].cost) return Fail("used bytes must include resident programs");
+
+    GameState smart; NewRun(&smart, 0x75720003u); smart.modifierA = MOD_BAD_SECTOR; smart.modifierB = MOD_CHECKSUM;
+    smart.tsrInstalled[TSR_SMARTDRV] = 1; StartCombat(&smart);
+    if (smart.playerBlock != TSR_INFO[TSR_SMARTDRV].value) return Fail("smartdrv must grant first-turn block");
+    smart.enemies[0].hp = 999; smart.enemies[0].maxHp = 999; smart.enemies[0].intent = INTENT_GUARD; smart.enemies[0].intentValue = 0;
+    AssignDieToSlot(&smart, 0, SLOT_ATTACK); EndTurn(&smart);
+    if (smart.turn != 2 || smart.playerBlock != 0) return Fail("smartdrv block must last only the first turn");
+
+    for (unsigned int seed = 1; seed <= 64; ++seed) {
+        GameState defrag; NewRun(&defrag, seed); defrag.modifierA = MOD_FRAGMENTATION; defrag.modifierB = MOD_CHECKSUM;
+        defrag.tsrInstalled[TSR_DEFRAG] = 1; StartCombat(&defrag);
+        for (int d = 0; d < 3; ++d) if (defrag.dice[d].disabled) return Fail("defrag must suppress fragmentation");
+    }
+
+    GameState scan; NewRun(&scan, 0x75720004u); scan.modifierA = MOD_BAD_SECTOR; scan.modifierB = MOD_CHECKSUM;
+    scan.tsrInstalled[TSR_SCANDISK] = 1; scan.phase = PHASE_REWARD; scan.encounter = 2;
+    SkipReward(&scan);
+    int scanDamaged = 0;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (scan.dice[d].faces[f].damaged) ++scanDamaged;
+    if (scan.floor != 1 || scanDamaged != 0) return Fail("scandisk must block descent damage");
+    GameState noScan; NewRun(&noScan, 0x75720004u); noScan.modifierA = MOD_BAD_SECTOR; noScan.modifierB = MOD_CHECKSUM;
+    noScan.phase = PHASE_REWARD; noScan.encounter = 2;
+    SkipReward(&noScan);
+    int rawDamaged = 0;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (noScan.dice[d].faces[f].damaged) ++rawDamaged;
+    if (rawDamaged != 1) return Fail("bad sector descent must damage one face without scandisk");
+
+    GameState undel; NewRun(&undel, 0x75720005u); undel.modifierA = MOD_BAD_SECTOR; undel.modifierB = MOD_CHECKSUM;
+    undel.tsrInstalled[TSR_UNDELETE] = 1; StartCombat(&undel);
+    undel.playerHp = 20; undel.enemies[0].hp = 1;
+    AssignDieToSlot(&undel, 0, SLOT_ATTACK); EndTurn(&undel);
+    if (undel.playerHp != 20 + TSR_INFO[TSR_UNDELETE].value) return Fail("undelete must heal after a win");
+
+    GameState keyb; NewRun(&keyb, 0x75720006u); keyb.modifierA = MOD_BAD_SECTOR; keyb.modifierB = MOD_CHECKSUM;
+    keyb.tsrInstalled[TSR_KEYB] = 1; StartCombat(&keyb);
+    KeybReroll(&keyb, 0);
+    if (!keyb.keybUsedThisTurn) return Fail("keyb reroll must consume the turn charge");
+    keyb.dice[1].rolledFace = 2;
+    KeybReroll(&keyb, 1);
+    if (keyb.dice[1].rolledFace != 2) return Fail("keyb must reroll only once per turn");
+    keyb.enemies[0].hp = 999; keyb.enemies[0].maxHp = 999; keyb.enemies[0].intent = INTENT_GUARD; keyb.enemies[0].intentValue = 0;
+    AssignDieToSlot(&keyb, 0, SLOT_ATTACK); EndTurn(&keyb);
+    if (keyb.phase != PHASE_COMBAT || keyb.keybUsedThisTurn) return Fail("keyb charge must reset each turn");
+    GameState noKeyb; NewRun(&noKeyb, 0x75720007u); noKeyb.modifierA = MOD_BAD_SECTOR; noKeyb.modifierB = MOD_CHECKSUM; StartCombat(&noKeyb);
+    KeybReroll(&noKeyb, 0);
+    if (noKeyb.keybUsedThisTurn) return Fail("keyb reroll requires the resident program");
+
+    GameState unin; NewRun(&unin, 0x75720008u); unin.modifierA = MOD_BAD_SECTOR; unin.modifierB = MOD_CHECKSUM;
+    unin.tsrInstalled[TSR_SMARTDRV] = 1; unin.phase = PHASE_PRUNE;
+    int usedBeforeUninstall = UsedBytes(&unin);
+    UninstallTsr(&unin, TSR_SMARTDRV);
+    if (IsTsrInstalled(&unin, TSR_SMARTDRV) || UsedBytes(&unin) != usedBeforeUninstall - TSR_INFO[TSR_SMARTDRV].cost)
+        return Fail("uninstall must free resident bytes");
+    unin.phase = PHASE_COMBAT; unin.tsrInstalled[TSR_KEYB] = 1;
+    UninstallTsr(&unin, TSR_KEYB);
+    if (!IsTsrInstalled(&unin, TSR_KEYB)) return Fail("uninstall must only work on the prune screen");
 
     int runs = 0;
     for (int a = 0; a < MODIFIER_COUNT; ++a) for (int b = a + 1; b < MODIFIER_COUNT; ++b) for (int seed = 0; seed < 3; ++seed) {
