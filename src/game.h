@@ -59,6 +59,12 @@ struct GameState {
     int selectedReward;
     int lastDamage;
     int lastBlock;
+    int lastTurnDamageDealt;
+    int lastTurnDamageTaken;
+    int lastTurnBlockGained;
+    int hasTurnResult;
+    int turnTraceCount;
+    wchar_t turnTrace[8][96];
     int combatsWon;
     int facesInstalled;
     int pruneAdvancePending;

@@ -33,6 +33,16 @@ static void PushLog2(GameState* game, const wchar_t* format, const wchar_t* name
     PushLog(game, buffer);
 }
 
+static void ClearTurnTrace(GameState* game) {
+    game->turnTraceCount = 0;
+    ZeroMemory(game->turnTrace, sizeof(game->turnTrace));
+}
+
+static void PushTurnTrace(GameState* game, const wchar_t* text) {
+    if (game->turnTraceCount >= 8) return;
+    lstrcpynW(game->turnTrace[game->turnTraceCount++], text, 96);
+}
+
 int FaceCost(const Face* face) {
     if (!face) return 0;
     if (face->kind == FACE_NUMBER) return face->value;
@@ -166,7 +176,7 @@ static void BeginTurn(GameState* game) {
     RollDice(game);
     ApplyFragmentation(game);
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) PlanEnemy(game, &game->enemies[i], i);
-    PushLog(game, L"주사위를 슬롯에 배치하고 SPACE로 실행합니다.");
+    PushLog(game, L"주사위를 슬롯에 배치하고 스페이스 키로 실행합니다.");
 }
 
 void NewRun(GameState* game, uint32_t seed) {
@@ -200,6 +210,7 @@ static void AddEnemy(GameState* game, int kind) {
 void StartCombat(GameState* game) {
     game->phase = PHASE_COMBAT;
     game->turn = 1;
+    game->hasTurnResult = 0;
     game->enemyCount = 0;
     game->targetEnemy = 0;
     ZeroMemory(game->enemies, sizeof(game->enemies));
@@ -276,7 +287,7 @@ static void ApplyFragmentation(GameState* game) {
             }
         }
     }
-    if (fragmented > 0) PushLog(game, L"FRAGMENTATION: 중복 주사위가 비활성화되었습니다.");
+    if (fragmented > 0) PushLog(game, L"조각화: 중복 주사위가 비활성화되었습니다.");
 }
 
 static int RollOutputSum(const GameState* game) {
@@ -298,29 +309,57 @@ static int SlotPower(const GameState* game, int slot, int* kindOut) {
 }
 
 static void ResolvePlayer(GameState* game) {
+    wchar_t trace[96];
     int ampKind = FACE_EMPTY;
     int ampPower = SlotPower(game, SLOT_AMPLIFY, &ampKind);
     int ampBonus = ampPower / 2;
     if (ampKind == FACE_BOOST) ampBonus = ampPower;
     if (ampKind == FACE_WILD) ampBonus += 2;
+    if (ampPower <= 0) lstrcpyW(trace, L"[증폭] 비어 있음 → 공격·방어 보너스 +0");
+    else if (ampKind == FACE_BOOST) wsprintfW(trace, L"[증폭] 증폭 면 %d × 100%% = 공격·방어 +%d", ampPower, ampBonus);
+    else if (ampKind == FACE_WILD) wsprintfW(trace, L"[증폭] 와일드 %d ÷ 2 + 특수 2 = 공격·방어 +%d", ampPower, ampBonus);
+    else wsprintfW(trace, L"[증폭] 출력 %d ÷ 2 = 공격·방어 +%d", ampPower, ampBonus);
+    PushTurnTrace(game, trace);
 
     int attackKind = FACE_EMPTY;
     int attackPower = SlotPower(game, SLOT_ATTACK, &attackKind);
     int checksumBonus = 0;
     if (IsModifierActive(game, MOD_CHECKSUM) && (RollOutputSum(game) & 1) == 0) {
         checksumBonus = 2;
-        PushLog(game, L"CHECKSUM OK: 이번 공격 피해 +2.");
+        PushLog(game, L"체크섬 일치: 이번 공격 피해 +2.");
     }
     int attackDamage = attackPower > 0 ? attackPower + ampBonus + checksumBonus : 0;
-    if (attackKind == FACE_FIRE) attackDamage += 4;
-    if (attackKind == FACE_WILD) attackDamage += 2;
+    int attackSpecial = attackKind == FACE_FIRE ? 4 : attackKind == FACE_WILD ? 2 : 0;
+    attackDamage += attackPower > 0 ? attackSpecial : 0;
     int target = FirstLivingEnemy(game);
+    int targetBlockBefore = target >= 0 ? game->enemies[target].block : 0;
+    int targetHpBefore = target >= 0 ? game->enemies[target].hp : 0;
     int dealt = DamageEnemy(game, target, attackDamage);
+    int targetHpAfter = target >= 0 ? game->enemies[target].hp : 0;
+    if (attackPower > 0) {
+        wsprintfW(trace, L"[공격/%s] 기본 %d + 증폭 %d + 특수 %d + 체크섬 %d = %d 피해",
+            FACE_INFO[attackKind].shortName, attackPower, ampBonus, attackSpecial, checksumBonus, attackDamage);
+    } else lstrcpyW(trace, L"[공격] 공격 슬롯이 비어 있음 → 피해 0");
+    PushTurnTrace(game, trace);
     if (target >= 0 && attackKind == FACE_FIRE && game->enemies[target].alive) game->enemies[target].burn = 2;
+    int actualHeal = 0;
     if (attackKind == FACE_LEECH && dealt > 0) {
         int heal = dealt / 3 + 1;
+        int hpBefore = game->playerHp;
         game->playerHp = ClampInt(game->playerHp + heal, 0, game->playerMaxHp);
+        actualHeal = game->playerHp - hpBefore;
     }
+    if (attackPower > 0 && attackKind == FACE_FIRE) wsprintfW(trace, L"[적중] 적 방어도 %d 흡수 → 체력 -%d (%d → %d) · 화상 2 부여",
+        targetBlockBefore < attackDamage ? targetBlockBefore : attackDamage,
+        targetHpBefore - targetHpAfter, targetHpBefore, targetHpAfter);
+    else if (attackPower > 0 && attackKind == FACE_LEECH) wsprintfW(trace, L"[적중] 적 방어도 %d 흡수 → 체력 -%d (%d → %d) · 내 체력 +%d",
+        targetBlockBefore < attackDamage ? targetBlockBefore : attackDamage,
+        targetHpBefore - targetHpAfter, targetHpBefore, targetHpAfter, actualHeal);
+    else if (attackPower > 0) wsprintfW(trace, L"[적중] 적 방어도 %d 흡수 → 실제 체력 -%d (%d → %d)",
+        targetBlockBefore < attackDamage ? targetBlockBefore : attackDamage,
+        targetHpBefore - targetHpAfter, targetHpBefore, targetHpAfter);
+    else lstrcpyW(trace, L"[적중] 적용할 공격 피해 없음");
+    PushTurnTrace(game, trace);
     game->lastDamage = attackDamage;
 
     int defendKind = FACE_EMPTY;
@@ -330,6 +369,11 @@ static void ResolvePlayer(GameState* game) {
     if (defendKind == FACE_WILD) block += 3;
     game->playerBlock += block;
     game->lastBlock = block;
+    if (defendPower <= 0) lstrcpyW(trace, L"[방어] 방어 슬롯이 비어 있음 → 방어도 +0");
+    else if (defendKind == FACE_SHIELD) wsprintfW(trace, L"[방어] (기본 %d + 증폭 %d) × 방벽 2 = 방어도 +%d", defendPower, ampBonus, block);
+    else if (defendKind == FACE_WILD) wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d + 특수 3 = 방어도 +%d", defendPower, ampBonus, block);
+    else wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d = 방어도 +%d", defendPower, ampBonus, block);
+    PushTurnTrace(game, trace);
 
     int chainKind = FACE_EMPTY;
     int chainPower = SlotPower(game, SLOT_CHAIN, &chainKind);
@@ -338,13 +382,25 @@ static void ResolvePlayer(GameState* game) {
             int repeat = (game->lastDamage * (chainPower + 4)) / 13;
             if (chainKind == FACE_ECHO) repeat = game->lastDamage;
             if (chainKind == FACE_WILD) repeat += 2;
-            DamageEnemy(game, FirstLivingEnemy(game), repeat);
+            int chainTarget = FirstLivingEnemy(game);
+            int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
+            int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
+            DamageEnemy(game, chainTarget, repeat);
+            int hpAfter = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
+            int absorbed = blockBefore < repeat ? blockBefore : repeat;
+            if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, repeat, absorbed, hpBefore - hpAfter);
+            else if (chainKind == FACE_WILD) wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
+            else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
+            PushTurnTrace(game, trace);
         } else if (game->lastBlock > 0) {
             int repeat = (game->lastBlock * (chainPower + 4)) / 13;
             if (chainKind == FACE_ECHO) repeat = game->lastBlock;
             game->playerBlock += repeat;
-        }
-    }
+            if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d", game->lastBlock, repeat);
+            else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d", game->lastBlock, chainPower, repeat);
+            PushTurnTrace(game, trace);
+        } else PushTurnTrace(game, L"[연쇄] 반복할 공격·방어가 없어 발동하지 않음");
+    } else PushTurnTrace(game, L"[연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음");
 }
 
 static void ResolveEnemies(GameState* game) {
@@ -353,27 +409,39 @@ static void ResolveEnemies(GameState* game) {
         if (!enemy->alive) continue;
         if (enemy->burn > 0) {
             --enemy->burn;
+            int hpBefore = enemy->hp;
             DamageEnemy(game, i, 3);
+            wchar_t burnTrace[96]; wsprintfW(burnTrace, L"[화상] %s 체력 -%d (%d → %d)",
+                ENEMY_INFO[enemy->kind].code, hpBefore - enemy->hp, hpBefore, enemy->hp);
+            PushTurnTrace(game, burnTrace);
             if (!enemy->alive) continue;
         }
+        wchar_t trace[96];
         if (enemy->intent == INTENT_GUARD) {
             enemy->block += enemy->intentValue;
+            wsprintfW(trace, L"[적 행동] %s 방어 → 적 방어도 +%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue);
         } else if (enemy->intent == INTENT_REPAIR) {
+            int hpBefore = enemy->hp;
             enemy->hp = ClampInt(enemy->hp + enemy->intentValue, 0, enemy->maxHp);
+            wsprintfW(trace, L"[적 행동] %s 복구 → 체력 +%d (%d → %d)", ENEMY_INFO[enemy->kind].code, enemy->hp - hpBefore, hpBefore, enemy->hp);
         } else {
             int damage = enemy->intentValue;
+            int absorbed = 0;
             if (enemy->intent != INTENT_CORRUPT) {
-                int absorbed = game->playerBlock < damage ? game->playerBlock : damage;
+                absorbed = game->playerBlock < damage ? game->playerBlock : damage;
                 game->playerBlock -= absorbed;
                 damage -= absorbed;
             }
             game->playerHp -= damage;
-            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 BLOCK을 무시했습니다.");
+            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 방어도를 무시했습니다.");
+            if (enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 오염 %d → 방어도 무시, 내 체력 -%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue, damage);
+            else wsprintfW(trace, L"[적 행동] %s 공격 %d - 방어도 %d = 내 체력 -%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue, absorbed, damage);
         }
+        PushTurnTrace(game, trace);
         if (game->playerHp <= 0) {
             game->playerHp = 0;
             game->phase = PHASE_GAMEOVER;
-            PushLog(game, L"SYSTEM FAILURE. R 키로 재시작하십시오.");
+            PushLog(game, L"시스템 정지. R 키로 다시 시작하십시오.");
             return;
         }
     }
@@ -393,7 +461,7 @@ static void CombatWon(GameState* game) {
     ++game->combatsWon;
     if (game->floor == 2 && game->encounter == 2) {
         game->phase = PHASE_VICTORY;
-        PushLog(game, L"FORMAT 중단. 디스크가 복구되었습니다.");
+        PushLog(game, L"포맷 중단. 디스크가 복구되었습니다.");
         return;
     }
     GenerateRewards(game);
@@ -409,19 +477,42 @@ void EndTurn(GameState* game) {
         PushLog(game, L"최소 하나의 주사위를 슬롯에 배치해야 합니다.");
         return;
     }
+    ClearTurnTrace(game);
     for (int d = 0; d < 3; ++d) {
         if (game->dice[d].unstable) {
             game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
-            PushLog(game, L"READ ERROR: 경고된 주사위가 재굴림되었습니다.");
+            PushLog(game, L"읽기 오류: 경고된 주사위가 다시 굴러갔습니다.");
+            wchar_t trace[96]; wsprintfW(trace, L"[읽기 오류] 주사위 %d 다시 굴림 → 출력 %d", d + 1, FacePower(RolledFace(game, d)));
+            PushTurnTrace(game, trace);
             break;
         }
     }
+    int enemyHpBefore = 0;
+    for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpBefore += game->enemies[i].hp;
+    int playerHpBefore = game->playerHp;
     ResolvePlayer(game);
+    game->lastTurnBlockGained = game->playerBlock;
+    int enemyHpAfterPlayer = 0;
+    for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpAfterPlayer += game->enemies[i].hp;
     if (LivingEnemyCount(game) == 0) {
+        game->lastTurnDamageDealt = enemyHpBefore - enemyHpAfterPlayer;
+        game->lastTurnDamageTaken = 0;
+        game->hasTurnResult = 1;
         CombatWon(game);
         return;
     }
     ResolveEnemies(game);
+    int enemyHpAfter = 0;
+    for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpAfter += game->enemies[i].hp;
+    int lowestEnemyHp = enemyHpAfter < enemyHpAfterPlayer ? enemyHpAfter : enemyHpAfterPlayer;
+    game->lastTurnDamageDealt = enemyHpBefore - lowestEnemyHp;
+    game->lastTurnDamageTaken = playerHpBefore - game->playerHp;
+    if (game->lastTurnDamageTaken < 0) game->lastTurnDamageTaken = 0;
+    game->hasTurnResult = 1;
+    wchar_t result[96];
+    wsprintfW(result, L"실행 결과: 적 체력 -%d · 내 체력 -%d · 방어도 %d.",
+        game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);
+    PushLog(game, result);
     if (game->phase == PHASE_GAMEOVER) return;
     if (LivingEnemyCount(game) == 0) {
         CombatWon(game);
@@ -448,7 +539,7 @@ static void DamageRandomFace(GameState* game) {
     if (count == 0) return;
     int pick = candidates[RandomRange(game, count)];
     game->dice[pick / 6].faces[pick % 6].damaged = 1;
-    PushLog(game, L"BAD SECTOR: 무작위 면 하나가 손상되었습니다.");
+    PushLog(game, L"배드 섹터: 무작위 면 하나가 손상되었습니다.");
 }
 
 static void ContinueAfterReward(GameState* game) {
