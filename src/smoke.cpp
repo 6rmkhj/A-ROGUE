@@ -54,6 +54,36 @@ int main() {
     }
     ConfirmPrune(&prune); if (prune.phase != PHASE_COMBAT) return Fail("valid pruned deck must continue");
 
+    GameState burn; NewRun(&burn, 0xB0010001u); burn.modifierA = MOD_BAD_SECTOR; burn.modifierB = MOD_CHECKSUM;
+    burn.enemies[0].hp = 3; burn.enemies[0].burn = 1; burn.enemies[0].intent = INTENT_GUARD; burn.enemies[0].intentValue = 0;
+    AssignDieToSlot(&burn, 0, SLOT_DEFEND); EndTurn(&burn);
+    if (burn.phase != PHASE_REWARD || burn.combatsWon != 1) return Fail("burn killing the last enemy must end combat immediately");
+
+    GameState corrupt; NewRun(&corrupt, 0xC0110001u); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM;
+    corrupt.enemies[0].hp = corrupt.enemies[0].maxHp; corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 5;
+    int hpBeforeCorrupt = corrupt.playerHp; AssignDieToSlot(&corrupt, 0, SLOT_DEFEND); EndTurn(&corrupt);
+    if (corrupt.playerHp != hpBeforeCorrupt - 5) return Fail("corrupt intent must ignore player block");
+
+    int fragmentationShown = 0;
+    for (unsigned int seed = 1; seed <= 256 && !fragmentationShown; ++seed) {
+        GameState fragmented; NewRun(&fragmented, seed); fragmented.modifierA = MOD_FRAGMENTATION; fragmented.modifierB = MOD_CHECKSUM; StartCombat(&fragmented);
+        for (int d = 0; d < 3; ++d) if (fragmented.dice[d].disabled) fragmentationShown = 1;
+    }
+    if (!fragmentationShown) return Fail("fragmentation must be marked before the player executes the turn");
+
+    GameState firstFloorCap; NewRun(&firstFloorCap, 0xCA900001u); firstFloorCap.modifierA = MOD_BAD_SECTOR; firstFloorCap.modifierB = MOD_CHECKSUM;
+    firstFloorCap.phase = PHASE_REWARD; firstFloorCap.floor = 0; firstFloorCap.encounter = 0;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
+        firstFloorCap.dice[d].faces[f].kind = FACE_WILD; firstFloorCap.dice[d].faces[f].value = 9; firstFloorCap.dice[d].faces[f].damaged = 0;
+    }
+    SkipReward(&firstFloorCap);
+    if (firstFloorCap.phase != PHASE_PRUNE || firstFloorCap.floor != 0 || firstFloorCap.encounter != 0) return Fail("floor 1 capacity must be enforced before advancing");
+    while (DeckBytes(&firstFloorCap) > EffectiveCapacity(&firstFloorCap)) {
+        int index = MostExpensiveFace(&firstFloorCap); if (index < 0) return Fail("unable to prune floor 1 test deck"); PruneFace(&firstFloorCap, index / 6, index % 6);
+    }
+    ConfirmPrune(&firstFloorCap);
+    if (firstFloorCap.phase != PHASE_COMBAT || firstFloorCap.floor != 0 || firstFloorCap.encounter != 1) return Fail("floor 1 prune must resume at the next encounter");
+
     int runs = 0;
     for (int a = 0; a < MODIFIER_COUNT; ++a) for (int b = a + 1; b < MODIFIER_COUNT; ++b) for (int seed = 0; seed < 3; ++seed) {
         int result = RunCompleteGame(a, b, 0x10203040u + (unsigned int)(a * 101 + b * 17 + seed));
@@ -62,4 +92,3 @@ int main() {
     }
     printf("PASS: %d complete runs across all modifier pairs\n", runs); return 0;
 }
-

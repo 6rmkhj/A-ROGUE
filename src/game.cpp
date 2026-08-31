@@ -157,11 +157,14 @@ static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
     }
 }
 
+static void ApplyFragmentation(GameState* game);
+
 static void BeginTurn(GameState* game) {
     game->playerBlock = 0;
     game->lastDamage = 0;
     game->lastBlock = 0;
     RollDice(game);
+    ApplyFragmentation(game);
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) PlanEnemy(game, &game->enemies[i], i);
     PushLog(game, L"주사위를 슬롯에 배치하고 SPACE로 실행합니다.");
 }
@@ -359,11 +362,13 @@ static void ResolveEnemies(GameState* game) {
             enemy->hp = ClampInt(enemy->hp + enemy->intentValue, 0, enemy->maxHp);
         } else {
             int damage = enemy->intentValue;
-            int absorbed = game->playerBlock < damage ? game->playerBlock : damage;
-            game->playerBlock -= absorbed;
-            damage -= absorbed;
+            if (enemy->intent != INTENT_CORRUPT) {
+                int absorbed = game->playerBlock < damage ? game->playerBlock : damage;
+                game->playerBlock -= absorbed;
+                damage -= absorbed;
+            }
             game->playerHp -= damage;
-            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 방어를 관통했습니다.");
+            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 BLOCK을 무시했습니다.");
         }
         if (game->playerHp <= 0) {
             game->playerHp = 0;
@@ -413,7 +418,6 @@ void EndTurn(GameState* game) {
             break;
         }
     }
-    ApplyFragmentation(game);
     ResolvePlayer(game);
     if (LivingEnemyCount(game) == 0) {
         CombatWon(game);
@@ -421,6 +425,10 @@ void EndTurn(GameState* game) {
     }
     ResolveEnemies(game);
     if (game->phase == PHASE_GAMEOVER) return;
+    if (LivingEnemyCount(game) == 0) {
+        CombatWon(game);
+        return;
+    }
     ++game->turn;
     BeginTurn(game);
 }
@@ -446,6 +454,12 @@ static void DamageRandomFace(GameState* game) {
 }
 
 static void ContinueAfterReward(GameState* game) {
+    if (DeckBytes(game) > EffectiveCapacity(game)) {
+        game->phase = PHASE_PRUNE;
+        game->pruneAdvancePending = 1;
+        PushLog(game, L"현재 층 용량 초과: 면을 비워 한도에 맞추십시오.");
+        return;
+    }
     if (game->encounter < 2) {
         ++game->encounter;
         StartCombat(game);
@@ -460,6 +474,7 @@ static void ContinueAfterReward(GameState* game) {
     if (IsModifierActive(game, MOD_BAD_SECTOR)) DamageRandomFace(game);
     if (DeckBytes(game) > EffectiveCapacity(game)) {
         game->phase = PHASE_PRUNE;
+        game->pruneAdvancePending = 0;
         PushLog(game, L"용량 초과: 면을 비워 다음 층 한도에 맞추십시오.");
     } else StartCombat(game);
 }
@@ -504,6 +519,8 @@ void ConfirmPrune(GameState* game) {
         PushLog(game, L"최소 한 면은 남겨야 합니다.");
         return;
     }
-    StartCombat(game);
+    int advance = game->pruneAdvancePending;
+    game->pruneAdvancePending = 0;
+    if (advance) ContinueAfterReward(game);
+    else StartCombat(game);
 }
-

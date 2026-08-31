@@ -61,6 +61,7 @@ struct GameState {
     int lastBlock;
     int combatsWon;
     int facesInstalled;
+    int pruneAdvancePending;
     wchar_t logs[5][96];
 };
 
@@ -85,4 +86,3 @@ int NonEmptyFaceCount(const GameState* game);
 int IsModifierActive(const GameState* game, int modifier);
 int LivingEnemyCount(const GameState* game);
 const Face* RolledFace(const GameState* game, int dieIndex);
-
