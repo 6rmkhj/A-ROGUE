@@ -17,6 +17,7 @@ RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65
 RECT DeckCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
+RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 
 // 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
 void ApplyFullscreen(int enable) {
@@ -68,6 +69,12 @@ static void DrawSettings(HDC dc, int width, int height) {
     RECT fs = FullscreenToggleRect(); int hoverFs = Inside(fs, gMouse.x, gMouse.y);
     Panel(dc, fs, gFullscreen ? RGB(28, 70, 57) : hoverFs ? RGB(28, 39, 48) : C_PANEL_2, gFullscreen ? C_GREEN : hoverFs ? C_BLUE : C_LINE);
     TextRect(dc, fs, gFullscreen ? L"전체화면 끄기" : L"전체화면 켜기", gFullscreen ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    Text(dc, 84, 428, L"런 초기화", C_YELLOW, gFontMedium);
+    RECT rs = RestartButtonRect(); int hoverRs = Inside(rs, gMouse.x, gMouse.y);
+    Panel(dc, rs, gRestartArmed ? RGB(80, 30, 30) : hoverRs ? RGB(48, 28, 28) : C_PANEL_2, gRestartArmed ? C_RED : hoverRs ? C_RED : C_LINE);
+    TextRect(dc, rs, gRestartArmed ? L"정말 다시 시작?" : L"다시 시작", gRestartArmed ? C_RED : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (gRestartArmed) TextRect(dc, MakeRect(84, 506, 364, 526), L"한 번 더 클릭하면 확정됩니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 
     TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20), L"취소 키로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 }
