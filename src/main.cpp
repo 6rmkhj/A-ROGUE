@@ -547,16 +547,7 @@ static void DrawGuide(HDC dc, int width, int height) {
 }
 
 static void PaintGame(HWND window) {
-    PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client); int width = client.right, height = client.bottom;
-    HDC memory = CreateCompatibleDC(dc); HBITMAP bitmap = CreateCompatibleBitmap(dc, width, height); HBITMAP old = (HBITMAP)SelectObject(memory, bitmap);
     SyncIdleAnimation();
-    Fill(memory, client, C_BG); DrawHeader(memory, width);
-    if (gGame.phase == PHASE_TITLE) DrawTitle(memory, width, height); else if (gGame.phase == PHASE_COMBAT) DrawCombat(memory, width, height);
-    else if (gGame.phase == PHASE_REWARD) DrawReward(memory, width, height); else if (gGame.phase == PHASE_PRUNE) DrawPrune(memory, width, height);
-    else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(memory, width, height, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(memory, width, height, 1);
-    if (gGuideOpen) DrawGuide(memory, width, height);
-    BitBlt(dc, 0, 0, width, height, memory, 0, 0, SRCCOPY); SelectObject(memory, old); DeleteObject(bitmap); DeleteDC(memory); EndPaint(window, &paint);
-    
     PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client);
     int clientWidth = client.right, clientHeight = client.bottom;
     if (clientWidth <= 0 || clientHeight <= 0) { EndPaint(window, &paint); return; }

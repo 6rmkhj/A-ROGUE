@@ -22,12 +22,12 @@ if errorlevel 1 (popd & exit /b 1)
 echo [2/4] Building and running deterministic smoke tests...
 cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- /W4 ..\src\smoke.cpp ..\src\game.cpp /Fe:smoke.exe /link /OPT:REF /OPT:ICF user32.lib
 if errorlevel 1 (popd & exit /b 1)
-smoke.exe
+.\smoke.exe
 if errorlevel 1 (popd & exit /b 1)
 echo [3/4] Running heuristic balance sample...
 cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- ..\src\balance.cpp ..\src\game.cpp /Fe:balance.exe /link /OPT:REF /OPT:ICF user32.lib
 if errorlevel 1 (popd & exit /b 1)
-balance.exe
+.\balance.exe
 if errorlevel 1 (popd & exit /b 1)
 for %%A in (AROGUE.exe) do set "EXESIZE=%%~zA"
 set /a PERCENT=EXESIZE*100/1474560
