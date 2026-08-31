@@ -537,7 +537,7 @@ static void DrawGuide(HDC dc, int width, int height) {
 
     Text(dc, middle, top, L"디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"배드 섹터  층 이동 시 무작위 면 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 HP +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 HP +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 204, L"덱·보상·용량", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
         L"18개 면의 비용 합이 DECK 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 EMPTY(0B)가 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
