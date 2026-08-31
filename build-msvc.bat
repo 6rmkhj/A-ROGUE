@@ -17,7 +17,7 @@ if errorlevel 1 exit /b 1
 if not exist build mkdir build
 pushd build
 echo [1/4] Building AROGUE.exe...
-cl /nologo /std:c++17 /O1 /Os /GL /Gw /Gy /MT /utf-8 /GR- /W4 /DUNICODE /D_UNICODE ..\src\main.cpp ..\src\game.cpp /Fe:AROGUE.exe /link /LTCG /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF user32.lib gdi32.lib winmm.lib
+cl /nologo /std:c++17 /O1 /Os /GL /Gw /Gy /MT /utf-8 /GR- /W4 /DUNICODE /D_UNICODE ..\src\main.cpp ..\src\screens.cpp ..\src\render.cpp ..\src\audio.cpp ..\src\game.cpp /Fe:AROGUE.exe /link /LTCG /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF user32.lib gdi32.lib winmm.lib
 if errorlevel 1 (popd & exit /b 1)
 echo [2/4] Building and running deterministic smoke tests...
 cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- /W4 ..\src\smoke.cpp ..\src\game.cpp /Fe:smoke.exe /link /OPT:REF /OPT:ICF user32.lib
