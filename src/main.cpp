@@ -98,27 +98,220 @@ static void AppendStatus(wchar_t* output, const wchar_t* status) {
     lstrcatW(output, status);
 }
 
-#pragma pack(push, 1)
-struct WaveMemory {
-    char riff[4]; DWORD riffSize; char wave[4]; char fmt[4]; DWORD fmtSize; WORD format; WORD channels;
-    DWORD sampleRate; DWORD byteRate; WORD blockAlign; WORD bits; char data[4]; DWORD dataSize; unsigned char samples[1800];
-};
-#pragma pack(pop)
-static WaveMemory gWave;
+// ---- procedural sound -----------------------------------------------------
+// No sound files: every effect is synthesised into memory and mixed into the
+// output stream. 22050Hz 16-bit signed, which removes the quantisation hiss the
+// old 8-bit/11025Hz path had, and a buffer big enough for the longest cue
+// (the old 1800-sample buffer silently truncated anything over 163ms, so the
+// 180ms game-over and victory stings were being cut off mid-fade).
+#define SFX_RATE 22050
+#define SFX_MAX_SAMPLES 17640          // 800ms
+#define SFX_NOTES 3
 
-static void CopyTag(char* destination, const char* source) { for (int i = 0; i < 4; ++i) destination[i] = source[i]; }
-static void PlayTone(int frequency, int milliseconds) {
-    const int rate = 11025; int count = rate * milliseconds / 1000; if (count > 1800) count = 1800; if (count < 16) count = 16;
-    CopyTag(gWave.riff, "RIFF"); CopyTag(gWave.wave, "WAVE"); CopyTag(gWave.fmt, "fmt "); CopyTag(gWave.data, "data");
-    gWave.riffSize = 36 + count; gWave.fmtSize = 16; gWave.format = 1; gWave.channels = 1; gWave.sampleRate = rate;
-    gWave.byteRate = rate; gWave.blockAlign = 1; gWave.bits = 8; gWave.dataSize = count;
-    int period = rate / frequency; if (period < 2) period = 2;
-    for (int i = 0; i < count; ++i) {
-        int amplitude = (i % period) < period / 2 ? 38 : -38; int fade = (count - i) * 255 / count;
-        gWave.samples[i] = (unsigned char)(128 + amplitude * fade / 255);
+enum SfxWave { WAVE_PULSE = 0, WAVE_TRI, WAVE_NOISE };
+
+struct SfxSpec {
+    short hz[SFX_NOTES];      // up to three sequential notes, 0 ends the list
+    short ms[SFX_NOTES];
+    short bend;               // Hz added across each note (negative = falls)
+    unsigned char wave, duty, attackMs, release, volume, noise, cut;  // cut 0 = unfiltered, lower = darker
+    unsigned char pulses;     // >1 retriggers the envelope inside the note: clack-clack-clack
+};
+
+enum SfxId {
+    SFX_UI_CLICK = 0, SFX_DIE_PICK, SFX_SLOT_SET, SFX_TARGET,
+    SFX_READ_START, SFX_DIE_LOCK, SFX_EXECUTE, SFX_ENEMY_DOWN,
+    SFX_REWARD_PICK, SFX_REWARD_SET, SFX_PRUNE, SFX_CONFIRM,
+    SFX_BOOT, SFX_VICTORY, SFX_GAMEOVER, SFX_COUNT
+};
+
+//                    notes(Hz)          lengths(ms)   bend  wave        duty att rel vol noise cut
+static const SfxSpec SFX[SFX_COUNT] = {
+    {{230,   0,   0}, { 40,  0,  0},  -25, WAVE_TRI,   50,  3, 56,  60,   6,  90,   1},  // UI_CLICK
+    {{185,   0,   0}, { 44,  0,  0},  -18, WAVE_TRI,   50,  3, 52,  62,   0,  96,   1},  // DIE_PICK
+    {{135,   0,   0}, { 74,  0,  0},  -16, WAVE_TRI,   50,  4, 44,  76,  18,  62,   1},  // SLOT_SET
+    {{200,   0,   0}, { 56,  0,  0},  -45, WAVE_TRI,   50,  3, 50,  58,  10,  86,   1},  // TARGET
+    {{140,   0,   0}, {190,  0,  0},  -20, WAVE_TRI,   50,  2, 78, 104,  46,  66,   4},  // READ_START  head seek chatter
+    {{110,   0,   0}, { 92,  0,  0},  -22, WAVE_TRI,   50,  6, 44,  62,  16,  54,   1},  // DIE_LOCK    sector settles
+    {{180,   0,   0}, { 90,  0,  0},  -70, WAVE_PULSE, 45,  2, 45,  60,  22,   0,   1},  // EXECUTE
+    {{300,   0,   0}, {170,  0,  0}, -230, WAVE_NOISE, 50,  3, 30,  84,  74,  78,   1},  // ENEMY_DOWN
+    {{560, 700,   0}, { 40, 46,  0},    0, WAVE_TRI,   50,  1, 55,  48,   0,   0,   1},  // REWARD_PICK
+    {{523, 659, 784}, { 44, 44, 78},    0, WAVE_TRI,   50,  1, 45,  52,   0,   0,   1},  // REWARD_SET
+    {{200,   0,   0}, { 80,  0,  0}, -110, WAVE_NOISE, 50,  2, 40,  92,  86,  64,   1},  // PRUNE       sector wiped
+    {{440, 660,   0}, { 40, 70,  0},    0, WAVE_TRI,   50,  1, 45,  50,   0,   0,   1},  // CONFIRM
+    {{330, 494, 659}, { 52, 52, 96},    0, WAVE_TRI,   50,  2, 40,  50,   6,   0,   1},  // BOOT
+    {{523, 784,1047}, { 90, 90,240},    0, WAVE_TRI,   50,  2, 26,  56,   0,   0,   1},  // VICTORY
+    {{220, 165, 110}, {140,140,300},  -30, WAVE_TRI,   50,  3, 22,  58,  30,  60,   1}   // GAMEOVER    drive dies
+};
+
+static uint32_t gNoiseSeed = 0x13579BDFu;
+
+// 2^(n/12) in 1/256ths, for pitching a cue up by whole semitones
+static const int SEMITONE[8] = {256, 271, 287, 304, 323, 342, 362, 384};
+
+static int SfxOsc(int wave, int phase, int period, int duty) {
+    if (wave == WAVE_NOISE) {
+        gNoiseSeed = gNoiseSeed * 1664525u + 1013904223u;
+        return (int)((gNoiseSeed >> 16) & 0xFFFFu) - 32768;
     }
-    PlaySoundA((LPCSTR)&gWave, 0, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    if (period < 2) period = 2;
+    int pos = phase % period;
+    if (wave == WAVE_TRI) {
+        int half = period / 2;
+        int up = pos < half ? pos * 65536 / half : (period - pos) * 65536 / (period - half);
+        return up - 32768;
+    }
+    // asymmetric duty carries a DC bias, so pick high/low levels whose mean is
+    // zero and rescale if that pushes the peak past the headroom
+    int hi = 26000 * (100 - duty) / 50, lo = -26000 * duty / 50;
+    int cap = hi > -lo ? hi : -lo;
+    if (cap > 26000) { hi = hi * 26000 / cap; lo = lo * 26000 / cap; }
+    return pos * 100 < period * duty ? hi : lo;
 }
+
+// ---- output mixer ---------------------------------------------------------
+// PlaySound only ever plays one thing per process: firing a second cue cuts the
+// first one off mid-note, which is what makes rapid clicking sound chewed up.
+// Instead keep a waveOut stream running and mix the active cues into it, so
+// overlapping sounds actually overlap.
+#define MIX_VOICES 8
+#define MIX_BUFFERS 4
+#define MIX_FRAMES 441            // 20ms at 22050Hz, so a fresh cue is audible fast
+#define AUDIO_TIMER_ID 5
+
+struct MixVoice { short data[SFX_MAX_SAMPLES]; int length, position; };
+static MixVoice gVoice[MIX_VOICES];
+static int gVoiceAge[MIX_VOICES], gVoiceClock;
+static HWAVEOUT gWaveOut;
+static WAVEHDR gWaveHdr[MIX_BUFFERS];
+static short gMixBuf[MIX_BUFFERS][MIX_FRAMES];
+static int gAudioClosing;
+
+static void MixFrames(short* out, int frames) {
+    for (int i = 0; i < frames; ++i) out[i] = 0;
+    for (int v = 0; v < MIX_VOICES; ++v) {
+        MixVoice* mv = &gVoice[v];
+        if (mv->length <= 0) continue;
+        int n = mv->length - mv->position;
+        if (n > frames) n = frames;
+        for (int i = 0; i < n; ++i) {
+            int s = out[i] + mv->data[mv->position + i];
+            if (s > 32767) s = 32767; else if (s < -32767) s = -32767;
+            out[i] = (short)s;
+        }
+        mv->position += n;
+        if (mv->position >= mv->length) mv->length = 0;
+    }
+}
+
+static void AudioOpen(HWND window) {
+    WAVEFORMATEX format;
+    ZeroMemory(&format, sizeof(format));
+    format.wFormatTag = WAVE_FORMAT_PCM; format.nChannels = 1;
+    format.nSamplesPerSec = SFX_RATE; format.wBitsPerSample = 16;
+    format.nBlockAlign = 2; format.nAvgBytesPerSec = SFX_RATE * 2;
+    if (waveOutOpen(&gWaveOut, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        gWaveOut = 0; return;               // no audio device: stay silent, keep playing
+    }
+    for (int i = 0; i < MIX_BUFFERS; ++i) {
+        ZeroMemory(&gWaveHdr[i], sizeof(WAVEHDR));
+        gWaveHdr[i].lpData = (LPSTR)gMixBuf[i];
+        gWaveHdr[i].dwBufferLength = MIX_FRAMES * 2;
+        waveOutPrepareHeader(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
+        MixFrames(gMixBuf[i], MIX_FRAMES);
+        waveOutWrite(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
+    }
+    SetTimer(window, AUDIO_TIMER_ID, 10, 0);
+}
+
+// Called from the window timer, so it is plain synchronous code on the UI thread:
+// no callback re-entrancy and no locking. Any buffer the device has finished with
+// gets refilled from the live voices and queued straight back up.
+static void AudioPump() {
+    if (!gWaveOut || gAudioClosing) return;
+    for (int i = 0; i < MIX_BUFFERS; ++i) {
+        if (!(gWaveHdr[i].dwFlags & WHDR_DONE)) continue;
+        MixFrames(gMixBuf[i], MIX_FRAMES);
+        gWaveHdr[i].dwFlags &= ~WHDR_DONE;
+        waveOutWrite(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
+    }
+}
+
+static void AudioClose() {
+    if (!gWaveOut) return;
+    gAudioClosing = 1;
+    KillTimer(gWindow, AUDIO_TIMER_ID);
+    waveOutReset(gWaveOut);
+    for (int i = 0; i < MIX_BUFFERS; ++i) waveOutUnprepareHeader(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
+    waveOutClose(gWaveOut);
+    gWaveOut = 0;
+}
+
+static void PlaySfxPitched(int id, int semitones) {
+    if (id < 0 || id >= SFX_COUNT || !gWaveOut) return;
+    const SfxSpec* s = &SFX[id];
+    if (semitones < 0) semitones = 0; else if (semitones > 7) semitones = 7;
+    int shift = SEMITONE[semitones];
+
+    int slot = -1;
+    for (int v = 0; v < MIX_VOICES; ++v) if (gVoice[v].length <= 0) { slot = v; break; }
+    if (slot < 0) {                       // all busy: steal the one that started first
+        slot = 0;
+        for (int v = 1; v < MIX_VOICES; ++v) if (gVoiceAge[v] < gVoiceAge[slot]) slot = v;
+    }
+    MixVoice* voice = &gVoice[slot];
+    voice->length = 0;                    // park it while the samples are written
+    gVoiceAge[slot] = ++gVoiceClock;
+    short* out = voice->data;
+
+    int total = 0;
+    for (int n = 0; n < SFX_NOTES && s->hz[n] > 0; ++n) {
+        int hz = (int)s->hz[n] * shift / 256;
+        int count = SFX_RATE * s->ms[n] / 1000;
+        if (total + count > SFX_MAX_SAMPLES) count = SFX_MAX_SAMPLES - total;
+        if (count <= 0) break;
+        int pulses = s->pulses < 1 ? 1 : s->pulses, span = count;
+        if (pulses > 1) { span = count / pulses; if (span < 8) { span = count; pulses = 1; } }
+        int attack = SFX_RATE * s->attackMs / 1000;
+        if (attack > span / 2) attack = span / 2;
+        if (attack < 1) attack = 1;
+        int phase = 0, lp = 0;
+        for (int i = 0; i < count; ++i) {
+            int nowHz = hz + (int)s->bend * i / count; if (nowHz < 20) nowHz = 20;
+            int period = SFX_RATE / nowHz;
+            int value = SfxOsc(s->wave, phase, period, s->duty);
+            if (s->noise > 0 && s->wave != WAVE_NOISE) {
+                int hiss = SfxOsc(WAVE_NOISE, 0, 0, 0);
+                value = (value * (100 - s->noise) + hiss * s->noise) / 100;
+            }
+            // one-pole low-pass: white noise and narrow pulses are all high
+            // harmonics, which is what makes a cue read as piercing
+            if (s->cut > 0) { lp += (value - lp) * s->cut / 256; value = lp; }
+            int k = pulses > 1 ? i % span : i, env;
+            if (k < attack) env = k * 256 / attack;
+            else {
+                int t = (k - attack) * 256 / (span - attack + 1);
+                env = 256 - t * s->release / 100;
+                if (env < 0) env = 0;
+                env = env * (256 - t / 4) / 256;
+            }
+            // a pulsed cue still has to fade away overall, not just per clack
+            if (pulses > 1) env = env * (256 - i * 256 / count) / 256;
+            int o = value * env / 256 * s->volume / 100;
+            if (o > 32767) o = 32767; else if (o < -32767) o = -32767;
+            out[total + i] = (short)o;
+            phase += 1;
+        }
+        total += count;
+    }
+    if (total < 8) return;
+    for (int i = 0; i < 32 && i < total; ++i)
+        out[total - 1 - i] = (short)((int)out[total - 1 - i] * i / 32);
+    voice->position = 0;
+    voice->length = total;                // published last so the mixer never sees a partial voice
+}
+
+static void PlaySfx(int id) { PlaySfxPitched(id, 0); }
 
 static RECT GuideButtonRect(int width) { return MakeRect(width - 148, 4, width - 18, 23); }
 static RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
@@ -253,23 +446,23 @@ static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
 static int gDescentActive;
 static DWORD gDescentStart;
 static int gDescentToFloor;   // 진입하는 층 (0 = 최초 마운트)
-static int gDescentTonePhase; // 진행 중 한 번씩 재생하는 시크 사운드 단계
+static int gDescentSeekPhase; // 진행 중 한 번씩 울리는 섹터 안착 신호 단계
 
 static void FinishDescent() {
     if (!gDescentActive) return;
     gDescentActive = 0;
-    KillTimer(gWindow, 5);
-    PlayTone(720, 90);
+    KillTimer(gWindow, 6);
+    PlaySfx(SFX_BOOT);
     InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void BeginDescent(int toFloor) {
     gDescentToFloor = toFloor;
-    gDescentTonePhase = 0;
+    gDescentSeekPhase = 0;
     gDescentStart = GetTickCount();
     gDescentActive = 1;
-    PlayTone(140, 120);
-    SetTimer(gWindow, 5, 16, 0);
+    PlaySfx(SFX_READ_START);
+    SetTimer(gWindow, 6, 16, 0);   // 5번은 오디오 펌프(AUDIO_TIMER_ID)가 쓴다
 }
 
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
@@ -310,7 +503,7 @@ static void StopRead() {
 static void BeginRead() {
     if (gGame.phase != PHASE_COMBAT || gRolled || gReadActive) return;
     gReadStart = GetTickCount(); gReadActive = 1; gReadLanded = 0;
-    PlayTone(120, 90);
+    PlaySfx(SFX_READ_START);
     SetTimer(gWindow, 1, 16, 0);
 }
 
@@ -330,7 +523,7 @@ static void SyncRollAnimation() {
 static void TickRollAnimation() {
     int elapsed = ReadElapsed();
     for (int d = 0; d < 3; ++d) {
-        if (!(gReadLanded & (1 << d)) && elapsed >= DieReadEnd(d)) { gReadLanded |= 1 << d; PlayTone(440 + d * 110, 28); }
+        if (!(gReadLanded & (1 << d)) && elapsed >= DieReadEnd(d)) { gReadLanded |= 1 << d; PlaySfxPitched(SFX_DIE_LOCK, d * 1); }
     }
     if (elapsed >= DieReadEnd(2) + NOISE_SETTLE_MS) StopRead();
     InvalidateRect(gWindow, 0, FALSE);
@@ -932,7 +1125,7 @@ static void PaintGame(HWND window) {
     EndPaint(window, &paint);
 }
 
-static void BeginNewRun() { NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlayTone(520, 90); InvalidateRect(gWindow, 0, FALSE); }
+static void BeginNewRun() { NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE); }
 
 static void ExecuteCombatTurn() {
     int floor = gGame.floor, encounter = gGame.encounter;
@@ -942,19 +1135,19 @@ static void ExecuteCombatTurn() {
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
     int cleared = gGame.phase == PHASE_REWARD || gGame.phase == PHASE_VICTORY;
     if (resolved) BeginTurnTrace(floor, encounter, cleared);
-    if (gGame.phase == PHASE_GAMEOVER) PlayTone(130, 180);
-    else if (gGame.phase == PHASE_VICTORY) PlayTone(880, 180);
-    else if (before != gGame.phase) PlayTone(760, 90);
-    else PlayTone(260, 55);
+    if (gGame.phase == PHASE_GAMEOVER) PlaySfx(SFX_GAMEOVER);
+    else if (gGame.phase == PHASE_VICTORY) PlaySfx(SFX_VICTORY);
+    else if (before != gGame.phase) PlaySfx(SFX_ENEMY_DOWN);
+    else PlaySfx(SFX_EXECUTE);
 }
 
 static void ClickCombat(int x, int y) {
     if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
     if (!gRolled) return;
-    for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlayTone(330, 45); return; }
-    for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlayTone(480 + i * 60, 35); return; }
+    for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
+    for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
     for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) {
-        if (gGame.selectedDie >= 0) { AssignDieToSlot(&gGame, gGame.selectedDie, i); PlayTone(640 + i * 45, 45); }
+        if (gGame.selectedDie >= 0) { AssignDieToSlot(&gGame, gGame.selectedDie, i); PlaySfxPitched(SFX_SLOT_SET, i * 2); }
         else { int die = DieForSlotUI(i); if (die >= 0) gGame.selectedDie = die; } return;
     }
     if (Inside(EndTurnRect(), x, y)) {
@@ -965,20 +1158,20 @@ static void ClickCombat(int x, int y) {
 static void ClickDriveSelect(int x, int y) {
     for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
-        if (gGame.phase == PHASE_COMBAT) { PlayTone(520, 90); BeginDescent(0); }
+        if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
         return;
     }
 }
 
 static void ClickReward(int x, int y) {
-    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlayTone(600 + i * 80, 50); return; }
-    if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlayTone(760, 85); return; }
-    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlayTone(350, 50); }
+    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
+    if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlaySfx(SFX_REWARD_SET); return; }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
 }
 
 static void ClickPrune(int x, int y) {
-    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { PruneFace(&gGame, d, f); PlayTone(180, 65); return; }
-    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlayTone(560, 60); }
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { PruneFace(&gGame, d, f); PlaySfx(SFX_PRUNE); return; }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlaySfx(SFX_CONFIRM); }
 }
 
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
@@ -1073,13 +1266,13 @@ static void HandleKey(WPARAM key) {
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {
             SelectDrive(&gGame, (int)(key - '1'));
-            if (gGame.phase == PHASE_COMBAT) { PlayTone(520, 90); BeginDescent(0); }
+            if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
         }
     }
     else if (gGame.phase == PHASE_COMBAT) {
         if (key == 'R') BeginRead();
         else if (!gRolled) { /* sector not read yet */ }
-        else if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlayTone(480 + gGame.selectedDie * 60, 35); }
+        else if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlaySfxPitched(SFX_DIE_PICK, gGame.selectedDie * 2); }
         else if (key == VK_SPACE) ExecuteCombatTurn();
         else if (key == VK_ESCAPE && gGame.selectedDie >= 0) UnassignDie(&gGame, gGame.selectedDie);
     } else if (gGame.phase == PHASE_REWARD) {
@@ -1097,7 +1290,8 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         gFontSmall = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
         gFontMedium = CreateFontW(21, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
         gFontLarge = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
-        gFontHuge = CreateFontW(62, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas"); return 0;
+        gFontHuge = CreateFontW(62, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+        AudioOpen(window); return 0;
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
@@ -1108,6 +1302,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
     case WM_TIMER:
+        if (wParam == AUDIO_TIMER_ID) { AudioPump(); return 0; }
         if (wParam == 1u) TickRollAnimation();
         else if (wParam == 2u) InvalidateRect(window, 0, FALSE);
         else if (wParam == 3u) {
@@ -1118,10 +1313,10 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if ((int)(GetTickCount() - gTurnTraceStart) >= TurnTraceRevealDuration()) KillTimer(window, 4);
             InvalidateRect(window, 0, FALSE);
         }
-        else if (wParam == 5u) {
+        else if (wParam == 6u) {
             int descentElapsed = (int)(GetTickCount() - gDescentStart);
-            if (gDescentTonePhase == 0 && descentElapsed >= DESCENT_MS / 3) { ++gDescentTonePhase; PlayTone(300, 45); }
-            else if (gDescentTonePhase == 1 && descentElapsed >= DESCENT_MS * 2 / 3) { ++gDescentTonePhase; PlayTone(420, 45); }
+            if (gDescentSeekPhase == 0 && descentElapsed >= DESCENT_MS / 3) { ++gDescentSeekPhase; PlaySfx(SFX_DIE_LOCK); }
+            else if (gDescentSeekPhase == 1 && descentElapsed >= DESCENT_MS * 2 / 3) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 4); }
             if (descentElapsed >= DESCENT_MS) FinishDescent();
             else InvalidateRect(window, 0, FALSE);
         }
@@ -1129,9 +1324,9 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
-        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 5);
+        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 6);
         if (gFontSmall) DeleteObject(gFontSmall); if (gFontMedium) DeleteObject(gFontMedium); if (gFontLarge) DeleteObject(gFontLarge); if (gFontHuge) DeleteObject(gFontHuge);
-        PlaySoundW(0, 0, 0); PostQuitMessage(0); return 0;
+        AudioClose(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
