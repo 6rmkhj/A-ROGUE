@@ -75,7 +75,17 @@ static const ModifierInfo MODIFIER_INFO[MODIFIER_COUNT] = {
     {L"체크섬", L"굴림 출력 합이 짝수면 공격 피해 +2."}
 };
 
+// ---------------------------------------------------------------------------
+// 적 데이터
+//
+// 기존 11종(레거시)은 마이그레이션 호환용으로만 유지되며 DRIVE_MOBS /
+// DRIVE_BOSSES 어디에서도 참조되지 않는다. 활성 로스터는 드라이브별
+// 일반 몹 3종 + 층별 보스 3종, 총 36종이다. 보스 여부는 enum 범위가
+// 아니라 EnemyInfo.role로만 판정한다.
+// ---------------------------------------------------------------------------
+
 enum EnemyKind {
+    // 레거시 (활성 로스터 미참조, 데이터 무결성 검사만 통과하면 됨)
     ENEMY_GLITCH = 0,
     ENEMY_WORM,
     ENEMY_SPYWARE,
@@ -87,31 +97,212 @@ enum EnemyKind {
     BOSS_DISK_ERROR,
     BOSS_BOOT_SECTOR,
     BOSS_FORMAT,
+    // C:\ SYSTEM
+    MOB_C_DLL_HIJACKER,
+    MOB_C_REG_GHOST,
+    MOB_C_WATCHDOG,
+    BOSS_C_ACCESS_DENIED,
+    BOSS_C_KERNEL_PANIC,
+    BOSS_C_BLUE_SCREEN,
+    // D:\ ARCHIVE
+    MOB_D_BIT_ROT,
+    MOB_D_INDEXER,
+    MOB_D_ZIP_BOMB,
+    BOSS_D_RESTORE_EXE,
+    BOSS_D_TAPE_LOOP,
+    BOSS_D_MASTER_BACKUP,
+    // E:\ REMOVABLE
+    MOB_E_AUTORUN,
+    MOB_E_LOST_CLUSTER,
+    MOB_E_WRITE_PROTECT,
+    BOSS_E_AUTOPLAY,
+    BOSS_E_UNSAFE_EJECT,
+    BOSS_E_NO_MEDIA,
+    // N:\ NETWORK
+    MOB_N_SNIFFER,
+    MOB_N_FIREWALL,
+    MOB_N_PING_FLOOD,
+    BOSS_N_PROXY,
+    BOSS_N_ROUTING_LOOP,
+    BOSS_N_TIMEOUT,
+    // R:\ RAMDISK
+    MOB_R_MEMORY_LEAK,
+    MOB_R_RACE_CONDITION,
+    MOB_R_DANGLING_PTR,
+    BOSS_R_LEAK_DLL,
+    BOSS_R_HEAP_OVERFLOW,
+    BOSS_R_OUT_OF_MEMORY,
+    // X:\ QUARANTINE
+    MOB_X_MUTANT_SAMPLE,
+    MOB_X_ESCAPEE,
+    MOB_X_RANSOMWARE,
+    BOSS_X_SAMPLE13,
+    BOSS_X_SANDBOX_BREACH,
+    BOSS_X_ZERO_DAY,
     ENEMY_KIND_COUNT
 };
 
+enum EnemyRole {
+    ROLE_MOB = 0,
+    ROLE_BOSS
+};
+
+// 일반 몹의 의도 주기. 새 몹을 추가할 때 game.cpp에 종류별 비교문을
+// 늘리는 대신 여기서 패턴을 골라 붙인다.
+enum EnemyPattern {
+    PATTERN_LEGACY = 0,  // 기존 8종 몹의 하드코딩 주기 재현
+    PATTERN_BOSS,        // 보스 공용 주기 (기믹과는 별개)
+    PATTERN_ASSAULT,     // 공격형: 공격 → 공격 → 강공 → 공격
+    PATTERN_CORRUPTER,   // 변칙형: 오염 → 공격 → 공격 → 강공
+    PATTERN_BULWARK,     // 방어형: 방어 → 공격 → 방어 → 강공
+    PATTERN_MEDIC,       // 방어형: 공격 → 복구 → 방어 → 공격
+    PATTERN_OPENER,      // 변칙형: 1턴 강공, 이후 공격 → 방어 → 공격
+    PATTERN_RAMP,        // 공격형: 매턴 공격, 피해가 턴마다 +1
+    PATTERN_ERRATIC,     // 변칙형: 턴 해시 기반 의도
+    PATTERN_SIEGE,       // 방어형: 방어 → 방어 → 강공 → 공격
+    PATTERN_SPIKE,       // 변칙형: 강공 → 오염 → 공격 → 공격
+    PATTERN_COUNT
+};
+
+// 보스 기믹 계열(드라이브 테마)과 실제 행동(보스별 고유 18종).
+enum GimmickFamily {
+    FAM_NONE = 0,
+    FAM_LOCK,        // C:\ 슬롯 권한 잠금
+    FAM_RESTORE,     // D:\ 복원 지점 되감기
+    FAM_OFFLINE,     // E:\ 주사위 연결 끊김
+    FAM_ROUTE,       // N:\ 해결 순서 변형
+    FAM_PRESSURE,    // R:\ 메모리 압력 게이지
+    FAM_QUARANTINE   // X:\ 면 격리·영구 포맷
+};
+
+enum BossGimmickKind {
+    GIMMICK_NONE = 0,        // 레거시 보스 전용 센티널
+    GIMMICK_ACCESS_DENIED,   // 짝수 턴마다 예고된 슬롯 1개 잠금
+    GIMMICK_KERNEL_PANIC,    // 직전 턴 최고 출력 슬롯이 다음 턴 잠김
+    GIMMICK_BLUE_SCREEN,     // 3턴마다 증폭+연쇄 동시 잠금
+    GIMMICK_RESTORE_POINT,   // 3턴 창 요구 피해 미달 시 체크포인트 복원
+    GIMMICK_TAPE_LOOP,       // 매턴 요구 피해 미달 시 되감기 회복
+    GIMMICK_MASTER_BACKUP,   // 체력 40% 미만 시 1회 대복원
+    GIMMICK_AUTOPLAY,        // 3턴마다 예고 주사위 오프라인
+    GIMMICK_UNSAFE_EJECT,    // 짝수 턴마다 예고 주사위 오프라인
+    GIMMICK_NO_MEDIA,        // 매턴 오프라인, 4턴마다 인식 휴지
+    GIMMICK_PROXY,           // 3턴마다 해결 순서 역전
+    GIMMICK_ROUTING_LOOP,    // 짝수 턴마다 해결 순서 역전
+    GIMMICK_TIMEOUT,         // 카운트다운 0 턴 역전+보스 대기, 피해로 지연
+    GIMMICK_LEAK,            // 압력 4, 임계 10 피해 → -1
+    GIMMICK_HEAP_OVERFLOW,   // 압력 3, 임계 12, 강화 공격이 방어 관통
+    GIMMICK_OUT_OF_MEMORY,   // 압력 5, 임계 14 → -2
+    GIMMICK_SAMPLE13,        // 3턴마다 예고 면을 전투 동안 격리 (최대 2)
+    GIMMICK_SANDBOX_BREACH,  // 3턴마다 예고 면을 2턴 격리
+    GIMMICK_ZERO_DAY,        // 4턴마다 예고 면 영구 삭제, 피해로 지연
+    GIMMICK_COUNT
+};
+
+struct BossGimmickInfo {
+    uint8_t family;          // GimmickFamily
+    const wchar_t* name;     // 카드·가이드 표시명
+    const wchar_t* rule;     // 규칙 한 줄
+    const wchar_t* counter;  // 대응 한 줄
+    int p1, p2, p3;          // 기믹별 매개변수 (주기·임계·강도)
+};
+
+static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
+    {FAM_NONE, L"-", L"-", L"-", 0, 0, 0},
+    {FAM_LOCK,       L"섹터 잠금",     L"짝수 턴마다 예고된 슬롯 1개가 잠깁니다.",                     L"예고를 보고 남은 슬롯 배치를 계획하십시오.",          2, 0, 0},
+    {FAM_LOCK,       L"패닉 잠금",     L"직전 턴 출력이 가장 컸던 슬롯이 다음 턴 잠깁니다.",           L"매턴 주력 슬롯을 바꿔 잠금을 분산하십시오.",          1, 0, 0},
+    {FAM_LOCK,       L"시스템 정지",   L"3턴마다 증폭과 연쇄 슬롯이 함께 잠깁니다.",                   L"정지 턴에는 공격·방어에만 집중하십시오.",             3, 0, 0},
+    {FAM_RESTORE,    L"복원 지점",     L"3턴 창의 누적 피해가 요구치 미달이면 체력을 되감습니다.",     L"창이 닫히기 전에 요구 피해를 채우십시오.",            3, 12, 10},
+    {FAM_RESTORE,    L"테이프 루프",   L"한 턴 피해가 요구치 미달이면 턴말에 체력을 되감습니다.",      L"매턴 요구치 이상을 꾸준히 넣으십시오.",               1, 7, 5},
+    {FAM_RESTORE,    L"마스터 백업",   L"체력 40% 미만이 되면 1회 백업 지점으로 복원합니다.",         L"임계 근처에서 한 번에 크게 몰아치십시오.",            40, 60, 14},
+    {FAM_OFFLINE,    L"자동 실행",     L"3턴마다 예고된 주사위 1개가 그 턴 오프라인이 됩니다.",        L"오프라인 주사위에 핵심 역할을 맡기지 마십시오.",      3, 0, 0},
+    {FAM_OFFLINE,    L"강제 제거",     L"짝수 턴마다 예고된 주사위 1개가 오프라인이 됩니다.",          L"홀수 턴에 화력을 몰고 짝수 턴은 수비하십시오.",       2, 0, 0},
+    {FAM_OFFLINE,    L"미디어 없음",   L"매턴 주사위 1개가 오프라인, 4턴마다 인식 턴엔 없습니다.",     L"인식 턴에 최대 화력을 준비하십시오.",                 1, 4, 0},
+    {FAM_ROUTE,      L"프록시 우회",   L"3턴마다 슬롯 해결 순서가 역전됩니다.",                        L"역전 턴에는 공격·방어에만 배치하십시오.",             3, 0, 0},
+    {FAM_ROUTE,      L"라우팅 루프",   L"짝수 턴마다 슬롯 해결 순서가 역전됩니다.",                    L"홀수 턴에 증폭·연쇄를 쓰십시오.",                     2, 0, 0},
+    {FAM_ROUTE,      L"타임아웃",      L"카운트가 0이 되는 턴 순서가 역전되고 보스는 대기합니다.",     L"한 턴 12+ 피해로 카운트를 되돌릴 수 있습니다.",       3, 12, 0},
+    {FAM_PRESSURE,   L"메모리 누수",   L"압력이 매턴 오르고 가득 차면 강화 공격이 예고됩니다.",        L"한 턴 10+ 피해로 압력을 1 낮추십시오.",               4, 10, 8},
+    {FAM_PRESSURE,   L"힙 오버플로",   L"압력이 빠르게 차고 강화 공격이 방어를 관통합니다.",           L"한 턴 12+ 피해로 압력을 1 낮추십시오.",               3, 12, 6},
+    {FAM_PRESSURE,   L"메모리 고갈",   L"압력 상한이 높지만 가득 차면 최대 강화 공격이 옵니다.",       L"한 턴 14+ 피해로 압력을 2 낮추십시오.",               5, 14, 12},
+    {FAM_QUARANTINE, L"검체 격리",     L"오염이 차면 예고된 면 1개를 전투 동안 격리합니다(최대 2).",   L"격리 전에 처치하거나 예고 면 의존을 줄이십시오.",     3, 2, 0},
+    {FAM_QUARANTINE, L"샌드박스 침입", L"3턴마다 예고된 면 1개를 2턴 동안 격리합니다.",                L"격리가 풀리는 턴에 화력을 몰아치십시오.",             3, 2, 2},
+    {FAM_QUARANTINE, L"제로데이",      L"오염이 가득 차면 예고된 면 1개를 영구 삭제합니다.",           L"한 턴 15+ 피해로 오염을 1 낮추십시오.",               4, 15, 0}
+};
+
 struct EnemyInfo {
-    const wchar_t* name;
-    const wchar_t* code;
+    const wchar_t* name;    // 기록·로그용 이름
+    const wchar_t* code;    // 카드 표시명
     int hp;
     int damage;
     int guard;
+    int hpGrowth;           // 층당 증가량 (보스는 층별 종류가 달라 0)
+    int damageGrowth;
+    int guardGrowth;
+    uint8_t role;           // EnemyRole
+    uint8_t pattern;        // EnemyPattern
+    uint8_t gimmick;        // BossGimmickKind (몹과 레거시 보스는 GIMMICK_NONE)
     uint32_t color;
 };
 
 static const EnemyInfo ENEMY_INFO[ENEMY_KIND_COUNT] = {
-    {L"글리치", L"글리치", 14, 4, 3, AR_COLOR(95, 225, 176)},
-    {L"웜", L"웜", 18, 5, 2, AR_COLOR(170, 230, 80)},
-    {L"스파이웨어", L"스파이웨어", 22, 6, 4, AR_COLOR(255, 193, 77)},
-    {L"트로이 목마", L"트로이 목마", 25, 7, 3, AR_COLOR(255, 110, 95)},
-    {L"파편", L"파편", 28, 7, 6, AR_COLOR(150, 150, 255)},
-    {L"오염 캐시", L"오염 캐시", 24, 6, 7, AR_COLOR(90, 190, 230)},
-    {L"데몬", L"데몬", 30, 8, 5, AR_COLOR(210, 105, 235)},
-    {L"루트킷", L"루트킷", 34, 9, 5, AR_COLOR(235, 80, 130)},
-    {L"디스크 오류", L"디스크 오류", 38, 6, 5, AR_COLOR(255, 104, 87)},
-    {L"부트 섹터", L"부트 섹터", 52, 8, 7, AR_COLOR(255, 170, 70)},
-    {L"포맷", L"포맷", 68, 10, 9, AR_COLOR(245, 65, 90)}
+    // ---- 레거시 11종 (활성 로스터 미참조) ----
+    {L"글리치", L"글리치", 14, 4, 3, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(95, 225, 176)},
+    {L"웜", L"웜", 18, 5, 2, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(170, 230, 80)},
+    {L"스파이웨어", L"스파이웨어", 22, 6, 4, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(255, 193, 77)},
+    {L"트로이 목마", L"트로이 목마", 25, 7, 3, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(255, 110, 95)},
+    {L"파편", L"파편", 28, 7, 6, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(150, 150, 255)},
+    {L"오염 캐시", L"오염 캐시", 24, 6, 7, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(90, 190, 230)},
+    {L"데몬", L"데몬", 30, 8, 5, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(210, 105, 235)},
+    {L"루트킷", L"루트킷", 34, 9, 5, 3, 1, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(235, 80, 130)},
+    {L"디스크 오류", L"디스크 오류", 38, 6, 5, 3, 1, 2, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NONE, AR_COLOR(255, 104, 87)},
+    {L"부트 섹터", L"부트 섹터", 52, 8, 7, 3, 1, 2, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NONE, AR_COLOR(255, 170, 70)},
+    {L"포맷", L"포맷", 68, 10, 9, 3, 1, 2, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NONE, AR_COLOR(245, 65, 90)},
+    // ---- C:\ SYSTEM ----
+    {L"DLL 하이재커", L"DLL.HIJACK", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(120, 190, 255)},
+    {L"레지스트리 고스트", L"REG.GHOST", 18, 4, 4, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(150, 200, 250)},
+    {L"워치독 서비스", L"WATCHDOG", 20, 5, 4, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(80, 150, 235)},
+    {L"액세스 거부", L"ACCESS.DENIED", 34, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ACCESS_DENIED, AR_COLOR(96, 168, 255)},
+    {L"커널 패닉", L"KERNEL.PANIC", 48, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_KERNEL_PANIC, AR_COLOR(70, 140, 245)},
+    {L"블루 스크린", L"BLUE.SCREEN", 62, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_BLUE_SCREEN, AR_COLOR(58, 122, 240)},
+    // ---- D:\ ARCHIVE ----
+    {L"비트 부패", L"BIT.ROT", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(235, 190, 90)},
+    {L"인덱서", L"INDEXER", 21, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, AR_COLOR(255, 214, 110)},
+    {L"집 폭탄", L"ZIP.BOMB", 16, 6, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(255, 180, 55)},
+    {L"복원 프로그램", L"RESTORE.EXE", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_RESTORE_POINT, AR_COLOR(255, 208, 96)},
+    {L"테이프 루프", L"TAPE.LOOP", 36, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TAPE_LOOP, AR_COLOR(238, 186, 70)},
+    {L"마스터 백업", L"MASTER.BACKUP", 46, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_MASTER_BACKUP, AR_COLOR(220, 165, 52)},
+    // ---- E:\ REMOVABLE ----
+    {L"오토런", L"AUTORUN.INF", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_OPENER, GIMMICK_NONE, AR_COLOR(120, 230, 150)},
+    {L"유실 클러스터", L"LOST.CLUSTER", 18, 4, 3, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(96, 210, 176)},
+    {L"쓰기 방지", L"WRITE.PROTECT", 20, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(78, 190, 140)},
+    {L"자동 재생", L"AUTOPLAY", 35, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_AUTOPLAY, AR_COLOR(110, 235, 168)},
+    {L"강제 제거", L"UNSAFE.EJECT", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_UNSAFE_EJECT, AR_COLOR(84, 216, 150)},
+    {L"미디어 없음", L"NO.MEDIA", 55, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NO_MEDIA, AR_COLOR(60, 196, 128)},
+    // ---- N:\ NETWORK ----
+    {L"패킷 스니퍼", L"SNIFFER", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(110, 205, 240)},
+    {L"방화벽", L"FIREWALL", 22, 3, 7, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, AR_COLOR(90, 190, 230)},
+    {L"핑 폭주", L"PING.FLOOD", 16, 5, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(70, 220, 255)},
+    {L"프록시", L"PROXY", 40, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_PROXY, AR_COLOR(96, 200, 245)},
+    {L"라우팅 루프", L"ROUTING.LOOP", 56, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ROUTING_LOOP, AR_COLOR(72, 180, 235)},
+    {L"타임아웃", L"TIMEOUT", 68, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TIMEOUT, AR_COLOR(52, 160, 225)},
+    // ---- R:\ RAMDISK ----
+    {L"메모리 누수", L"MEM.LEAK", 17, 3, 2, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, AR_COLOR(220, 130, 245)},
+    {L"경쟁 상태", L"RACE.COND", 16, 5, 3, 6, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, AR_COLOR(200, 110, 230)},
+    {L"허상 포인터", L"DANGLING.PTR", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_SPIKE, GIMMICK_NONE, AR_COLOR(235, 96, 220)},
+    {L"누수 라이브러리", L"LEAK.DLL", 30, 5, 3, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LEAK, AR_COLOR(214, 118, 240)},
+    {L"힙 오버플로", L"HEAP.OVERFLOW", 44, 6, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_HEAP_OVERFLOW, AR_COLOR(192, 92, 226)},
+    {L"메모리 고갈", L"OUT.OF.MEMORY", 55, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_OUT_OF_MEMORY, AR_COLOR(170, 70, 212)},
+    // ---- X:\ QUARANTINE ----
+    {L"변이 샘플", L"MUTANT.SMP", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(255, 120, 108)},
+    {L"샌드박스 탈주", L"ESCAPEE", 17, 6, 2, 7, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(255, 96, 130)},
+    {L"랜섬웨어", L"RANSOMWARE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(230, 70, 96)},
+    {L"검체-13", L"SAMPLE-13", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SAMPLE13, AR_COLOR(255, 104, 92)},
+    {L"샌드박스 침입", L"SANDBOX.BREACH", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SANDBOX_BREACH, AR_COLOR(240, 80, 78)},
+    {L"제로데이", L"ZERO.DAY", 60, 9, 8, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ZERO_DAY, AR_COLOR(255, 56, 66)}
 };
+
+// 잘못된 kind가 UI·렌더에 흘러들었을 때 대신 그리는 안전 데이터.
+static const EnemyInfo UNKNOWN_ENEMY_INFO =
+    {L"알 수 없음", L"UNKNOWN", 1, 0, 0, 0, 0, 0, ROLE_MOB, PATTERN_LEGACY, GIMMICK_NONE, AR_COLOR(255, 0, 255)};
 
 enum EnemyIntent {
     INTENT_ATTACK = 0,
@@ -202,4 +393,32 @@ static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
     {L"X:\\", L"QUARANTINE", L"격리 구역. 위험하지만 압수된 특수 데이터가 남아 있습니다.",
      MOD_OVERALLOC, MOD_READ_ERROR, PERK_BONUS_FACE, 1, L"시작 시 무작위 특수 면 1개 설치",
      {L"X:\\", L"X:\\VAULT", L"X:\\VAULT\\CORE"}, L"X:\\ → VAULT → CORE", AR_COLOR(255, 92, 82)}
+};
+
+// ---------------------------------------------------------------------------
+// 드라이브별 전투 로스터. 소속과 등장 위치의 단일 진실원이다.
+// 활성 적 = 이 두 테이블이 참조하는 종류의 합집합 (총 36종).
+// DRIVE_MOBS[drive]의 세 몹은 모든 층에 등장하며 base + growth × floor로
+// 성장한다. DRIVE_BOSSES[drive][floor]는 그 층 보스전에 정확히 하나 나온다.
+// ---------------------------------------------------------------------------
+
+#define DRIVE_MOB_COUNT 3
+#define DRIVE_BOSS_COUNT 3
+
+static const int DRIVE_MOBS[DRIVE_COUNT][DRIVE_MOB_COUNT] = {
+    {MOB_C_DLL_HIJACKER, MOB_C_REG_GHOST, MOB_C_WATCHDOG},
+    {MOB_D_BIT_ROT, MOB_D_INDEXER, MOB_D_ZIP_BOMB},
+    {MOB_E_AUTORUN, MOB_E_LOST_CLUSTER, MOB_E_WRITE_PROTECT},
+    {MOB_N_SNIFFER, MOB_N_FIREWALL, MOB_N_PING_FLOOD},
+    {MOB_R_MEMORY_LEAK, MOB_R_RACE_CONDITION, MOB_R_DANGLING_PTR},
+    {MOB_X_MUTANT_SAMPLE, MOB_X_ESCAPEE, MOB_X_RANSOMWARE}
+};
+
+static const int DRIVE_BOSSES[DRIVE_COUNT][DRIVE_BOSS_COUNT] = {
+    {BOSS_C_ACCESS_DENIED, BOSS_C_KERNEL_PANIC, BOSS_C_BLUE_SCREEN},
+    {BOSS_D_RESTORE_EXE, BOSS_D_TAPE_LOOP, BOSS_D_MASTER_BACKUP},
+    {BOSS_E_AUTOPLAY, BOSS_E_UNSAFE_EJECT, BOSS_E_NO_MEDIA},
+    {BOSS_N_PROXY, BOSS_N_ROUTING_LOOP, BOSS_N_TIMEOUT},
+    {BOSS_R_LEAK_DLL, BOSS_R_HEAP_OVERFLOW, BOSS_R_OUT_OF_MEMORY},
+    {BOSS_X_SAMPLE13, BOSS_X_SANDBOX_BREACH, BOSS_X_ZERO_DAY}
 };
