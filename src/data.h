@@ -125,6 +125,9 @@ enum EnemyIntent {
 static const wchar_t* const INTENT_NAMES[INTENT_COUNT] = {L"공격", L"강공", L"방어", L"복구", L"오염(관통)"};
 static const int FLOOR_CAPACITY[3] = {240, 180, 130};
 
+// 보상 대신 선택하는 섹터 복구의 회복량. 층이 깊어질수록 피해가 커지므로 함께 오른다.
+static const int SECTOR_REPAIR_HEAL[3] = {10, 13, 16};
+
 enum DrivePerk {
     PERK_MAX_HP = 0,     // 시작 최대 체력 증감 (perkValue = 증감량)
     PERK_CAPACITY,       // 모든 층 용량 한도 가산 (perkValue = 바이트)

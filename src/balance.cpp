@@ -43,7 +43,9 @@ static int Run(unsigned int seed, int* combats) {
             for (int i = 0; i < 3; ++i) for (int j = i + 1; j < 3; ++j) if (FacePower(RolledFace(&game, order[j])) > FacePower(RolledFace(&game, order[i]))) { int swap = order[i]; order[i] = order[j]; order[j] = swap; }
             AssignDieToSlot(&game, order[0], SLOT_ATTACK); AssignDieToSlot(&game, order[1], SLOT_DEFEND); AssignDieToSlot(&game, order[2], SLOT_AMPLIFY); EndTurn(&game);
         } else if (game.phase == PHASE_REWARD) {
-            int reward = BestReward(&game), face = WeakestFace(&game); SelectReward(&game, reward); InstallSelectedReward(&game, face / 6, face % 6);
+            // 체력이 절반 아래로 떨어지면 덱 강화를 한 번 포기하고 회복한다.
+            if (game.playerHp * 100 < game.playerMaxHp * 55) RepairSector(&game);
+            else { int reward = BestReward(&game), face = WeakestFace(&game); SelectReward(&game, reward); InstallSelectedReward(&game, face / 6, face % 6); }
         } else if (game.phase == PHASE_PRUNE) {
             while (DeckBytes(&game) > EffectiveCapacity(&game)) { int face = WorstEfficiencyFace(&game); if (face < 0) break; PruneFace(&game, face / 6, face % 6); }
             ConfirmPrune(&game);

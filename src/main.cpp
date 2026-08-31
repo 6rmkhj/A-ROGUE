@@ -993,10 +993,17 @@ static void DrawTurnCalculation(HDC dc) {
         L"계산 완료 · 계속하려면 화면을 클릭하세요", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// 카드 0~2는 설치할 면, 마지막 카드는 면 대신 체력을 얻는 섹터 복구다.
+#define REWARD_CARD_COUNT 4
+#define REWARD_REPAIR 3
+
 static RECT RewardRect(int i, int width) {
-    int cardWidth = 220, gap = 28, total = cardWidth * 3 + gap * 2; int left = (width - total) / 2 + i * (cardWidth + gap);
+    int cardWidth = 220, gap = 28, total = cardWidth * REWARD_CARD_COUNT + gap * (REWARD_CARD_COUNT - 1);
+    int left = (width - total) / 2 + i * (cardWidth + gap);
     return MakeRect(left, 130, left + cardWidth, 278);
 }
+
+static int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 static RECT FaceGridRect(int die, int face) { int left = 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 static RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
 
@@ -1013,17 +1020,34 @@ static void DrawFaceGrid(HDC dc, int mode) {
 }
 
 static void DrawReward(HDC dc, int width, int height) {
-    TextRect(dc, MakeRect(0, 76, width, 102), L"전투 완료  →  [현재: 보상 선택]  →  면 교체  →  다음 전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(0, 96, width, 122), L"보상 하나를 고른 뒤 교체할 주사위 면을 클릭하십시오", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, 76, width, 102), L"전투 완료  →  [현재: 보상 선택]  →  면 교체 또는 섹터 복구  →  다음 전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, 96, width, 122), L"면을 설치하거나, 대신 섹터를 복구해 체력을 얻으십시오", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     for (int i = 0; i < 3; ++i) {
         RECT r = RewardRect(i, width); int selected = gGame.selectedReward == i, hover = Inside(r, gMouse.x, gMouse.y), kind = gGame.rewardKinds[i];
         Panel(dc, r, selected ? RGB(31, 55, 48) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
+        wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), FACE_INFO[kind].name, (COLORREF)FACE_INFO[kind].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[48]; int cost = kind == FACE_NUMBER ? gGame.rewardValues[i] : FACE_INFO[kind].cost;
         wsprintfW(b, L"출력 %d  ·  %dB", gGame.rewardValues[i], cost); TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), FACE_INFO[kind].description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
-    Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면을 먼저 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
+    {
+        RECT r = RewardRect(REWARD_REPAIR, width);
+        int usable = CanRepairSector(), hover = usable && Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, hover ? RGB(28, 46, 40) : C_PANEL, hover ? C_GREEN : C_LINE);
+        Text(dc, r.left + 10, r.top + 8, L"[4]", C_DIM, gFontSmall);
+        TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), L"섹터 복구", usable ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        wchar_t b[64];
+        // 최대 체력에 가까우면 표시값도 실제로 얻는 만큼으로 줄인다.
+        int missing = gGame.playerMaxHp - gGame.playerHp, gain = SectorRepairAmount(&gGame);
+        if (gain > missing) gain = missing;
+        if (usable) wsprintfW(b, L"체력 +%d  ·  0B", gain);
+        else lstrcpyW(b, L"체력 최대치");
+        TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, usable ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        wsprintfW(b, L"면 대신 회복\n현재 %d / %d", gGame.playerHp, gGame.playerMaxHp);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+    }
+    Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
     RECT skip = ContinueRect(width, height); Panel(dc, skip, C_PANEL_2, C_LINE); TextRect(dc, skip, L"건너뛰기 [취소]", C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -1037,7 +1061,7 @@ static void DrawPrune(HDC dc, int width, int height) {
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), victory ? L"디스크 복구 완료" : L"시스템 정지", victory ? C_GREEN : C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    wchar_t b[192]; wsprintfW(b, L"전투 %d회 완료  ·  면 %d개 설치  ·  최종 덱 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, DeckBytes(&gGame));
+    wchar_t b[192]; wsprintfW(b, L"전투 %d회 완료  ·  면 %d개 설치  ·  섹터 복구 %d회  ·  최종 덱 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, DeckBytes(&gGame));
     TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
 }
 
@@ -1080,10 +1104,10 @@ static void DrawGuide(HDC dc, int width, int height) {
         L"볼륨 선택  런 시작 시 드라이브마다 손상 2종 공개 + 고유 특성 1개\n배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 204, L"덱·보상·용량", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"18개 면의 비용 합이 덱 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 빈 면(0B)이 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"18개 면의 비용 합이 덱 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체하거나, 면 대신 섹터 복구를 골라 체력을 회복할 수 있습니다. 현재 층 및 다음 층 한도를 넘으면 빈 면(0B)이 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
-        L"클릭 / 1·2·3  선택\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기\nF3  보유 면 조회", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"클릭 / 1·2·3  선택\n4  보상 화면에서 섹터 복구\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기\nF3  보유 면 조회", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 static void PaintGame(HWND window) {
@@ -1164,6 +1188,10 @@ static void ClickDriveSelect(int x, int y) {
 }
 
 static void ClickReward(int x, int y) {
+    if (Inside(RewardRect(REWARD_REPAIR, BASE_WIDTH), x, y)) {
+        if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); }
+        return;
+    }
     for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlaySfx(SFX_REWARD_SET); return; }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
@@ -1204,7 +1232,7 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (gGame.phase == PHASE_REWARD) {
-        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) return 500 + i;
+        for (int i = 0; i < REWARD_CARD_COUNT; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) return 500 + i;
         for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
         return -1;
@@ -1276,7 +1304,9 @@ static void HandleKey(WPARAM key) {
         else if (key == VK_SPACE) ExecuteCombatTurn();
         else if (key == VK_ESCAPE && gGame.selectedDie >= 0) UnassignDie(&gGame, gGame.selectedDie);
     } else if (gGame.phase == PHASE_REWARD) {
-        if (key >= '1' && key <= '3') SelectReward(&gGame, (int)(key - '1')); else if (key == VK_ESCAPE) SkipReward(&gGame);
+        if (key >= '1' && key <= '3') SelectReward(&gGame, (int)(key - '1'));
+        else if (key == '4') { if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); } }
+        else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (key == 'R' || key == VK_RETURN) BeginNewRun();
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);

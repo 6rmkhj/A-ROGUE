@@ -88,6 +88,26 @@ int main() {
     if (!badSector.dice[0].faces[0].damaged) return Fail("installing a reward onto a bad sector must not repair it");
     if (badSector.dice[0].faces[0].kind != FACE_SHIELD) return Fail("installing a reward onto a bad sector must still swap the face kind");
 
+    GameState repair; NewRun(&repair, 0x5EC70001u); repair.driveChoices[0] = 0; SelectDrive(&repair, 0);
+    repair.phase = PHASE_REWARD; repair.floor = 0; repair.encounter = 0; repair.playerHp = 12;
+    int repairHeal = SectorRepairAmount(&repair);
+    if (repairHeal != SECTOR_REPAIR_HEAL[0]) return Fail("repair amount must follow the floor table");
+    RepairSector(&repair);
+    if (repair.playerHp != 12 + repairHeal) return Fail("sector repair must restore hp");
+    if (repair.sectorsRepaired != 1) return Fail("sector repair must be counted");
+    if (repair.facesInstalled != 0) return Fail("sector repair must not install a face");
+    if (repair.phase != PHASE_COMBAT || repair.encounter != 1) return Fail("sector repair must advance the run");
+
+    GameState repairCap; NewRun(&repairCap, 0x5EC70002u); repairCap.driveChoices[0] = 0; SelectDrive(&repairCap, 0);
+    repairCap.phase = PHASE_REWARD; repairCap.floor = 2; repairCap.playerHp = repairCap.playerMaxHp - 2;
+    RepairSector(&repairCap);
+    if (repairCap.playerHp != repairCap.playerMaxHp) return Fail("sector repair must not overheal");
+
+    GameState repairFull; NewRun(&repairFull, 0x5EC70003u); repairFull.driveChoices[0] = 0; SelectDrive(&repairFull, 0);
+    repairFull.phase = PHASE_REWARD; repairFull.playerHp = repairFull.playerMaxHp;
+    RepairSector(&repairFull);
+    if (repairFull.phase != PHASE_REWARD || repairFull.sectorsRepaired != 0) return Fail("sector repair at full hp must be rejected");
+
     int fragmentationShown = 0;
     for (unsigned int seed = 1; seed <= 256 && !fragmentationShown; ++seed) {
         GameState fragmented; NewRun(&fragmented, seed); fragmented.modifierA = MOD_FRAGMENTATION; fragmented.modifierB = MOD_CHECKSUM; StartCombat(&fragmented);

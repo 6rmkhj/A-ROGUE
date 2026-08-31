@@ -83,6 +83,10 @@ int EffectiveCapacity(const GameState* game) {
     return capacity;
 }
 
+int SectorRepairAmount(const GameState* game) {
+    return SECTOR_REPAIR_HEAL[ClampInt(game->floor, 0, 2)];
+}
+
 int NonEmptyFaceCount(const GameState* game) {
     int total = 0;
     for (int d = 0; d < 3; ++d) {
@@ -626,6 +630,20 @@ void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     face->value = (uint8_t)game->rewardValues[reward];
     ++game->facesInstalled;
     PushLog2(game, L"%s 면 설치. 현재 덱 %dB.", FACE_INFO[face->kind].name, DeckBytes(game));
+    ContinueAfterReward(game);
+}
+
+// 면을 설치하는 대신 체력을 회복한다. 덱 강화를 한 번 포기하는 대가라
+// 이미 체력이 가득 찼다면 아무것도 얻지 못하므로 선택 자체를 막는다.
+void RepairSector(GameState* game) {
+    if (game->phase != PHASE_REWARD) return;
+    if (game->playerHp >= game->playerMaxHp) return;
+    int hpBefore = game->playerHp;
+    game->playerHp = ClampInt(game->playerHp + SectorRepairAmount(game), 0, game->playerMaxHp);
+    ++game->sectorsRepaired;
+    wchar_t buffer[96];
+    wsprintfW(buffer, L"섹터 복구: 체력 +%d (%d → %d).", game->playerHp - hpBefore, hpBefore, game->playerHp);
+    PushLog(game, buffer);
     ContinueAfterReward(game);
 }
 
