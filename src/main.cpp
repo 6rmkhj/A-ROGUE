@@ -8,6 +8,7 @@ static HWND gWindow;
 static HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
 static POINT gMouse;
 static int gHoverId = -1;
+static int gGuideOpen;
 
 static const int BASE_WIDTH = 1120, BASE_HEIGHT = 760;
 
@@ -83,6 +84,11 @@ static COLORREF FaceColor(const Face* face) {
     return (COLORREF)FACE_INFO[face->kind].color;
 }
 
+static void AppendStatus(wchar_t* output, const wchar_t* status) {
+    if (output[0]) lstrcatW(output, L" · ");
+    lstrcatW(output, status);
+}
+
 #pragma pack(push, 1)
 struct WaveMemory {
     char riff[4]; DWORD riffSize; char wave[4]; char fmt[4]; DWORD fmtSize; WORD format; WORD channels;
@@ -105,16 +111,96 @@ static void PlayTone(int frequency, int milliseconds) {
     PlaySoundA((LPCSTR)&gWave, 0, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
+static RECT GuideButtonRect(int width) { return MakeRect(width - 116, 12, width - 18, 54); }
+static RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
+
+#define ROLL_BASE_MS 300
+#define ROLL_STAGGER_MS 80
+#define ROLL_FLASH_MS 130
+#define ROLL_FLIPS 16
+
+static DWORD gRollStart;
+static int gRollActive, gRollLanded;
+static int gRollFloor = -1, gRollEncounter = -1, gRollTurn = -1;
+
+static int DieRollDuration(int die) { return ROLL_BASE_MS + die * ROLL_STAGGER_MS; }
+static int RollElapsed() { return (int)(GetTickCount() - gRollStart); }
+
+// Display-only noise. The real result already sits in gGame.dice[].rolledFace; this
+// only picks which face is shown mid-tumble, so the seeded game RNG stays untouched.
+static int RollNoiseFace(int die, int step) {
+    uint32_t h = (uint32_t)die * 0x9E3779B1u + (uint32_t)step * 0x85EBCA6Bu;
+    h ^= h >> 15; h *= 0x2545F491u; h ^= h >> 13;
+    return (int)(h % 6u);
+}
+
+// 0..1000, eased out so face flips are dense at first and thin out as the die settles.
+static int RollProgress(int die) {
+    int duration = DieRollDuration(die), elapsed = RollElapsed();
+    if (elapsed >= duration) return 1000;
+    int p = elapsed * 1000 / duration;
+    return p * (2000 - p) / 1000;
+}
+
+static int RollSettled(int die) { return !gRollActive || RollElapsed() >= DieRollDuration(die); }
+
+static int RollBlocking() { return gRollActive && !RollSettled(2); }
+
+static int RollFaceIndex(int die) {
+    if (RollSettled(die)) return gGame.dice[die].rolledFace;
+    return RollNoiseFace(die, RollProgress(die) * ROLL_FLIPS / 1000);
+}
+
+// 0..1000, non-zero only during the short pop right after a die lands.
+static int RollFlash(int die) {
+    if (!gRollActive) return 0;
+    int since = RollElapsed() - DieRollDuration(die);
+    if (since < 0 || since >= ROLL_FLASH_MS) return 0;
+    return 1000 - since * 1000 / ROLL_FLASH_MS;
+}
+
+static int RollOffsetY(int die) {
+    if (!gRollActive) return 0;
+    if (RollSettled(die)) return -(RollFlash(die) * 5 / 1000);
+    int amplitude = 9 * (1000 - RollElapsed() * 1000 / DieRollDuration(die)) / 1000;
+    return ((RollProgress(die) * ROLL_FLIPS / 1000) & 1) ? -amplitude : amplitude;
+}
+
+static void StopRollAnimation() {
+    if (!gRollActive) return;
+    gRollActive = 0; KillTimer(gWindow, 1);
+}
+
+// Dice are rolled inside game.cpp, so detect a fresh roll by watching the turn identity.
+static void SyncRollAnimation() {
+    if (gGame.phase != PHASE_COMBAT) { StopRollAnimation(); gRollTurn = -1; return; }
+    if (gGame.floor == gRollFloor && gGame.encounter == gRollEncounter && gGame.turn == gRollTurn) return;
+    gRollFloor = gGame.floor; gRollEncounter = gGame.encounter; gRollTurn = gGame.turn;
+    gRollStart = GetTickCount(); gRollActive = 1; gRollLanded = 0; SetTimer(gWindow, 1, 16, 0);
+}
+
+static void TickRollAnimation() {
+    int elapsed = RollElapsed();
+    for (int d = 0; d < 3; ++d) {
+        if (!(gRollLanded & (1 << d)) && elapsed >= DieRollDuration(d)) { gRollLanded |= 1 << d; PlayTone(300 + d * 90, 30); }
+    }
+    if (elapsed >= DieRollDuration(2) + ROLL_FLASH_MS) StopRollAnimation();
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
 static void DrawHeader(HDC dc, int width) {
     Fill(dc, MakeRect(0, 0, width, 68), RGB(10, 16, 22)); Fill(dc, MakeRect(0, 67, width, 68), C_GREEN);
     Text(dc, 24, 14, L"A:\\ROGUE", C_GREEN, gFontLarge);
     if (gGame.phase != PHASE_TITLE) {
         wchar_t b[128]; wsprintfW(b, L"FLOOR %d/3  ·  NODE %d/3  ·  TURN %d", gGame.floor + 1, gGame.encounter + 1, gGame.turn);
-        Text(dc, 250, 14, b, C_TEXT, gFontMedium); wsprintfW(b, L"HP %d/%d", gGame.playerHp, gGame.playerMaxHp);
-        Text(dc, width - 360, 14, b, gGame.playerHp <= 10 ? C_RED : C_TEXT, gFontMedium);
+        Text(dc, 230, 14, b, C_TEXT, gFontMedium); wsprintfW(b, L"HP %d/%d", gGame.playerHp, gGame.playerMaxHp);
+        Text(dc, width - 440, 14, b, gGame.playerHp <= 10 ? C_RED : C_TEXT, gFontMedium);
         wsprintfW(b, L"DECK %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
-        Text(dc, width - 210, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+        Text(dc, width - 285, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
     }
+    RECT guide = GuideButtonRect(width); int hover = Inside(guide, gMouse.x, gMouse.y);
+    Panel(dc, guide, gGuideOpen ? RGB(32, 82, 67) : hover ? RGB(27, 48, 52) : C_PANEL_2, gGuideOpen || hover ? C_GREEN : C_LINE);
+    TextRect(dc, guide, L"GUIDE [F1]", gGuideOpen ? C_GREEN : C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static RECT StartButtonRect(int width, int height) { return MakeRect(width / 2 - 150, height / 2 + 92, width / 2 + 150, height / 2 + 154); }
@@ -165,15 +251,27 @@ static void DrawSlot(HDC dc, int slot) {
 }
 
 static void DrawDie(HDC dc, int index) {
-    RECT r = DieRect(index); const DieState* die = &gGame.dice[index]; const Face* face = RolledFace(&gGame, index);
+    RECT r = DieRect(index); const DieState* die = &gGame.dice[index];
+    const Face* face = &gGame.dice[index].faces[RollFaceIndex(index)];
+    int rolling = !RollSettled(index), flash = RollFlash(index), offset = RollOffsetY(index);
     int selected = gGame.selectedDie == index, hover = Inside(r, gMouse.x, gMouse.y);
     Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
+    if (flash > 0) Outline(dc, r, FaceColor(face), 2);
     wchar_t b[64]; wsprintfW(b, L"DIE %d", index + 1); Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
     wchar_t value[24]; FormatFace(face, value);
-    TextRect(dc, MakeRect(r.left + 10, r.top + 28, r.right - 10, r.top + 76), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (die->unstable) Text(dc, r.left + 9, r.bottom - 31, L"READ ERROR", C_RED, gFontSmall);
-    else if (die->disabled) Text(dc, r.left + 9, r.bottom - 31, L"FRAGMENTED", C_RED, gFontSmall);
-    else { wsprintfW(b, L"%s · %dB", FACE_INFO[face->kind].name, FaceCost(face)); Text(dc, r.left + 9, r.bottom - 31, b, C_DIM, gFontSmall); }
+    TextRect(dc, MakeRect(r.left + 10, r.top + 27 + offset, r.right - 10, r.top + 70 + offset), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT statusRect = MakeRect(r.left + 7, r.top + 74, r.right - 7, r.bottom - 5);
+    if (rolling) { TextRect(dc, statusRect, L"ROLLING", C_BLUE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE); return; }
+    wchar_t statuses[64] = L""; int statusCount = 0;
+    if (face && face->damaged) { AppendStatus(statuses, L"BAD"); ++statusCount; }
+    if (die->unstable) { AppendStatus(statuses, L"READ ERROR"); ++statusCount; }
+    if (die->disabled) { AppendStatus(statuses, L"FRAGMENTED"); ++statusCount; }
+    if (statusCount == 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    else if (statusCount > 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_WORDBREAK);
+    else {
+        wsprintfW(b, L"%s · %dB", FACE_INFO[face->kind].name, FaceCost(face));
+        TextRect(dc, statusRect, b, C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 static void DrawSidebar(HDC dc, int width, int height) {
@@ -249,6 +347,36 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
 }
 
+static void DrawGuide(HDC dc, int width, int height) {
+    RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
+    RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
+    Text(dc, panel.left + 28, panel.top + 18, L"SYSTEM GUIDE", C_GREEN, gFontLarge);
+    Text(dc, panel.left + 255, panel.top + 28, L"전투 중에도 F1로 열고 닫을 수 있습니다.", C_DIM, gFontSmall);
+    RECT close = GuideCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
+    TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
+    Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 126),
+        L"1. 주사위를 클릭하거나 1·2·3으로 선택\n2. 서로 다른 슬롯을 클릭해 배치\n3. 적을 클릭해 공격 대상 선택\n4. SPACE로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top + 140, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 172, middle - 28, top + 286),
+        L"AMP  공격·방어 출력을 먼저 강화\nATK  선택한 적에게 피해\nDEF  이번 턴 적 공격을 흡수\nCHAIN  직전 공격 또는 방어를 반복", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 24),
+        L"BURN: 적 행동 직전에 3 피해\nREAD ERROR: SPACE 순간 해당 주사위 재굴림\nFRAGMENTED: 중복 결과, 이번 턴 출력 0\n복합 상태는 주사위에 모두 함께 표시\n오염(관통): 표시 수치만큼 HP 직접 피해. BLOCK을 소모하거나 적용받지 않음", C_TEXT, gFontSmall, DT_WORDBREAK);
+
+    Text(dc, middle, top, L"디스크 손상", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
+        L"배드 섹터  층 이동 시 무작위 면 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 HP +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, middle, top + 204, L"덱·보상·용량", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
+        L"18개 면의 비용 합이 DECK 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 EMPTY(0B)가 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
+        L"클릭 / 1·2·3  선택\nSPACE  턴 실행\nESC  배치 해제·보상 건너뛰기·가이드 닫기\nENTER  용량 정리 확정\nF1  가이드 열기·닫기", C_TEXT, gFontSmall, DT_WORDBREAK);
+}
+
 static void PaintGame(HWND window) {
     PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client);
     int clientWidth = client.right, clientHeight = client.bottom;
@@ -261,6 +389,7 @@ static void PaintGame(HWND window) {
     if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
+    if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
@@ -309,6 +438,8 @@ static void ClickPrune(int x, int y) {
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
 // -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
 static int HoverId(int x, int y) {
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
+    if (gGuideOpen) return Inside(GuideCloseRect(BASE_WIDTH), x, y) ? 801 : -1;
     if (gGame.phase == PHASE_TITLE) {
         if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
         return -1;
@@ -335,13 +466,23 @@ static int HoverId(int x, int y) {
 }
 
 static void HandleClick(int x, int y) {
+    if (gGuideOpen) {
+        if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
+        InvalidateRect(gWindow, 0, FALSE); return;
+    }
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
+    SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void HandleKey(WPARAM key) {
+    if (key == VK_F1) { gGuideOpen = !gGuideOpen; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gGuideOpen) { if (key == VK_ESCAPE) gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) {
         if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlayTone(480 + gGame.selectedDie * 60, 35); }
@@ -354,6 +495,7 @@ static void HandleKey(WPARAM key) {
         if (key >= '1' && key <= '3') SelectReward(&gGame, (int)(key - '1')); else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (key == 'R' || key == VK_RETURN) BeginNewRun();
+    SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
@@ -373,9 +515,11 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     }
     case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
+    case WM_TIMER: if (wParam == 1u) TickRollAnimation(); return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
+        KillTimer(window, 1);
         if (gFontSmall) DeleteObject(gFontSmall); if (gFontMedium) DeleteObject(gFontMedium); if (gFontLarge) DeleteObject(gFontLarge); if (gFontHuge) DeleteObject(gFontHuge);
         PlaySoundW(0, 0, 0); PostQuitMessage(0); return 0;
     }
@@ -393,4 +537,3 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     MSG message; while (GetMessageW(&message, 0, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
     return (int)message.wParam;
 }
-

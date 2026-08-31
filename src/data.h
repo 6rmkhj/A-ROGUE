@@ -122,7 +122,6 @@ enum EnemyIntent {
     INTENT_COUNT
 };
 
-static const wchar_t* const INTENT_NAMES[INTENT_COUNT] = {L"공격", L"강공", L"방어", L"복구", L"오염"};
+static const wchar_t* const INTENT_NAMES[INTENT_COUNT] = {L"공격", L"강공", L"방어", L"복구", L"오염(관통)"};
 static const int FLOOR_CAPACITY[3] = {240, 180, 130};
 static const wchar_t* const FLOOR_NAMES[3] = {L"DISK", L"BOOT", L"FORMAT"};
-
