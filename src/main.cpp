@@ -7,6 +7,9 @@ static GameState gGame;
 static HWND gWindow;
 static HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
 static POINT gMouse;
+static int gHoverId = -1;
+
+static const int BASE_WIDTH = 1120, BASE_HEIGHT = 760;
 
 static const COLORREF C_BG = RGB(8, 12, 17), C_PANEL = RGB(16, 23, 31), C_PANEL_2 = RGB(23, 33, 43);
 static const COLORREF C_LINE = RGB(50, 71, 87), C_TEXT = RGB(218, 232, 238), C_DIM = RGB(120, 145, 157);
@@ -14,6 +17,28 @@ static const COLORREF C_GREEN = RGB(82, 231, 174), C_RED = RGB(255, 92, 82), C_Y
 
 static RECT MakeRect(int l, int t, int r, int b) { RECT value = {l, t, r, b}; return value; }
 static int Inside(const RECT& rect, int x, int y) { POINT p = {x, y}; return PtInRect(&rect, p); }
+
+// 실제 창 크기(clientW x clientH) 안에 BASE_WIDTH x BASE_HEIGHT 디자인 캔버스를
+// 비율을 유지한 채로 최대한 맞춰 넣었을 때의 배율과 여백(레터박스)을 계산한다.
+static void ComputeCanvasTransform(int clientW, int clientH, float* scale, int* offsetX, int* offsetY) {
+    float scaleX = clientW > 0 ? (float)clientW / BASE_WIDTH : 1.0f;
+    float scaleY = clientH > 0 ? (float)clientH / BASE_HEIGHT : 1.0f;
+    float s = scaleX < scaleY ? scaleX : scaleY;
+    if (s < 0.05f) s = 0.05f;
+    *scale = s;
+    *offsetX = (int)((clientW - BASE_WIDTH * s) / 2.0f);
+    *offsetY = (int)((clientH - BASE_HEIGHT * s) / 2.0f);
+}
+
+// 실제 창(스크린) 좌표를 디자인 캔버스 좌표로 역변환한다. 모든 Rect()/Inside() 판정은
+// 여전히 BASE_WIDTH x BASE_HEIGHT 기준으로 짜여 있으므로, 입력 좌표만 여기서 맞춰준다.
+static POINT ScreenToCanvas(HWND window, int x, int y) {
+    RECT client; GetClientRect(window, &client);
+    float scale; int offsetX, offsetY;
+    ComputeCanvasTransform(client.right, client.bottom, &scale, &offsetX, &offsetY);
+    POINT p; p.x = (int)((x - offsetX) / scale); p.y = (int)((y - offsetY) / scale);
+    return p;
+}
 
 static void Fill(HDC dc, const RECT& rect, COLORREF color) {
     HBRUSH brush = CreateSolidBrush(color); FillRect(dc, &rect, brush); DeleteObject(brush);
@@ -225,13 +250,33 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
 }
 
 static void PaintGame(HWND window) {
-    PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client); int width = client.right, height = client.bottom;
-    HDC memory = CreateCompatibleDC(dc); HBITMAP bitmap = CreateCompatibleBitmap(dc, width, height); HBITMAP old = (HBITMAP)SelectObject(memory, bitmap);
-    Fill(memory, client, C_BG); DrawHeader(memory, width);
-    if (gGame.phase == PHASE_TITLE) DrawTitle(memory, width, height); else if (gGame.phase == PHASE_COMBAT) DrawCombat(memory, width, height);
-    else if (gGame.phase == PHASE_REWARD) DrawReward(memory, width, height); else if (gGame.phase == PHASE_PRUNE) DrawPrune(memory, width, height);
-    else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(memory, width, height, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(memory, width, height, 1);
-    BitBlt(dc, 0, 0, width, height, memory, 0, 0, SRCCOPY); SelectObject(memory, old); DeleteObject(bitmap); DeleteDC(memory); EndPaint(window, &paint);
+    PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client);
+    int clientWidth = client.right, clientHeight = client.bottom;
+    if (clientWidth <= 0 || clientHeight <= 0) { EndPaint(window, &paint); return; }
+
+    // 1단계: 항상 고정된 BASE_WIDTH x BASE_HEIGHT 캔버스에 그린다 - 기존 좌표 계산은 전부 그대로 둔다.
+    HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, BASE_WIDTH, BASE_HEIGHT); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
+    RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+    Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
+    if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
+
+    // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
+    // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
+    HDC composite = CreateCompatibleDC(dc); HBITMAP compositeBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight); HBITMAP oldComposite = (HBITMAP)SelectObject(composite, compositeBitmap);
+    float scale; int offsetX, offsetY; ComputeCanvasTransform(clientWidth, clientHeight, &scale, &offsetX, &offsetY);
+    int scaledWidth = (int)(BASE_WIDTH * scale), scaledHeight = (int)(BASE_HEIGHT * scale);
+    Fill(composite, client, C_BG);
+    SetStretchBltMode(composite, HALFTONE); SetBrushOrgEx(composite, 0, 0, 0);
+    StretchBlt(composite, offsetX, offsetY, scaledWidth, scaledHeight, canvas, 0, 0, BASE_WIDTH, BASE_HEIGHT, SRCCOPY);
+
+    // 3단계: 완성된 프레임을 화면에 단 한 번에 복사한다.
+    BitBlt(dc, 0, 0, clientWidth, clientHeight, composite, 0, 0, SRCCOPY);
+
+    SelectObject(composite, oldComposite); DeleteObject(compositeBitmap); DeleteDC(composite);
+    SelectObject(canvas, oldCanvas); DeleteObject(canvasBitmap); DeleteDC(canvas);
+    EndPaint(window, &paint);
 }
 
 static void BeginNewRun() { NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlayTone(520, 90); InvalidateRect(gWindow, 0, FALSE); }
@@ -251,21 +296,46 @@ static void ClickCombat(int x, int y) {
 }
 
 static void ClickReward(int x, int y) {
-    RECT client; GetClientRect(gWindow, &client);
-    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, client.right), x, y)) { SelectReward(&gGame, i); PlayTone(600 + i * 80, 50); return; }
+    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlayTone(600 + i * 80, 50); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlayTone(760, 85); return; }
-    if (Inside(ContinueRect(client.right, client.bottom), x, y)) { SkipReward(&gGame); PlayTone(350, 50); }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlayTone(350, 50); }
 }
 
 static void ClickPrune(int x, int y) {
-    RECT client; GetClientRect(gWindow, &client);
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { PruneFace(&gGame, d, f); PlayTone(180, 65); return; }
-    if (Inside(ContinueRect(client.right, client.bottom), x, y)) { ConfirmPrune(&gGame); PlayTone(560, 60); }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlayTone(560, 60); }
+}
+
+// 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
+// -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
+static int HoverId(int x, int y) {
+    if (gGame.phase == PHASE_TITLE) {
+        if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
+        return -1;
+    }
+    if (gGame.phase == PHASE_COMBAT) {
+        for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) return 100 + i;
+        for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) return 200 + i;
+        for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) return 300 + i;
+        if (Inside(EndTurnRect(), x, y)) return 400;
+        return -1;
+    }
+    if (gGame.phase == PHASE_REWARD) {
+        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) return 500 + i;
+        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
+        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
+        return -1;
+    }
+    if (gGame.phase == PHASE_PRUNE) {
+        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
+        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
+        return -1;
+    }
+    return -1;
 }
 
 static void HandleClick(int x, int y) {
-    RECT client; GetClientRect(gWindow, &client);
-    if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(client.right, client.bottom), x, y)) BeginNewRun(); }
+    if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
     InvalidateRect(gWindow, 0, FALSE);
@@ -295,8 +365,13 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         gFontLarge = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
         gFontHuge = CreateFontW(62, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas"); return 0;
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 1136; info->ptMinTrackSize.y = 799; return 0; }
-    case WM_MOUSEMOVE: gMouse.x = GET_X_LPARAM(lParam); gMouse.y = GET_Y_LPARAM(lParam); InvalidateRect(window, 0, FALSE); return 0;
-    case WM_LBUTTONDOWN: HandleClick(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
+    case WM_MOUSEMOVE: {
+        gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        int hover = HoverId(gMouse.x, gMouse.y);
+        if (hover != gHoverId) { gHoverId = hover; InvalidateRect(window, 0, FALSE); }
+        return 0;
+    }
+    case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
