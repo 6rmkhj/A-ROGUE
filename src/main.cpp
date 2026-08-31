@@ -11,6 +11,7 @@ static POINT gMouse;
 static int gHoverId = -1;
 static int gGuideOpen;
 static int gSettingsOpen;
+static int gDeckOpen;
 static int gFullscreen;
 static int gWindowedScale = 100;
 static RECT gWindowedRect;
@@ -119,10 +120,12 @@ static void PlayTone(int frequency, int milliseconds) {
     PlaySoundA((LPCSTR)&gWave, 0, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
-static RECT GuideButtonRect(int width) { return MakeRect(width - 148, 6, width - 18, 33); }
+static RECT GuideButtonRect(int width) { return MakeRect(width - 148, 4, width - 18, 23); }
 static RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
-static RECT SettingsButtonRect(int width) { return MakeRect(width - 148, 36, width - 18, 63); }
+static RECT SettingsButtonRect(int width) { return MakeRect(width - 148, 25, width - 18, 44); }
 static RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
+static RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65); }
+static RECT DeckCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 static RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
 static RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 
@@ -324,6 +327,12 @@ static void DrawHeader(HDC dc, int width) {
     RECT settings = SettingsButtonRect(width); int hoverSettings = Inside(settings, gMouse.x, gMouse.y);
     Panel(dc, settings, gSettingsOpen ? RGB(32, 82, 67) : hoverSettings ? RGB(27, 48, 52) : C_PANEL_2, gSettingsOpen || hoverSettings ? C_GREEN : C_LINE);
     TextRect(dc, settings, L"설정 [F2]", gSettingsOpen ? C_GREEN : C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (gGame.phase != PHASE_TITLE) {
+        RECT deck = DeckButtonRect(width); int hoverDeck = Inside(deck, gMouse.x, gMouse.y);
+        Panel(dc, deck, gDeckOpen ? RGB(32, 82, 67) : hoverDeck ? RGB(27, 48, 52) : C_PANEL_2, gDeckOpen || hoverDeck ? C_GREEN : C_LINE);
+        TextRect(dc, deck, L"덱 [F3]", gDeckOpen ? C_GREEN : C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 static RECT StartButtonRect(int width, int height) { return MakeRect(width / 2 - 150, height / 2 + 92, width / 2 + 150, height / 2 + 154); }
@@ -430,7 +439,7 @@ static int EnemyBob(int index) {
 
 static int gIdleActive;
 static void SyncIdleAnimation() {
-    int wanted = gGame.phase == PHASE_COMBAT && !gGuideOpen;
+    int wanted = gGame.phase == PHASE_COMBAT && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
@@ -702,6 +711,21 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
 }
 
+static void DrawDeck(HDC dc, int width, int height) {
+    RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
+    RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
+    Text(dc, panel.left + 28, panel.top + 18, L"CURRENT DISK FACES", C_GREEN, gFontLarge);
+    wchar_t b[64]; wsprintfW(b, L"DECK %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
+    Text(dc, panel.left + 320, panel.top + 28, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+    RECT close = DeckCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
+    TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    DrawFaceGrid(dc, 0);
+
+    TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20),
+        L"현재 보유한 18개 면입니다 (조회 전용). ESC로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+}
+
 static void DrawGuide(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
@@ -729,7 +753,7 @@ static void DrawGuide(HDC dc, int width, int height) {
         L"18개 면의 비용 합이 덱 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 빈 면(0B)이 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
-        L"클릭 / 1·2·3  선택\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"클릭 / 1·2·3  선택\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기\nF3  보유 면 조회", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 static void PaintGame(HWND window) {
@@ -748,7 +772,9 @@ static void PaintGame(HWND window) {
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gCombatClearActive) DrawCombatClear(canvas, BASE_WIDTH, BASE_HEIGHT);
-    if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gDeckOpen) DrawDeck(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
@@ -811,6 +837,8 @@ static void ClickPrune(int x, int y) {
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
 // -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
 static int HoverId(int x, int y) {
+    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) return 1000;
+    if (gDeckOpen) return Inside(DeckCloseRect(BASE_WIDTH), x, y) ? 1001 : -1;
     if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) return 900;
     if (gSettingsOpen) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
@@ -848,6 +876,11 @@ static int HoverId(int x, int y) {
 static void HandleClick(int x, int y) {
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
+    if (gDeckOpen) {
+        if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
+        InvalidateRect(gWindow, 0, FALSE); return;
+    }
+    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -871,6 +904,8 @@ static void HandleClick(int x, int y) {
 static void HandleKey(WPARAM key) {
     if (gTurnTraceActive) return;
     if (gCombatClearActive) { FinishCombatClear(); return; }
+    if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) { if (key == VK_ESCAPE) gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
