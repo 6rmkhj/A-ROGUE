@@ -35,8 +35,9 @@ void FormatFace(const Face* face, wchar_t* out);
 COLORREF FaceColor(const Face* face);
 void AppendStatus(wchar_t* output, const wchar_t* status);
 
-void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob);
-void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob);
+// shiftX/bob은 상자는 그대로 두고 도트 그림만 밀어낸다 (달려드는 타격 연출).
+void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX);
+void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX);
 
 // 섹터를 판독하는 듯한 노이즈 연출. 주사위 판독과 볼륨 진입 화면이 함께 쓴다.
 uint32_t Hash3(int a, int b, int c);
@@ -44,3 +45,15 @@ void DrawSectorStatic(HDC dc, const RECT& area, int die, int step, int level);
 void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level);
 void DrawScanlines(HDC dc, const RECT& area);
 void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF color, int die, int step, int level);
+
+// 화면 전체를 삼키는 노이즈. level은 0(깨끗)~1000(완전 백색소음)이고
+// 그 값이 그대로 화면을 덮는 비율이 된다 (1000이면 빈틈이 없다).
+void DrawScreenStatic(HDC dc, const RECT& area, int step, int level);
+// 같은 노이즈를 가장자리 띠(thickness px) 안에만 그린다. 바깥 테두리가 가장
+// 짙고 안쪽으로 갈수록 옅어져, 화면 중앙은 건드리지 않는다.
+void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness);
+// 잠식. 가장자리부터 노이즈가 화면을 갉아먹으며 안으로 좁혀 들어온다.
+// eaten 0(멀쩡함) ~ 1000(남은 데가 없음). 경계는 매 프레임 흔들려 갉히는 것처럼 보인다.
+void DrawCreepStatic(HDC dc, const RECT& area, int step, int eaten);
+// 가장자리에서 안쪽으로 옅어지는 경고 테두리. 피격·위독 상태를 알린다.
+void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness);

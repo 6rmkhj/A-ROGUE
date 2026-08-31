@@ -33,8 +33,196 @@ int gCombatClearActive;
 static DWORD gCombatClearStart;
 int gClearedFloor, gClearedEncounter;
 int gTurnTraceActive, gTurnTracePendingClear;
+static int gTurnTracePendingDeath;
 DWORD gTurnTraceStart;
 static int gTraceFloor, gTraceEncounter;
+
+// ---- 피격·위독·정지 연출 ---------------------------------------------------
+// 전투는 game.cpp 안에서 한 번에 끝난다. 그래서 "누가 언제 때렸는지"는 규칙을
+// 건드리지 않고 game.cpp가 남긴 기록(lastTurnEnemyStruck)을 계산 재생 진행도에
+// 맞춰 되짚는 방식으로 보여준다. 여기 있는 값은 전부 경과 시간의 함수라
+// 마우스가 움직여 다시 그려져도 연출이 어긋나지 않는다.
+#define TRACE_DEATH_HOLD_MS 900   // 마지막 줄을 읽을 틈을 준 뒤 화면이 무너진다
+
+static DWORD gEnemyStrikeAt[3];
+static int gEnemyStrikeDamage[3];
+static int gStrikeFired;            // 이미 달려든 적 비트마스크
+static DWORD gPlayerHitAt;
+static int gPlayerHitDamage, gPlayerHitBlockedAll;
+static DWORD gLastGaspAt;           // 체력이 1로 떨어진 시각 (0 = 아님)
+
+int gDeathActive;
+DWORD gDeathStart;
+
+int TurnTraceShown() {
+    int count = gGame.turnTraceCount;
+    if (!gTurnTraceActive) return count;
+    int shown = (int)(GetTickCount() - gTurnTraceStart) / TURN_TRACE_STEP_MS + 1;
+    return shown > count ? count : shown;
+}
+
+static void BeginPlayerHit(int damage) {
+    gPlayerHitAt = GetTickCount();
+    gPlayerHitDamage = damage;
+    gPlayerHitBlockedAll = damage <= 0;
+    // 방어도가 전부 받아낸 타격은 같은 소리를 높여 가볍게 튕겨낸 느낌을 준다.
+    if (damage > 0) PlaySfx(SFX_PLAYER_HIT); else PlaySfxPitched(SFX_PLAYER_HIT, 5);
+}
+
+// 계산 재생이 그 적의 [적 행동] 줄에 닿는 순간 달려들게 한다. 12줄을 넘겨
+// 기록이 잘린 타격은 재생이 끝나는 시점에 몰아서 발동한다.
+void SyncEnemyStrikes() {
+    int shown = TurnTraceShown();
+    for (int i = 0; i < 3; ++i) {
+        if (gStrikeFired & (1 << i)) continue;
+        if (!gGame.lastTurnEnemyStruck[i]) continue;
+        int line = gGame.lastTurnEnemyStrikeTrace[i];
+        int ready = (line >= 0 && line < gGame.turnTraceCount) ? shown > line : shown >= gGame.turnTraceCount;
+        if (!ready) continue;
+        gStrikeFired |= 1 << i;
+        gEnemyStrikeAt[i] = GetTickCount();
+        gEnemyStrikeDamage[i] = gGame.lastTurnEnemyStrikeDamage[i];
+        BeginPlayerHit(gGame.lastTurnEnemyStrikeDamage[i]);
+    }
+}
+
+// 0 = 제자리, 1000 = 가장 깊이 파고든 순간. 빠르게 달려들고 천천히 돌아온다.
+static int StrikeAdvance(int index) {
+    if (!gEnemyStrikeAt[index]) return 0;
+    int since = (int)(GetTickCount() - gEnemyStrikeAt[index]);
+    if (since < 0 || since >= STRIKE_MS) return 0;
+    int lunge = STRIKE_MS * 28 / 100;
+    if (since < lunge) return since * 1000 / lunge;
+    return 1000 - (since - lunge) * 1000 / (STRIKE_MS - lunge);
+}
+
+int EnemyStrikeDrop(int index) { return StrikeAdvance(index) * 26 / 1000; }
+
+int EnemyStrikeShift(int index) {
+    int advance = StrikeAdvance(index);
+    if (advance <= 0) return 0;
+    // 화면 안쪽으로 몸을 던지면서, 부딪히는 동안 잘게 떨린다.
+    int toward = index == 0 ? 1 : index == 2 ? -1 : 0;
+    int jitter = (int)(Hash3((int)(GetTickCount() / 30), index, 91) % 5u) - 2;
+    return (advance * 9 * toward + advance * jitter) / 1000;
+}
+
+int EnemyStrikePop(int index) {
+    if (!gEnemyStrikeAt[index]) return 0;
+    int since = (int)(GetTickCount() - gEnemyStrikeAt[index]);
+    if (since < 0 || since >= STRIKE_POP_MS) return 0;
+    return 1000 - since * 1000 / STRIKE_POP_MS;
+}
+
+int EnemyStrikeDamage(int index) { return gEnemyStrikeDamage[index]; }
+
+int PlayerHitFlash() {
+    if (!gPlayerHitAt) return 0;
+    int since = (int)(GetTickCount() - gPlayerHitAt);
+    if (since < 0 || since >= PLAYER_HIT_MS) return 0;
+    return 1000 - since * 1000 / PLAYER_HIT_MS;
+}
+
+int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
+
+static int ShakeAmplitude() {
+    if (!gPlayerHitAt) return 0;
+    int since = (int)(GetTickCount() - gPlayerHitAt);
+    if (since < 0 || since >= SHAKE_MS) return 0;
+    int damage = gPlayerHitDamage > 14 ? 14 : gPlayerHitDamage;
+    int peak = 3 + damage / 2;                       // 3 ~ 10픽셀
+    return peak * (SHAKE_MS - since) / SHAKE_MS;
+}
+
+int ScreenShakeX() {
+    int amp = ShakeAmplitude();
+    if (amp <= 0) return 0;
+    return (int)(Hash3((int)(GetTickCount() / 24), 3, 17) % (uint32_t)(amp * 2 + 1)) - amp;
+}
+
+int ScreenShakeY() {
+    int amp = ShakeAmplitude() * 2 / 3;
+    if (amp <= 0) return 0;
+    return (int)(Hash3((int)(GetTickCount() / 24), 5, 29) % (uint32_t)(amp * 2 + 1)) - amp;
+}
+
+// 정지 연출은 주사위 판독과 같은 빠른 주기로 끓고, 오래 지속되는 위독 노이즈는
+// 화면 전체가 빠르게 깜빡이지 않도록 느리게 섞인다.
+int NoiseFrameStep() { return (int)(GetTickCount() / (gDeathActive ? NOISE_CHURN_MS : 90)); }
+
+// 위독 연출은 화면 가장자리에서 시작한다. 체력이 CRITICAL_HP 이하로 떨어지면
+// 테두리 띠에서만 신호가 무너지고, 체력이 줄수록 띠가 두꺼워지고 짙어진다.
+// 판 한가운데는 건드리지 않으므로 다음 수를 두는 데 방해가 되지 않는다.
+static int CriticalSeverity() {
+    if (gGuideOpen || gSettingsOpen || gDeckOpen) return 0;
+    if (gGame.phase != PHASE_COMBAT && gGame.phase != PHASE_REWARD && gGame.phase != PHASE_PRUNE) return 0;
+    if (gGame.playerHp <= 0 || gGame.playerHp > CRITICAL_HP) return 0;
+    return CRITICAL_HP + 1 - gGame.playerHp;                  // 1 ~ CRITICAL_HP
+}
+
+static int CriticalPulse() {
+    int pulse = (int)((GetTickCount() / 70) % 20u);
+    return pulse > 10 ? 20 - pulse : pulse;                   // 0 ~ 10
+}
+
+// 마지막 한 칸이 남은 뒤로는 버틴 시간만큼 띠가 더 두꺼워지고 짙어진다.
+// 화면 전체로 번지지는 않는다 - 판을 삼키는 것은 정지 연출의 몫이다.
+static int LastGaspBoost() {
+    if (gGame.playerHp != 1 || !gLastGaspAt) return 0;
+    int held = (int)(GetTickCount() - gLastGaspAt);
+    if (held < 0) held = 0;
+    int boost = held * 1000 / 14000;                          // 14초에 걸쳐 0 → 1000
+    return boost > 1000 ? 1000 : boost;
+}
+
+int AmbientNoiseLevel() {
+    int severity = CriticalSeverity();
+    if (severity <= 0) return 0;
+    int level = 90 + severity * 34 + CriticalPulse() * severity * 2 + LastGaspBoost() * 130 / 1000;
+    return level > 680 ? 680 : level;
+}
+
+int AmbientNoiseBand() {
+    int severity = CriticalSeverity();
+    if (severity <= 0) return 0;
+    return 34 + severity * 12 + LastGaspBoost() * 40 / 1000;   // 46 ~ 194픽셀
+}
+
+// 체력 1이 "언제부터"인지가 띠가 자라는 기준이라 시각을 잡아 둔다.
+void SyncLastGasp() {
+    if (gGame.playerHp == 1 && gGame.phase != PHASE_TITLE && gGame.phase != PHASE_GAMEOVER) {
+        if (!gLastGaspAt) gLastGaspAt = GetTickCount();
+    } else gLastGaspAt = 0;
+}
+
+// 체력이 0이 되면 가장자리에 머물던 노이즈가 풀려나 화면을 갉아먹는다.
+// 처음에는 천천히 번지다가 끝에서 단숨에 삼키도록 제곱 곡선을 쓴다.
+int DeathCreepAmount() {
+    if (!gDeathActive) return 0;
+    int elapsed = (int)(GetTickCount() - gDeathStart);
+    if (elapsed <= 0) return 0;
+    if (elapsed >= DEATH_CREEP_MS) return 1000;
+    int progress = elapsed * 1000 / DEATH_CREEP_MS;
+    return progress * progress / 1000;
+}
+
+static void FinishDeath() {
+    if (!gDeathActive) return;
+    gDeathActive = 0;
+    KillTimer(gWindow, 7);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+// 체력이 0이 된 직후. 전장이 그대로 노이즈에 잠기고, 다 덮이면 재시작 화면이 나온다.
+static void BeginDeath() {
+    // 설정 화면을 강제로 닫으므로 "정말 다시 시작?" 확인 상태도 같이 풀어 준다.
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    gDeathStart = GetTickCount();
+    gDeathActive = 1;
+    PlaySfx(SFX_CRASH);
+    PlaySfx(SFX_GAMEOVER);
+    SetTimer(gWindow, 7, 16, 0);
+}
 
 static void FinishCombatClear() {
     if (!gCombatClearActive) return;
@@ -60,7 +248,9 @@ static void FinishTurnTrace() {
     if (!gTurnTraceActive) return;
     gTurnTraceActive = 0;
     KillTimer(gWindow, 4);
-    if (gTurnTracePendingClear) BeginCombatClear(gTraceFloor, gTraceEncounter);
+    SyncEnemyStrikes();   // 재생을 건너뛰었어도 맞았다는 사실은 화면에 남는다
+    if (gTurnTracePendingDeath) { gTurnTracePendingDeath = 0; BeginDeath(); }
+    else if (gTurnTracePendingClear) BeginCombatClear(gTraceFloor, gTraceEncounter);
     InvalidateRect(gWindow, 0, FALSE);
 }
 
@@ -68,6 +258,8 @@ static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
     gTraceFloor = floor;
     gTraceEncounter = encounter;
     gTurnTracePendingClear = pendingClear;
+    gTurnTracePendingDeath = gGame.phase == PHASE_GAMEOVER;
+    gStrikeFired = 0;
     gTurnTraceStart = GetTickCount();
     gTurnTraceActive = 1;
     SetTimer(gWindow, 4, 16, 0);
@@ -186,13 +378,19 @@ int EnemyBob(int index) {
 
 static int gIdleActive;
 void SyncIdleAnimation() {
-    int wanted = (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT) && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
+    int wanted = (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT || AmbientNoiseLevel() > 0)
+        && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
 }
 
-static void BeginNewRun() { NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE); }
+static void BeginNewRun() {
+    FinishDeath();
+    gStrikeFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
+    for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
+    NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE);
+}
 
 static void ExecuteCombatTurn() {
     int floor = gGame.floor, encounter = gGame.encounter;
@@ -202,7 +400,8 @@ static void ExecuteCombatTurn() {
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
     int cleared = gGame.phase == PHASE_REWARD || gGame.phase == PHASE_VICTORY;
     if (resolved) BeginTurnTrace(floor, encounter, cleared);
-    if (gGame.phase == PHASE_GAMEOVER) PlaySfx(SFX_GAMEOVER);
+    // 정지음과 화면 붕괴는 계산 재생이 끝난 뒤 BeginDeath가 맡는다.
+    if (gGame.phase == PHASE_GAMEOVER) { if (!resolved) BeginDeath(); }
     else if (gGame.phase == PHASE_VICTORY) PlaySfx(SFX_VICTORY);
     else if (before != gGame.phase) PlaySfx(SFX_ENEMY_DOWN);
     else PlaySfx(SFX_EXECUTE);
@@ -320,6 +519,7 @@ static int HoverId(int x, int y) {
 }
 
 static void HandleClick(int x, int y) {
+    if (gDeathActive) return;
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gDescentActive) { FinishDescent(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
@@ -360,6 +560,7 @@ static void HandleClick(int x, int y) {
 }
 
 static void HandleKey(WPARAM key) {
+    if (gDeathActive) return;
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
@@ -426,7 +627,10 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 4u) {
-            if ((int)(GetTickCount() - gTurnTraceStart) >= TurnTraceRevealDuration()) KillTimer(window, 4);
+            int traceElapsed = (int)(GetTickCount() - gTurnTraceStart), reveal = TurnTraceRevealDuration();
+            // 죽은 판은 클릭을 기다리지 않는다. 마지막 줄을 읽을 틈만 주고 화면이 무너진다.
+            if (gTurnTracePendingDeath) { if (traceElapsed >= reveal + TRACE_DEATH_HOLD_MS) { FinishTurnTrace(); return 0; } }
+            else if (traceElapsed >= reveal) KillTimer(window, 4);
             InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 6u) {
@@ -436,11 +640,15 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if (descentElapsed >= DESCENT_MS) FinishDescent();
             else InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == 7u) {
+            if ((int)(GetTickCount() - gDeathStart) >= DEATH_STATIC_MS) FinishDeath();
+            else InvalidateRect(window, 0, FALSE);
+        }
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
-        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 6);
+        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 6); KillTimer(window, 7);
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }

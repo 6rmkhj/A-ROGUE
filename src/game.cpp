@@ -1208,6 +1208,10 @@ static void ResolveEnemies(GameState* game) {
                 damage -= absorbed;
             }
             game->playerHp -= damage;
+            // 계산 재생이 이 줄에 닿는 순간 적이 달려들도록, 곧 기록될 줄 번호까지 남긴다.
+            game->lastTurnEnemyStruck[i] = 1;
+            game->lastTurnEnemyStrikeDamage[i] = damage;
+            game->lastTurnEnemyStrikeTrace[i] = game->turnTraceCount;
             if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 방어도를 무시했습니다.");
             if (empowered && enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 강화 오염 %d → 방어도 무시, 내 체력 -%d", info->code, enemy->intentValue, damage);
             else if (empowered) wsprintfW(trace, L"[적 행동] %s 강화 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
@@ -1298,6 +1302,11 @@ void EndTurn(GameState* game) {
         return;
     }
     ClearTurnTrace(game);
+    for (int i = 0; i < 3; ++i) {
+        game->lastTurnEnemyStruck[i] = 0;
+        game->lastTurnEnemyStrikeDamage[i] = 0;
+        game->lastTurnEnemyStrikeTrace[i] = -1;
+    }
     // 읽기 오류의 재굴림은 오프라인 출력 0보다 먼저 처리된다.
     for (int d = 0; d < 3; ++d) {
         if (game->dice[d].unstable) {
