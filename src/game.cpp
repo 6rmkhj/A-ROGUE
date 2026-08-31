@@ -391,8 +391,6 @@ static void GenerateRewards(GameState* game) {
 
 static void CombatWon(GameState* game) {
     ++game->combatsWon;
-    int heal = game->encounter == 2 ? 10 : 5;
-    game->playerHp = ClampInt(game->playerHp + heal, 0, game->playerMaxHp);
     if (game->floor == 2 && game->encounter == 2) {
         game->phase = PHASE_VICTORY;
         PushLog(game, L"FORMAT 중단. 디스크가 복구되었습니다.");
