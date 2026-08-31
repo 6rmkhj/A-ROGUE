@@ -9,8 +9,14 @@ static HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
 static POINT gMouse;
 static int gHoverId = -1;
 static int gGuideOpen;
+static int gSettingsOpen;
+static int gFullscreen;
+static int gWindowedScale = 100;
+static RECT gWindowedRect;
 
 static const int BASE_WIDTH = 1120, BASE_HEIGHT = 760;
+#define SETTINGS_SCALE_COUNT 5
+static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 
 static const COLORREF C_BG = RGB(8, 12, 17), C_PANEL = RGB(16, 23, 31), C_PANEL_2 = RGB(23, 33, 43);
 static const COLORREF C_LINE = RGB(50, 71, 87), C_TEXT = RGB(218, 232, 238), C_DIM = RGB(120, 145, 157);
@@ -111,8 +117,66 @@ static void PlayTone(int frequency, int milliseconds) {
     PlaySoundA((LPCSTR)&gWave, 0, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
-static RECT GuideButtonRect(int width) { return MakeRect(width - 116, 12, width - 18, 54); }
+static RECT GuideButtonRect(int width) { return MakeRect(width - 116, 8, width - 18, 36); }
 static RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
+static RECT SettingsButtonRect(int width) { return MakeRect(width - 116, 40, width - 18, 68); }
+static RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
+static RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
+static RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
+
+// 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
+static void ApplyFullscreen(int enable) {
+    if (enable == gFullscreen) return;
+    if (enable) {
+        GetWindowRect(gWindow, &gWindowedRect);
+        MONITORINFO info; info.cbSize = sizeof(info);
+        GetMonitorInfoW(MonitorFromWindow(gWindow, MONITOR_DEFAULTTOPRIMARY), &info);
+        SetWindowLongPtrW(gWindow, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(gWindow, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
+            info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top, SWP_FRAMECHANGED);
+        gFullscreen = 1;
+    } else {
+        SetWindowLongPtrW(gWindow, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPos(gWindow, HWND_TOP, gWindowedRect.left, gWindowedRect.top,
+            gWindowedRect.right - gWindowedRect.left, gWindowedRect.bottom - gWindowedRect.top, SWP_FRAMECHANGED);
+        gFullscreen = 0;
+    }
+}
+
+// BASE_WIDTH x BASE_HEIGHT 캔버스를 percent%로 표시할 창 크기를 계산해 적용한다 (창 모드에서만 의미가 있다).
+static void ApplyWindowedScale(int percent) {
+    gWindowedScale = percent;
+    if (gFullscreen) ApplyFullscreen(0);
+    RECT desired = {0, 0, BASE_WIDTH * percent / 100, BASE_HEIGHT * percent / 100};
+    AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    int width = desired.right - desired.left, height = desired.bottom - desired.top;
+    int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+    SetWindowPos(gWindow, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED);
+}
+
+static void DrawSettings(HDC dc, int width, int height) {
+    RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
+    RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
+    Text(dc, panel.left + 28, panel.top + 18, L"SETTINGS", C_GREEN, gFontLarge);
+    RECT close = SettingsCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
+    TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    Text(dc, 84, 228, L"화면 배율", C_YELLOW, gFontMedium);
+    for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) {
+        RECT r = ScaleOptionRect(i); int active = !gFullscreen && gWindowedScale == SCALE_OPTIONS[i]; int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2, active ? C_GREEN : hover ? C_BLUE : C_LINE);
+        wchar_t label[16]; wsprintfW(label, L"%d%%", SCALE_OPTIONS[i]);
+        TextRect(dc, r, label, active ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    TextRect(dc, MakeRect(84, 312, panel.right - 30, 336), L"전체화면에서는 적용되지 않습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+
+    Text(dc, 84, 348, L"전체화면", C_YELLOW, gFontMedium);
+    RECT fs = FullscreenToggleRect(); int hoverFs = Inside(fs, gMouse.x, gMouse.y);
+    Panel(dc, fs, gFullscreen ? RGB(28, 70, 57) : hoverFs ? RGB(28, 39, 48) : C_PANEL_2, gFullscreen ? C_GREEN : hoverFs ? C_BLUE : C_LINE);
+    TextRect(dc, fs, gFullscreen ? L"전체화면 끄기" : L"전체화면 켜기", gFullscreen ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20), L"ESC로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+}
 
 #define ROLL_BASE_MS 300
 #define ROLL_STAGGER_MS 80
@@ -201,6 +265,10 @@ static void DrawHeader(HDC dc, int width) {
     RECT guide = GuideButtonRect(width); int hover = Inside(guide, gMouse.x, gMouse.y);
     Panel(dc, guide, gGuideOpen ? RGB(32, 82, 67) : hover ? RGB(27, 48, 52) : C_PANEL_2, gGuideOpen || hover ? C_GREEN : C_LINE);
     TextRect(dc, guide, L"GUIDE [F1]", gGuideOpen ? C_GREEN : C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    RECT settings = SettingsButtonRect(width); int hoverSettings = Inside(settings, gMouse.x, gMouse.y);
+    Panel(dc, settings, gSettingsOpen ? RGB(32, 82, 67) : hoverSettings ? RGB(27, 48, 52) : C_PANEL_2, gSettingsOpen || hoverSettings ? C_GREEN : C_LINE);
+    TextRect(dc, settings, L"SETTINGS [F2]", gSettingsOpen ? C_GREEN : C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static RECT StartButtonRect(int width, int height) { return MakeRect(width / 2 - 150, height / 2 + 92, width / 2 + 150, height / 2 + 154); }
@@ -374,7 +442,7 @@ static void DrawGuide(HDC dc, int width, int height) {
         L"18개 면의 비용 합이 DECK 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 EMPTY(0B)가 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
-        L"클릭 / 1·2·3  선택\nSPACE  턴 실행\nESC  배치 해제·보상 건너뛰기·가이드 닫기\nENTER  용량 정리 확정\nF1  가이드 열기·닫기", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"클릭 / 1·2·3  선택\nSPACE  턴 실행\nESC  배치 해제·보상 건너뛰기·가이드 닫기\nENTER  용량 정리 확정\nF1  가이드 열기·닫기\nF2  설정 열기·닫기", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 static void PaintGame(HWND window) {
@@ -389,7 +457,7 @@ static void PaintGame(HWND window) {
     if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
-    if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
+    if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
@@ -438,6 +506,13 @@ static void ClickPrune(int x, int y) {
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
 // -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
 static int HoverId(int x, int y) {
+    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) return 900;
+    if (gSettingsOpen) {
+        if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
+        for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
+        if (Inside(FullscreenToggleRect(), x, y)) return 920;
+        return -1;
+    }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
     if (gGuideOpen) return Inside(GuideCloseRect(BASE_WIDTH), x, y) ? 801 : -1;
     if (gGame.phase == PHASE_TITLE) {
@@ -466,11 +541,18 @@ static int HoverId(int x, int y) {
 }
 
 static void HandleClick(int x, int y) {
+    if (gSettingsOpen) {
+        if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+        for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
+        if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
+        InvalidateRect(gWindow, 0, FALSE); return;
+    }
+    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
@@ -480,7 +562,9 @@ static void HandleClick(int x, int y) {
 }
 
 static void HandleKey(WPARAM key) {
-    if (key == VK_F1) { gGuideOpen = !gGuideOpen; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gSettingsOpen) { if (key == VK_ESCAPE) gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) { if (key == VK_ESCAPE) gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
@@ -506,7 +590,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         gFontMedium = CreateFontW(21, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
         gFontLarge = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
         gFontHuge = CreateFontW(62, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas"); return 0;
-    case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 1136; info->ptMinTrackSize.y = 799; return 0; }
+    case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         int hover = HoverId(gMouse.x, gMouse.y);
