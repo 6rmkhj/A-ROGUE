@@ -180,77 +180,84 @@ static void DrawSettings(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20), L"ESC로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 }
 
-#define ROLL_BASE_MS 300
-#define ROLL_STAGGER_MS 80
-#define ROLL_FLASH_MS 130
-#define ROLL_FLIPS 16
+// ---- corrupted-sector dice reveal (display only) --------------------------
+// The turn's real result is already fixed in gGame.dice[].rolledFace by the
+// seeded RNG in game.cpp; everything here only decides how it is revealed, so
+// smoke/balance determinism is untouched. Every value below is a pure function
+// of elapsed time -- WM_MOUSEMOVE repaints too, and state advanced per frame
+// would make the effect race whenever the mouse moves.
+#define NOISE_STAGGER_MS 80
+#define NOISE_SCAN_MS 200      // opaque static, the face is not readable yet
+#define NOISE_LOCK_MS 180      // the face tears its way through the static
+#define NOISE_SETTLE_MS 110    // border flash once a cell locks on
+#define NOISE_TOTAL_MS (NOISE_SCAN_MS + NOISE_LOCK_MS)
+#define NOISE_CHURN_MS 45      // how often the static reshuffles
 
-static DWORD gRollStart;
-static int gRollActive, gRollLanded;
+static DWORD gReadStart;
+static int gReadActive, gReadLanded, gRolled;
 static int gRollFloor = -1, gRollEncounter = -1, gRollTurn = -1;
 
-static int DieRollDuration(int die) { return ROLL_BASE_MS + die * ROLL_STAGGER_MS; }
-static int RollElapsed() { return (int)(GetTickCount() - gRollStart); }
+static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
+static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
+static int DieSettled(int die) { return !gReadActive || ReadElapsed() >= DieReadEnd(die); }
+static int RollBlocking() { return gReadActive && !DieSettled(2); }
+static int DieLocalTime(int die) { return ReadElapsed() - die * NOISE_STAGGER_MS; }
+static int NoiseStep(int die) { int t = DieLocalTime(die); return (t < 0 ? 0 : t) / NOISE_CHURN_MS; }
 
-// Display-only noise. The real result already sits in gGame.dice[].rolledFace; this
-// only picks which face is shown mid-tumble, so the seeded game RNG stays untouched.
-static int RollNoiseFace(int die, int step) {
-    uint32_t h = (uint32_t)die * 0x9E3779B1u + (uint32_t)step * 0x85EBCA6Bu;
+static uint32_t Hash3(int a, int b, int c) {
+    uint32_t h = (uint32_t)a * 0x9E3779B1u ^ (uint32_t)b * 0x85EBCA6Bu ^ (uint32_t)c * 0xC2B2AE35u;
     h ^= h >> 15; h *= 0x2545F491u; h ^= h >> 13;
-    return (int)(h % 6u);
+    return h;
 }
 
-// 0..1000, eased out so face flips are dense at first and thin out as the die settles.
-static int RollProgress(int die) {
-    int duration = DieRollDuration(die), elapsed = RollElapsed();
-    if (elapsed >= duration) return 1000;
-    int p = elapsed * 1000 / duration;
-    return p * (2000 - p) / 1000;
+// 1000 = unreadable static, 0 = clean. Cells still queued read as full static,
+// so the whole row goes to snow at once and then locks on one at a time.
+static int DieNoise(int die) {
+    if (!gReadActive) return 0;
+    int t = DieLocalTime(die);
+    if (t < NOISE_SCAN_MS) return 1000;
+    if (t < NOISE_TOTAL_MS) return 1000 - (t - NOISE_SCAN_MS) * 1000 / NOISE_LOCK_MS;
+    return 0;
 }
 
-static int RollSettled(int die) { return !gRollActive || RollElapsed() >= DieRollDuration(die); }
-
-static int RollBlocking() { return gRollActive && !RollSettled(2); }
-
-static int RollFaceIndex(int die) {
-    if (RollSettled(die)) return gGame.dice[die].rolledFace;
-    return RollNoiseFace(die, RollProgress(die) * ROLL_FLIPS / 1000);
+static int DieSettleFlash(int die) {
+    if (!gReadActive) return 0;
+    int since = ReadElapsed() - DieReadEnd(die);
+    if (since < 0 || since >= NOISE_SETTLE_MS) return 0;
+    return 1000 - since * 1000 / NOISE_SETTLE_MS;
 }
 
-// 0..1000, non-zero only during the short pop right after a die lands.
-static int RollFlash(int die) {
-    if (!gRollActive) return 0;
-    int since = RollElapsed() - DieRollDuration(die);
-    if (since < 0 || since >= ROLL_FLASH_MS) return 0;
-    return 1000 - since * 1000 / ROLL_FLASH_MS;
+static void StopRead() {
+    if (!gReadActive) return;
+    gReadActive = 0; gRolled = 1; KillTimer(gWindow, 1);
 }
 
-static int RollOffsetY(int die) {
-    if (!gRollActive) return 0;
-    if (RollSettled(die)) return -(RollFlash(die) * 5 / 1000);
-    int amplitude = 9 * (1000 - RollElapsed() * 1000 / DieRollDuration(die)) / 1000;
-    return ((RollProgress(die) * ROLL_FLIPS / 1000) & 1) ? -amplitude : amplitude;
+static void BeginRead() {
+    if (gGame.phase != PHASE_COMBAT || gRolled || gReadActive) return;
+    gReadStart = GetTickCount(); gReadActive = 1; gReadLanded = 0;
+    PlayTone(120, 90);
+    SetTimer(gWindow, 1, 16, 0);
 }
 
-static void StopRollAnimation() {
-    if (!gRollActive) return;
-    gRollActive = 0; KillTimer(gWindow, 1);
-}
-
-// Dice are rolled inside game.cpp, so detect a fresh roll by watching the turn identity.
+// Dice are rolled inside game.cpp at turn start; watch the turn identity so a
+// new turn drops back to an unread sector and waits for the READ button.
 static void SyncRollAnimation() {
-    if (gGame.phase != PHASE_COMBAT) { StopRollAnimation(); gRollTurn = -1; return; }
+    if (gGame.phase != PHASE_COMBAT) {
+        if (gReadActive) { gReadActive = 0; KillTimer(gWindow, 1); }
+        gRolled = 0; gRollTurn = -1; return;
+    }
     if (gGame.floor == gRollFloor && gGame.encounter == gRollEncounter && gGame.turn == gRollTurn) return;
     gRollFloor = gGame.floor; gRollEncounter = gGame.encounter; gRollTurn = gGame.turn;
-    gRollStart = GetTickCount(); gRollActive = 1; gRollLanded = 0; SetTimer(gWindow, 1, 16, 0);
+    if (gReadActive) { gReadActive = 0; KillTimer(gWindow, 1); }
+    gRolled = 0;
 }
 
 static void TickRollAnimation() {
-    int elapsed = RollElapsed();
+    int elapsed = ReadElapsed();
     for (int d = 0; d < 3; ++d) {
-        if (!(gRollLanded & (1 << d)) && elapsed >= DieRollDuration(d)) { gRollLanded |= 1 << d; PlayTone(300 + d * 90, 30); }
+        if (!(gReadLanded & (1 << d)) && elapsed >= DieReadEnd(d)) { gReadLanded |= 1 << d; PlayTone(440 + d * 110, 28); }
     }
-    if (elapsed >= DieRollDuration(2) + ROLL_FLASH_MS) StopRollAnimation();
+    if (elapsed >= DieReadEnd(2) + NOISE_SETTLE_MS) StopRead();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
@@ -387,7 +394,8 @@ static RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94
 static RECT PortraitRect(const RECT& panel) { return MakeRect(panel.left + 31, panel.top + 8, panel.left + 167, panel.top + 132); }
 static RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 408, left + 154, 532); }
 static RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 574, left + 184, 695); }
-static RECT EndTurnRect() { return MakeRect(712, 616, 884, 679); }
+static RECT EndTurnRect() { return MakeRect(696, 616, 896, 679); }
+static RECT ReadButtonRect() { return MakeRect(696, 544, 896, 600); }
 static int DieForSlotUI(int slot) { for (int d = 0; d < 3; ++d) if (gGame.dice[d].assignedSlot == slot) return d; return -1; }
 
 static void DrawEnemy(HDC dc, int index) {
@@ -418,18 +426,95 @@ static void DrawSlot(HDC dc, int slot) {
     } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.bottom - 10), L"EMPTY", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
 }
 
+static const wchar_t HEX_DIGIT[17] = L"0123456789ABCDEF";
+
+// static blocks. Brushes are made once per call and reused across every block,
+// so a full cell of snow costs three GDI objects, not one per block.
+static void DrawSectorStatic(HDC dc, const RECT& area, int die, int step, int level) {
+    if (level <= 0) return;
+    int w = area.right - area.left, h = area.bottom - area.top;
+    if (w <= 2 || h <= 2) return;
+    HBRUSH shade[3] = {CreateSolidBrush(RGB(30, 40, 48)), CreateSolidBrush(RGB(58, 82, 92)), CreateSolidBrush(RGB(64, 140, 112))};
+    int count = 6 + 30 * level / 1000;
+    for (int i = 0; i < count; ++i) {
+        uint32_t hx = Hash3(die, step, i);
+        int bx = area.left + (int)(hx % (uint32_t)w);
+        int by = area.top + (int)((hx >> 9) % (uint32_t)h);
+        int bw = 5 + (int)((hx >> 17) % 30u), bh = 2 + (int)((hx >> 23) % 5u);
+        if (bx + bw > area.right) bw = area.right - bx;
+        if (by + bh > area.bottom) bh = area.bottom - by;
+        if (bw <= 0 || bh <= 0) continue;
+        RECT nr = MakeRect(bx, by, bx + bw, by + bh);
+        FillRect(dc, &nr, shade[(hx >> 29) % 3u]);
+    }
+    for (int i = 0; i < 3; ++i) DeleteObject(shade[i]);
+}
+
+// two rows of hex garbage, like a dump of the sector being read
+static void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level) {
+    if (level < 260) return;
+    wchar_t line[15];
+    for (int row = 0; row < 2; ++row) {
+        for (int i = 0; i < 14; ++i) line[i] = (i % 3 == 2) ? L' ' : HEX_DIGIT[Hash3(die * 7 + row, step, i) & 15u];
+        line[14] = 0;
+        RECT rowRect = MakeRect(area.left, area.top + 2 + row * 19, area.right, area.top + 20 + row * 19);
+        TextRect(dc, rowRect, line, RGB(58, 116, 96), gFontSmall, DT_CENTER | DT_SINGLELINE);
+    }
+}
+
+static void DrawScanlines(HDC dc, const RECT& area) {
+    HBRUSH line = CreateSolidBrush(RGB(10, 15, 20));
+    for (int y = area.top; y < area.bottom; y += 3) { RECT s = MakeRect(area.left, y, area.right, y + 1); FillRect(dc, &s, line); }
+    DeleteObject(line);
+}
+
+// the face value, torn into horizontal bands that slide back into alignment
+static void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF color, int die, int step, int level) {
+    const int bands = 5;
+    int h = area.bottom - area.top, amp = 26 * level / 1000;
+    for (int i = 0; i < bands; ++i) {
+        int top = area.top + h * i / bands, bottom = area.top + h * (i + 1) / bands;
+        int dx = amp > 0 ? (int)(Hash3(die, step, 64 + i) % (uint32_t)(amp * 2 + 1)) - amp : 0;
+        int saved = SaveDC(dc);
+        IntersectClipRect(dc, area.left - 60, top, area.right + 60, bottom);
+        TextRect(dc, MakeRect(area.left + dx, area.top, area.right + dx, area.bottom), value, color, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RestoreDC(dc, saved);
+    }
+}
+
 static void DrawDie(HDC dc, int index) {
     RECT r = DieRect(index); const DieState* die = &gGame.dice[index];
-    const Face* face = &gGame.dice[index].faces[RollFaceIndex(index)];
-    int rolling = !RollSettled(index), flash = RollFlash(index), offset = RollOffsetY(index);
+    const Face* face = &gGame.dice[index].faces[gGame.dice[index].rolledFace];
     int selected = gGame.selectedDie == index, hover = Inside(r, gMouse.x, gMouse.y);
-    Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
-    if (flash > 0) Outline(dc, r, FaceColor(face), 2);
-    wchar_t b[64]; wsprintfW(b, L"DIE %d", index + 1); Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
-    wchar_t value[24]; FormatFace(face, value);
-    TextRect(dc, MakeRect(r.left + 10, r.top + 27 + offset, r.right - 10, r.top + 70 + offset), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    int noise = DieNoise(index), flash = DieSettleFlash(index), step = NoiseStep(index);
+    RECT cell = MakeRect(r.left + 6, r.top + 25, r.right - 6, r.top + 72);
     RECT statusRect = MakeRect(r.left + 7, r.top + 74, r.right - 7, r.bottom - 5);
-    if (rolling) { TextRect(dc, statusRect, L"ROLLING", C_BLUE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE); return; }
+
+    COLORREF border = selected ? C_GREEN : hover ? C_BLUE : C_LINE;
+    if (noise > 0) border = (step & 1) ? C_RED : RGB(96, 58, 58);
+    else if (flash > 0) border = C_GREEN;
+    Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, border);
+    wchar_t b[64]; wsprintfW(b, L"DIE %d", index + 1);
+    Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
+
+    if (!gRolled && !gReadActive) {   // sector never read this turn: faint drift
+        DrawSectorStatic(dc, cell, index, (int)(GetTickCount() / 260u), 70);
+        DrawScanlines(dc, cell);
+        TextRect(dc, statusRect, L"NO SIGNAL", C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    if (!DieSettled(index)) {         // being read: snow, hex dump, torn face
+        wchar_t value[24]; FormatFace(face, value);
+        DrawSectorStatic(dc, cell, index, step, noise);
+        DrawSectorHex(dc, cell, index, step, noise);
+        if (noise < 1000) DrawTornValue(dc, cell, value, FaceColor(face), index, step, noise);
+        DrawScanlines(dc, cell);
+        TextRect(dc, statusRect, L"READING", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    wchar_t value[24]; FormatFace(face, value);
+    TextRect(dc, cell, value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (flash > 0) DrawScanlines(dc, cell);
     wchar_t statuses[64] = L""; int statusCount = 0;
     if (face && face->damaged) { AppendStatus(statuses, L"BAD"); ++statusCount; }
     if (die->unstable) { AppendStatus(statuses, L"READ ERROR"); ++statusCount; }
@@ -441,7 +526,6 @@ static void DrawDie(HDC dc, int index) {
         TextRect(dc, statusRect, b, C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
-
 static void DrawSidebar(HDC dc, int width, int height) {
     RECT side = MakeRect(width - 212, 94, width - 22, height - 22); Panel(dc, side, C_PANEL, C_LINE);
     Text(dc, side.left + 12, side.top + 12, L"DISK DAMAGE", C_RED, gFontSmall);
@@ -464,9 +548,15 @@ static void DrawCombat(HDC dc, int width, int height) {
     SyncEnemyDamage();
     for (int i = 0; i < gGame.enemyCount; ++i) DrawEnemy(dc, i);
     Text(dc, 28, 382, L"주사위 하나당 슬롯 하나 · 한 슬롯은 비워집니다", C_DIM, gFontSmall);
-    for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i); for (int i = 0; i < 3; ++i) DrawDie(dc, i);
-    RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y); Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
-    TextRect(dc, end, L"EXECUTE [SPACE]", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE); DrawSidebar(dc, width, height);
+    for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);
+    for (int i = 0; i < 3; ++i) DrawDie(dc, i);
+    RECT read = ReadButtonRect(); int readHover = Inside(read, gMouse.x, gMouse.y), canRead = !gRolled && !gReadActive;
+    Panel(dc, read, canRead ? (readHover ? RGB(34, 86, 70) : RGB(24, 58, 49)) : C_PANEL, canRead ? C_GREEN : C_LINE);
+    TextRect(dc, read, L"READ [R]", canRead ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y) && gRolled;
+    Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
+    TextRect(dc, end, L"EXECUTE [SPACE]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawSidebar(dc, width, height);
 }
 
 static RECT RewardRect(int i, int width) {
@@ -581,6 +671,8 @@ static void PaintGame(HWND window) {
 static void BeginNewRun() { NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlayTone(520, 90); InvalidateRect(gWindow, 0, FALSE); }
 
 static void ClickCombat(int x, int y) {
+    if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
+    if (!gRolled) return;
     for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlayTone(330, 45); return; }
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlayTone(480 + i * 60, 35); return; }
     for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) {
@@ -655,7 +747,7 @@ static void HandleClick(int x, int y) {
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
+    if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
@@ -668,10 +760,12 @@ static void HandleKey(WPARAM key) {
     if (gSettingsOpen) { if (key == VK_ESCAPE) gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) { if (key == VK_ESCAPE) gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (RollBlocking()) { StopRollAnimation(); InvalidateRect(gWindow, 0, FALSE); return; }
+    if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
     else if (gGame.phase == PHASE_COMBAT) {
-        if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlayTone(480 + gGame.selectedDie * 60, 35); }
+        if (key == 'R') BeginRead();
+        else if (!gRolled) { /* sector not read yet */ }
+        else if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlayTone(480 + gGame.selectedDie * 60, 35); }
         else if (key == VK_SPACE) {
             GamePhase before = gGame.phase; EndTurn(&gGame);
             if (gGame.phase == PHASE_GAMEOVER) PlayTone(130, 180); else if (gGame.phase == PHASE_VICTORY) PlayTone(880, 180);
