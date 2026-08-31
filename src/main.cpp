@@ -119,9 +119,9 @@ static void PlayTone(int frequency, int milliseconds) {
     PlaySoundA((LPCSTR)&gWave, 0, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
-static RECT GuideButtonRect(int width) { return MakeRect(width - 116, 8, width - 18, 36); }
+static RECT GuideButtonRect(int width) { return MakeRect(width - 148, 6, width - 18, 33); }
 static RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
-static RECT SettingsButtonRect(int width) { return MakeRect(width - 116, 40, width - 18, 68); }
+static RECT SettingsButtonRect(int width) { return MakeRect(width - 148, 36, width - 18, 63); }
 static RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 static RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
 static RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
@@ -269,7 +269,7 @@ static void DrawHeader(HDC dc, int width) {
         Text(dc, 230, 14, b, C_TEXT, gFontMedium); wsprintfW(b, L"HP %d/%d", gGame.playerHp, gGame.playerMaxHp);
         Text(dc, width - 440, 14, b, gGame.playerHp <= 10 ? C_RED : C_TEXT, gFontMedium);
         wsprintfW(b, L"DECK %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
-        Text(dc, width - 285, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+        Text(dc, width - 305, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
     }
     RECT guide = GuideButtonRect(width); int hover = Inside(guide, gMouse.x, gMouse.y);
     Panel(dc, guide, gGuideOpen ? RGB(32, 82, 67) : hover ? RGB(27, 48, 52) : C_PANEL_2, gGuideOpen || hover ? C_GREEN : C_LINE);
