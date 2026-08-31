@@ -134,12 +134,12 @@ static const char* const* GetEnemySpriteOrUnknown(int kind) {
 }
 
 // Runs of identical cells collapse into one FillRect, so a portrait costs ~60 GDI calls.
-void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob) {
+void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX) {
     const char* const* rows = GetEnemySpriteOrUnknown(kind);
     COLORREF base = (COLORREF)GetEnemyInfoOrUnknown(kind)->color;
     int boxWidth = box.right - box.left, boxHeight = box.bottom - box.top;
     int scale = (boxWidth < boxHeight ? boxWidth : boxHeight) / SPRITE_SIZE; if (scale < 1) scale = 1;
-    int originX = box.left + (boxWidth - scale * SPRITE_SIZE) / 2;
+    int originX = box.left + (boxWidth - scale * SPRITE_SIZE) / 2 + shiftX;
     int originY = box.top + (boxHeight - scale * SPRITE_SIZE) / 2 + bob;
     for (int y = 0; y < SPRITE_SIZE; ++y) {
         const char* row = rows[y];
@@ -158,7 +158,7 @@ void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int 
     }
 }
 
-void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob) {
+void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX) {
     Panel(dc, box, alive ? RGB(11, 17, 24) : RGB(13, 13, 15), selected ? (COLORREF)GetEnemyInfoOrUnknown(kind)->color : C_LINE);
     for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
     if (alive) {
@@ -166,7 +166,12 @@ void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, in
         Fill(dc, MakeRect(centerX - 36, shadow, centerX + 36, shadow + 4), RGB(7, 11, 16));
         Fill(dc, MakeRect(centerX - 26, shadow + 4, centerX + 26, shadow + 6), RGB(9, 14, 20));
     }
-    DrawSpriteArt(dc, box, kind, alive, flash, bob);
+    // 달려드는 동안에도 그림은 초상 상자 안에서만 움직인다. 상자를 넘어가는
+    // 부분은 잘려 나가면서 화면 밖으로 몸을 던지는 것처럼 보인다.
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, box.left + 1, box.top + 1, box.right - 1, box.bottom - 1);
+    DrawSpriteArt(dc, box, kind, alive, flash, bob, shiftX);
+    RestoreDC(dc, saved);
 }
 
 static const wchar_t HEX_DIGIT[17] = L"0123456789ABCDEF";
@@ -202,6 +207,105 @@ void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level) {
         line[14] = 0;
         RECT rowRect = MakeRect(area.left, area.top + 2 + row * 19, area.right, area.top + 20 + row * 19);
         TextRect(dc, rowRect, line, RGB(58, 116, 96), gFontSmall, DT_CENTER | DT_SINGLELINE);
+    }
+}
+
+// 한 줄을 왼쪽에서 오른쪽으로 훑으며 level 확률로 조각을 채운다. 채우는 비율이
+// 곧 level이므로 1000에서는 화면에 원래 그림이 한 점도 남지 않는다. 붓은 한 번만
+// 만들어 돌려 쓰고, 건너뛰는 조각은 GDI 호출 자체를 하지 않는다.
+void DrawScreenStatic(HDC dc, const RECT& area, int step, int level) {
+    if (level <= 0) return;
+    if (level > 1000) level = 1000;
+    int width = area.right - area.left, height = area.bottom - area.top;
+    if (width <= 2 || height <= 2) return;
+    HBRUSH shade[4] = {CreateSolidBrush(RGB(13, 19, 25)), CreateSolidBrush(RGB(33, 47, 55)),
+                       CreateSolidBrush(RGB(72, 104, 96)), CreateSolidBrush(RGB(150, 196, 178))};
+    for (int y = area.top; y < area.bottom; y += 6) {
+        int bottom = y + 6 > area.bottom ? area.bottom : y + 6;
+        int x = area.left;
+        for (int i = 0; x < area.right; ++i) {
+            uint32_t h = Hash3(step, y, i);
+            int w = 10 + (int)(h % 70u);
+            if (x + w > area.right) w = area.right - x;
+            if ((int)((h >> 11) % 1000u) < level) {
+                uint32_t pick = (h >> 26) % 100u;
+                RECT cell = MakeRect(x, y, x + w, bottom);
+                FillRect(dc, &cell, shade[pick < 44u ? 0 : pick < 76u ? 1 : pick < 95u ? 2 : 3]);
+            }
+            x += w;
+        }
+    }
+    // 신호가 무너질수록 밝은 띠 하나가 화면을 타고 흘러내린다.
+    if (level > 380) {
+        int band = area.top + (int)((uint32_t)(step * 17) % (uint32_t)height);
+        int thick = 2 + level / 400;
+        if (band + thick > area.bottom) thick = area.bottom - band;
+        if (thick > 0) Fill(dc, MakeRect(area.left, band, area.right, band + thick), MixColor(RGB(60, 90, 88), RGB(196, 232, 216), level / 10));
+    }
+    for (int i = 0; i < 4; ++i) DeleteObject(shade[i]);
+}
+
+// 띠를 세 겹으로 나눠 안쪽 겹일수록 옅게 덮는다. 각 겹은 중앙을 잘라낸
+// 클립 안에서만 그려지므로 화면 한가운데는 원본 그대로 남는다.
+void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness) {
+    if (level <= 0 || thickness <= 0) return;
+    const int rings = 3;
+    for (int i = 0; i < rings; ++i) {
+        RECT outer = area, inner = area;
+        InflateRect(&outer, -thickness * i / rings, -thickness * i / rings);
+        InflateRect(&inner, -thickness * (i + 1) / rings, -thickness * (i + 1) / rings);
+        if (inner.right - inner.left < 2 || inner.bottom - inner.top < 2) break;
+        int saved = SaveDC(dc);
+        IntersectClipRect(dc, outer.left, outer.top, outer.right, outer.bottom);
+        ExcludeClipRect(dc, inner.left, inner.top, inner.right, inner.bottom);
+        DrawScreenStatic(dc, outer, step + i * 31, level * (rings - i) / rings);
+        RestoreDC(dc, saved);
+    }
+}
+
+// 아직 멀쩡한 사각형을 시간에 따라 좁혀 가며, 그 바깥은 빈틈없이 덮고 경계
+// 안쪽은 옅게 갉아 놓는다. 네 변의 위치가 매번 조금씩 흔들려 경계가 물어뜯긴
+// 것처럼 보인다.
+void DrawCreepStatic(HDC dc, const RECT& area, int step, int eaten) {
+    if (eaten <= 0) return;
+    if (eaten > 1000) eaten = 1000;
+    int w = area.right - area.left, h = area.bottom - area.top;
+    if (w <= 4 || h <= 4) return;
+    int insetX = w * eaten / 2000, insetY = h * eaten / 2000;   // 1000이면 정확히 닫힌다
+    int wobble = 6 + eaten * 24 / 1000;
+    RECT clean = area;
+    clean.left += insetX + (int)(Hash3(step / 3, 1, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
+    clean.right -= insetX + (int)(Hash3(step / 3, 2, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
+    clean.top += insetY + (int)(Hash3(step / 3, 3, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
+    clean.bottom -= insetY + (int)(Hash3(step / 3, 4, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
+    if (clean.left < area.left) clean.left = area.left;
+    if (clean.top < area.top) clean.top = area.top;
+    if (clean.right > area.right) clean.right = area.right;
+    if (clean.bottom > area.bottom) clean.bottom = area.bottom;
+    if (clean.right - clean.left < 24 || clean.bottom - clean.top < 24) {
+        DrawScreenStatic(dc, area, step, 1000);   // 다 먹혔다
+        return;
+    }
+    int saved = SaveDC(dc);
+    ExcludeClipRect(dc, clean.left, clean.top, clean.right, clean.bottom);
+    DrawScreenStatic(dc, area, step, 1000);
+    RestoreDC(dc, saved);
+    // 아직 남은 안쪽도 경계부터 갉히기 시작한다.
+    DrawEdgeStatic(dc, clean, step + 13, 700, 26 + eaten * 70 / 1000);
+}
+
+// 바깥 테두리가 가장 진하고 안쪽으로 갈수록 배경색에 녹아든다.
+void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness) {
+    if (level <= 0 || thickness <= 0) return;
+    if (level > 1000) level = 1000;
+    RECT r = area;
+    for (int i = 0; i < thickness; ++i) {
+        if (r.right - r.left < 2 || r.bottom - r.top < 2) break;
+        int fade = level * (thickness - i) / thickness;
+        HBRUSH brush = CreateSolidBrush(MixColor(C_BG, color, fade * 100 / 1000));
+        FrameRect(dc, &r, brush);
+        DeleteObject(brush);
+        InflateRect(&r, -1, -1);
     }
 }
 

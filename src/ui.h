@@ -19,6 +19,15 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define DESCENT_MS 2400
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
+// ---- 피격·위독·정지 연출 --------------------------------------------------
+#define CRITICAL_HP 10         // 이 체력 이하부터 화면이 노이즈에 잠식된다
+#define STRIKE_MS 440          // 적이 달려들었다가 제자리로 돌아오는 시간
+#define STRIKE_POP_MS 720      // 피해 숫자가 떠오르다 사라지는 시간
+#define PLAYER_HIT_MS 420      // 피격 테두리 섬광
+#define SHAKE_MS 300           // 화면 흔들림
+#define DEATH_CREEP_MS 1400    // 체력 0에서 노이즈가 화면을 다 갉아먹기까지
+#define DEATH_STATIC_MS 2500   // 그 뒤 재시작 화면이 나오기까지
+
 // ---- 공유 상태 (main.cpp가 소유한다) --------------------------------------
 extern GameState gGame;
 extern HWND gWindow;
@@ -34,6 +43,9 @@ extern int gTurnTraceActive;
 extern DWORD gTurnTraceStart;
 extern int gDescentActive, gDescentToFloor;
 extern DWORD gDescentStart;
+// 체력 0 이후의 정지 연출 (노이즈가 화면을 삼키고 나면 재시작 화면으로 넘어간다)
+extern int gDeathActive;
+extern DWORD gDeathStart;
 
 // ---- 연출 질의 (main.cpp가 계산하고 화면이 읽는다) ------------------------
 int DieNoise(int die);
@@ -44,6 +56,32 @@ void SyncEnemyDamage();
 int EnemyHitFlash(int index);
 int EnemyBob(int index);
 void SyncIdleAnimation();
+
+// 계산 재생에서 지금까지 드러난 줄 수 (0 = 아직 없음)
+int TurnTraceShown();
+
+// 적의 타격: 계산 재생이 그 적의 [적 행동] 줄에 닿는 순간 발동한다.
+void SyncEnemyStrikes();
+int EnemyStrikeDrop(int index);     // 플레이어 쪽(아래)으로 파고드는 픽셀
+int EnemyStrikeShift(int index);    // 달려들 때의 좌우 흔들림
+int EnemyStrikePop(int index);      // 피해 숫자 표시 강도 1000 → 0
+int EnemyStrikeDamage(int index);   // 그때 들어온 피해 (0 = 방어도가 전부 막음)
+
+// 피격 반응: 화면 흔들림과 테두리 섬광
+int PlayerHitFlash();
+int PlayerHitBlocked();
+int ScreenShakeX();
+int ScreenShakeY();
+
+// 화면 노이즈. 살아 있는 동안에는 항상 가장자리에만 머문다.
+//   체력 2~CRITICAL_HP : 체력이 줄수록 띠가 두꺼워지고 짙어진다
+//   체력 1             : 버티는 시간만큼 띠가 더 두꺼워지고 짙어진다 (중앙은 그대로)
+//   체력 0             : 그 노이즈가 화면 전체를 갉아먹으며 안으로 좁혀 들어온다
+int AmbientNoiseLevel();   // 테두리 띠 밀도 (0 = 위독 연출 없음)
+int AmbientNoiseBand();    // 테두리 띠 두께(px)
+int DeathCreepAmount();    // 잠식 정도 0~1000 (0 = 정지 중이 아님)
+void SyncLastGasp();       // 체력 1이 된 시각을 잡아 둔다 (띠가 자라는 기준)
+int NoiseFrameStep();
 
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);

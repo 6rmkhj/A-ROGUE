@@ -218,8 +218,24 @@ static void DrawEnemy(HDC dc, int index) {
     int selected = index == gGame.targetEnemy && enemy->alive;
     int isBoss = IsBossKind(enemy->kind);
     int hasGimmick = isBoss && gGame.boss.gimmick != GIMMICK_NONE;
-    Panel(dc, r, enemy->alive ? C_PANEL : RGB(18, 18, 20), selected ? C_YELLOW : C_LINE);
-    DrawPortrait(dc, PortraitRect(r), enemy->kind, enemy->alive, selected, EnemyHitFlash(index), enemy->alive ? EnemyBob(index) : 0);
+    int drop = enemy->alive ? EnemyStrikeDrop(index) : 0, shift = enemy->alive ? EnemyStrikeShift(index) : 0;
+    Panel(dc, r, enemy->alive ? C_PANEL : RGB(18, 18, 20), drop > 0 ? C_RED : selected ? C_YELLOW : C_LINE);
+    DrawPortrait(dc, PortraitRect(r), enemy->kind, enemy->alive, selected, EnemyHitFlash(index),
+        (enemy->alive ? EnemyBob(index) : 0) + drop, shift);
+    // 맞은 양은 때린 적 위로 떠오른다. 방어도가 다 받아냈으면 파랗게 튕겨낸 표시.
+    int pop = enemy->alive ? EnemyStrikePop(index) : 0;
+    if (pop > 0) {
+        wchar_t hit[32];
+        int taken = EnemyStrikeDamage(index);
+        if (taken > 0) wsprintfW(hit, L"내 체력 -%d", taken); else lstrcpyW(hit, L"방어도가 막음");
+        int rise = (1000 - pop) * 26 / 1000, center = (r.left + r.right) / 2;
+        int tone = 30 + pop * 70 / 1000;
+        RECT tag = MakeRect(center - 74, r.top + 108 - rise, center + 74, r.top + 132 - rise);
+        COLORREF accent = MixColor(C_PANEL, taken > 0 ? C_RED : C_BLUE, tone);
+        Fill(dc, tag, RGB(9, 7, 11));   // 도트 그림 위에서도 읽히도록 바탕을 깐다
+        Outline(dc, tag, accent, 1);
+        TextRect(dc, tag, hit, accent, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     Text(dc, r.left + 12, r.top + 140, info->code, enemy->alive ? (COLORREF)info->color : C_DIM, gFontMedium);
     wchar_t b[96];
     if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
@@ -509,8 +525,7 @@ static void DrawTurnCalculation(HDC dc) {
 
     // 내부 기록은 최대 12줄, 화면은 최근 8줄을 스크롤해 보여준다.
     int count = gGame.turnTraceCount;
-    int shown = (int)(GetTickCount() - gTurnTraceStart) / TURN_TRACE_STEP_MS + 1;
-    if (shown > count) shown = count;
+    int shown = TurnTraceShown();
     int first = shown > TURN_TRACE_SHOWN ? shown - TURN_TRACE_SHOWN : 0;
     for (int i = first; i < shown; ++i) {
         int y = panel.top + 55 + (i - first) * 31;
@@ -747,7 +762,9 @@ static void DrawGuide(HDC dc, int width, int height) {
 }
 
 void PaintGame(HWND window) {
+    SyncLastGasp();
     SyncIdleAnimation();
+    SyncEnemyStrikes();
     PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client);
     int clientWidth = client.right, clientHeight = client.bottom;
     if (clientWidth <= 0 || clientHeight <= 0) { EndPaint(window, &paint); return; }
@@ -756,7 +773,7 @@ void PaintGame(HWND window) {
     HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, BASE_WIDTH, BASE_HEIGHT); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
-    if (gTurnTraceActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    if (gTurnTraceActive || gDeathActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -768,6 +785,24 @@ void PaintGame(HWND window) {
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
+    // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
+    // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.
+    int creep = DeathCreepAmount();
+    if (creep > 0) {
+        DrawCreepStatic(canvas, canvasRect, NoiseFrameStep(), creep);
+        if (creep >= 700) DrawScanlines(canvas, canvasRect);
+        // 다 먹힌 뒤에는 무너진 신호 위로 정지 메시지가 찢어진 채 떠오른다.
+        if (creep >= 1000)
+            DrawTornValue(canvas, MakeRect(0, BASE_HEIGHT / 2 - 40, BASE_WIDTH, BASE_HEIGHT / 2 + 40),
+                L"SYSTEM HALTED", C_RED, 0, NoiseFrameStep(), 1000);
+    } else {
+        int edge = AmbientNoiseLevel();
+        if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
+    }
+    int hitFlash = PlayerHitFlash();
+    if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
+    else if (!gDeathActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
+
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
     HDC composite = CreateCompatibleDC(dc); HBITMAP compositeBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight); HBITMAP oldComposite = (HBITMAP)SelectObject(composite, compositeBitmap);
@@ -775,7 +810,8 @@ void PaintGame(HWND window) {
     int scaledWidth = (int)(BASE_WIDTH * scale), scaledHeight = (int)(BASE_HEIGHT * scale);
     Fill(composite, client, C_BG);
     SetStretchBltMode(composite, HALFTONE); SetBrushOrgEx(composite, 0, 0, 0);
-    StretchBlt(composite, offsetX, offsetY, scaledWidth, scaledHeight, canvas, 0, 0, BASE_WIDTH, BASE_HEIGHT, SRCCOPY);
+    int shakeX = (int)(ScreenShakeX() * scale), shakeY = (int)(ScreenShakeY() * scale);
+    StretchBlt(composite, offsetX + shakeX, offsetY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, BASE_WIDTH, BASE_HEIGHT, SRCCOPY);
 
     // 3단계: 완성된 프레임을 화면에 단 한 번에 복사한다.
     BitBlt(dc, 0, 0, clientWidth, clientHeight, composite, 0, 0, SRCCOPY);
