@@ -59,6 +59,11 @@ static COLORREF FaceColor(const Face* face) {
     return (COLORREF)FACE_INFO[face->kind].color;
 }
 
+static void AppendStatus(wchar_t* output, const wchar_t* status) {
+    if (output[0]) lstrcatW(output, L" · ");
+    lstrcatW(output, status);
+}
+
 #pragma pack(push, 1)
 struct WaveMemory {
     char riff[4]; DWORD riffSize; char wave[4]; char fmt[4]; DWORD fmtSize; WORD format; WORD channels;
@@ -152,10 +157,18 @@ static void DrawDie(HDC dc, int index) {
     Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
     wchar_t b[64]; wsprintfW(b, L"DIE %d", index + 1); Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
     wchar_t value[24]; FormatFace(face, value);
-    TextRect(dc, MakeRect(r.left + 10, r.top + 28, r.right - 10, r.top + 76), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (die->unstable) Text(dc, r.left + 9, r.bottom - 31, L"READ ERROR", C_RED, gFontSmall);
-    else if (die->disabled) Text(dc, r.left + 9, r.bottom - 31, L"FRAGMENTED", C_RED, gFontSmall);
-    else { wsprintfW(b, L"%s · %dB", FACE_INFO[face->kind].name, FaceCost(face)); Text(dc, r.left + 9, r.bottom - 31, b, C_DIM, gFontSmall); }
+    TextRect(dc, MakeRect(r.left + 10, r.top + 27, r.right - 10, r.top + 70), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    wchar_t statuses[64] = L""; int statusCount = 0;
+    if (face && face->damaged) { AppendStatus(statuses, L"BAD"); ++statusCount; }
+    if (die->unstable) { AppendStatus(statuses, L"READ ERROR"); ++statusCount; }
+    if (die->disabled) { AppendStatus(statuses, L"FRAGMENTED"); ++statusCount; }
+    RECT statusRect = MakeRect(r.left + 7, r.top + 74, r.right - 7, r.bottom - 5);
+    if (statusCount == 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    else if (statusCount > 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_WORDBREAK);
+    else {
+        wsprintfW(b, L"%s · %dB", FACE_INFO[face->kind].name, FaceCost(face));
+        TextRect(dc, statusRect, b, C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 static void DrawSidebar(HDC dc, int width, int height) {
@@ -248,7 +261,7 @@ static void DrawGuide(HDC dc, int width, int height) {
         L"AMP  공격·방어 출력을 먼저 강화\nATK  선택한 적에게 피해\nDEF  이번 턴 적 공격을 흡수\nCHAIN  직전 공격 또는 방어를 반복", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 24),
-        L"BURN: 적 행동 직전에 3 피해\nREAD ERROR: SPACE 순간 해당 주사위 재굴림\nFRAGMENTED: 중복 결과, 이번 턴 출력 0\n오염(관통): 표시 수치만큼 HP 직접 피해. BLOCK을 소모하거나 적용받지 않음", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"BURN: 적 행동 직전에 3 피해\nREAD ERROR: SPACE 순간 해당 주사위 재굴림\nFRAGMENTED: 중복 결과, 이번 턴 출력 0\n복합 상태는 주사위에 모두 함께 표시\n오염(관통): 표시 수치만큼 HP 직접 피해. BLOCK을 소모하거나 적용받지 않음", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
