@@ -2,7 +2,6 @@
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
-#include "sprites.h"
 
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
 static int gWindowedScale = 100;
@@ -10,6 +9,8 @@ static RECT gWindowedRect;
 
 RECT GuideButtonRect(int width) { return MakeRect(width - 148, 4, width - 18, 23); }
 RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
+RECT GuidePrevRect(int width, int height) { (void)width; return MakeRect(84, height - 74, 234, height - 40); }
+RECT GuideNextRect(int width, int height) { return MakeRect(width - 234, height - 74, width - 84, height - 40); }
 RECT SettingsButtonRect(int width) { return MakeRect(width - 148, 25, width - 18, 44); }
 RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65); }
@@ -157,32 +158,117 @@ static void DrawTsrPanel(HDC dc) {
     }
 }
 
+// 보스 기믹의 현재·다음 상태를 카드에 직접 표시할 한 줄을 만든다.
+static void FormatGimmickStatus(wchar_t* out, int size) {
+    const BossRuntime* boss = &gGame.boss;
+    const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[boss->gimmick];
+    out[0] = 0;
+    switch (gi->family) {
+    case FAM_LOCK: {
+        int locked = -1, next = -1;
+        for (int s = 0; s < SLOT_COUNT; ++s) {
+            if (boss->lockedSlot[s] && locked < 0) locked = s;
+            if (boss->nextLockedSlot[s] && next < 0) next = s;
+        }
+        if (locked >= 0 && boss->gimmick == GIMMICK_BLUE_SCREEN) lstrcpynW(out, L"발동: 증폭·연쇄 잠김", size);
+        else if (locked >= 0) wsprintfW(out, L"발동: %s 슬롯 잠김", SLOT_NAMES[locked]);
+        else if (next >= 0 && boss->gimmick == GIMMICK_BLUE_SCREEN) lstrcpynW(out, L"예고: 다음 턴 증폭·연쇄 잠금", size);
+        else if (next >= 0) wsprintfW(out, L"예고: 다음 턴 %s 잠금", SLOT_NAMES[next]);
+        else if (boss->gimmick == GIMMICK_KERNEL_PANIC) lstrcpynW(out, L"이번 최고 출력 슬롯이 다음 턴 잠김", size);
+        else lstrcpynW(out, L"다음 잠금 대기 중", size);
+        break;
+    }
+    case FAM_RESTORE:
+        if (boss->gimmick == GIMMICK_RESTORE_POINT) wsprintfW(out, L"창 피해 %d/%d · 복원 %d/2회", boss->windowDamage, gi->p2, boss->restoresUsed);
+        else if (boss->gimmick == GIMMICK_TAPE_LOOP) wsprintfW(out, L"이번 턴 피해 %d/%d 미달 시 +%d", boss->damageThisTurn, gi->p2, gi->p3);
+        else wsprintfW(out, boss->restoresUsed ? L"백업 소진됨" : L"체력 %d%% 미만 시 1회 복원", gi->p1);
+        break;
+    case FAM_OFFLINE:
+        if (boss->offlineDie >= 0) wsprintfW(out, L"발동: 주사위 %d 오프라인", boss->offlineDie + 1);
+        else if (boss->nextOfflineDie >= 0) wsprintfW(out, L"예고: 다음 턴 주사위 %d 오프라인", boss->nextOfflineDie + 1);
+        else lstrcpynW(out, L"연결 안정 · 다음 발동 대기", size);
+        break;
+    case FAM_ROUTE:
+        if (boss->gimmick == GIMMICK_TIMEOUT) {
+            if (boss->reversed) lstrcpynW(out, L"타임아웃! 역전 · 보스 대기", size);
+            else wsprintfW(out, L"카운트다운 %d · 피해 %d+로 지연", boss->countdown, gi->p2);
+        } else if (boss->reversed) lstrcpynW(out, L"발동: 이번 턴 순서 역전", size);
+        else if (boss->nextReversed) lstrcpynW(out, L"예고: 다음 턴 순서 역전", size);
+        else lstrcpynW(out, L"라우팅 정상 · 역전 대기", size);
+        break;
+    case FAM_PRESSURE:
+        if (boss->empowered) wsprintfW(out, L"발동: 강화 공격! (피해 %d+로 예방했어야)", gi->p2);
+        else wsprintfW(out, L"압력 %d/%d · 피해 %d+ 시 감소", boss->gauge, boss->gaugeMax, gi->p2);
+        break;
+    case FAM_QUARANTINE:
+        if (boss->nextTargetDie >= 0) wsprintfW(out, boss->nextTargetPermanent
+            ? L"삭제 예고: 주사위 %d 면 %d" : L"격리 예고: 주사위 %d 면 %d",
+            boss->nextTargetDie + 1, boss->nextTargetFace + 1);
+        else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) lstrcpynW(out, L"3턴마다 면 1개 2턴 격리", size);
+        else wsprintfW(out, L"오염 %d/%d", boss->gauge, boss->gaugeMax > 0 ? boss->gaugeMax : gi->p1);
+        break;
+    default:
+        lstrcpynW(out, L"", size);
+        break;
+    }
+}
+
 static void DrawEnemy(HDC dc, int index) {
-    const EnemyState* enemy = &gGame.enemies[index]; const EnemyInfo* info = &ENEMY_INFO[enemy->kind]; RECT r = EnemyRect(index);
+    const EnemyState* enemy = &gGame.enemies[index]; const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind); RECT r = EnemyRect(index);
     int selected = index == gGame.targetEnemy && enemy->alive;
+    int isBoss = IsBossKind(enemy->kind);
+    int hasGimmick = isBoss && gGame.boss.gimmick != GIMMICK_NONE;
     Panel(dc, r, enemy->alive ? C_PANEL : RGB(18, 18, 20), selected ? C_YELLOW : C_LINE);
     DrawPortrait(dc, PortraitRect(r), enemy->kind, enemy->alive, selected, EnemyHitFlash(index), enemy->alive ? EnemyBob(index) : 0);
     Text(dc, r.left + 12, r.top + 140, info->code, enemy->alive ? (COLORREF)info->color : C_DIM, gFontMedium);
-    Text(dc, r.left + 12, r.top + 165, selected ? L"▶ 공격 대상" : enemy->kind >= BOSS_DISK_ERROR ? L"보스 프로세스" : L"적 프로세스", selected ? C_YELLOW : C_DIM, gFontSmall);
-    wchar_t b[80]; wsprintfW(b, L"체력 %d / %d", enemy->hp, enemy->maxHp); Text(dc, r.left + 12, r.top + 187, b, C_TEXT, gFontSmall);
+    wchar_t b[96];
+    if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
+    else if (hasGimmick) wsprintfW(b, selected ? L"▶ 보스 · %s" : L"보스 기믹: %s", BOSS_GIMMICK_INFO[gGame.boss.gimmick].name);
+    else lstrcpyW(b, isBoss ? L"보스 프로세스" : L"적 프로세스");
+    Text(dc, r.left + 12, r.top + 165, b, selected ? C_YELLOW : hasGimmick ? (COLORREF)info->color : C_DIM, gFontSmall);
+    if (enemy->block > 0 || enemy->burn > 0) wsprintfW(b, L"체력 %d/%d · 방%d 화%d", enemy->hp, enemy->maxHp, enemy->block, enemy->burn);
+    else wsprintfW(b, L"체력 %d / %d", enemy->hp, enemy->maxHp);
+    Text(dc, r.left + 12, r.top + 187, b, C_TEXT, gFontSmall);
     Bar(dc, MakeRect(r.left + 12, r.top + 208, r.right - 12, r.top + 220), enemy->hp, enemy->maxHp, (COLORREF)info->color);
     if (enemy->alive) {
         wsprintfW(b, L"의도: %s %d", INTENT_NAMES[enemy->intent], enemy->intentValue);
         Text(dc, r.left + 12, r.top + 227, b, enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT ? C_RED : C_YELLOW, gFontSmall);
-        if (enemy->block > 0 || enemy->burn > 0) { wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn); Text(dc, r.left + 12, r.top + 247, b, C_DIM, gFontSmall); }
+        if (hasGimmick) {
+            wchar_t status[96]; FormatGimmickStatus(status, 96);
+            int active = gGame.boss.empowered || gGame.boss.reversed || gGame.boss.offlineDie >= 0
+                || gGame.boss.lockedSlot[0] || gGame.boss.lockedSlot[1] || gGame.boss.lockedSlot[2] || gGame.boss.lockedSlot[3];
+            TextRect(dc, MakeRect(r.left + 12, r.top + 247, r.right - 10, r.bottom - 4), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
+        } else if (enemy->block > 0 || enemy->burn > 0) {
+            wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
+            Text(dc, r.left + 12, r.top + 247, b, C_DIM, gFontSmall);
+        }
     } else Text(dc, r.left + 12, r.top + 227, L"[ 삭제됨 ]", C_DIM, gFontSmall);
 }
 
 static void DrawSlot(HDC dc, int slot) {
     RECT r = SlotRect(slot); int die = DieForSlotUI(slot); int hover = Inside(r, gMouse.x, gMouse.y);
-    Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : C_LINE);
+    int locked = SlotLockedThisTurn(&gGame, slot), lockedNext = SlotLockedNextTurn(&gGame, slot);
+    if (locked) {
+        // 잠긴 슬롯: 배치를 받지 않으며 어둡고 붉게 오버레이한다.
+        Panel(dc, r, RGB(38, 16, 18), C_RED);
+        Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], C_RED, gFontMedium);
+        TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), L"잠김", C_RED, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), L"ACCESS DENIED", C_RED, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        return;
+    }
+    Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN, gFontMedium);
     if (die >= 0) {
         const Face* face = RolledFace(&gGame, die); wchar_t value[24]; FormatFace(face, value);
-        TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        int offline = gGame.dice[die].offline;
+        if (offline) TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), L"오프라인", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        else TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         wchar_t b[48]; wsprintfW(b, L"주사위 %d · %dB", die + 1, FaceCost(face));
         TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.bottom - 10), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    if (lockedNext) TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6),
+        die >= 0 ? L"" : L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    if (lockedNext && die >= 0) TextRect(dc, MakeRect(r.left + 4, r.top + 88, r.right - 4, r.top + 108), L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawDie(HDC dc, int index) {
@@ -220,8 +306,11 @@ static void DrawDie(HDC dc, int index) {
     if (flash > 0) DrawScanlines(dc, cell);
     wchar_t statuses[64] = L""; int statusCount = 0;
     if (face && face->damaged) { AppendStatus(statuses, L"손상"); ++statusCount; }
+    if (face && face->quarantined != QUAR_NONE) { AppendStatus(statuses, L"격리"); ++statusCount; }
     if (die->unstable) { AppendStatus(statuses, L"읽기 오류"); ++statusCount; }
     if (die->disabled) { AppendStatus(statuses, L"조각화"); ++statusCount; }
+    if (die->offline) { AppendStatus(statuses, L"오프라인"); ++statusCount; }
+    if (gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"다음 턴 오프라인"); ++statusCount; }
     if (statusCount == 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     else if (statusCount > 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_WORDBREAK);
     else {
@@ -236,8 +325,13 @@ static void DrawSidebar(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(side.left + 12, side.top + 65, side.right - 10, side.top + 124), MODIFIER_INFO[gGame.modifierA].description, C_DIM, gFontSmall, DT_WORDBREAK);
     Text(dc, side.left + 12, side.top + 136, MODIFIER_INFO[gGame.modifierB].name, C_YELLOW, gFontSmall);
     TextRect(dc, MakeRect(side.left + 12, side.top + 159, side.right - 10, side.top + 222), MODIFIER_INFO[gGame.modifierB].description, C_DIM, gFontSmall, DT_WORDBREAK);
-    Text(dc, side.left + 12, side.top + 242, L"실행 순서", C_GREEN, gFontSmall);
-    TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"증폭 > 공격 > 방어 > 연쇄", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, side.left + 12, side.top + 242, L"실행 순서", ResolveOrderReversed(&gGame) ? C_RED : C_GREEN, gFontSmall);
+    if (ResolveOrderReversed(&gGame))
+        TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"연쇄 > 방어 > 공격 > 증폭 (역전!)", C_RED, gFontSmall, DT_WORDBREAK);
+    else if (gGame.boss.nextReversed)
+        TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"증폭 > 공격 > 방어 > 연쇄\n다음 턴 역전 예고", C_YELLOW, gFontSmall, DT_WORDBREAK);
+    else
+        TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"증폭 > 공격 > 방어 > 연쇄", C_TEXT, gFontSmall, DT_WORDBREAK);
     const Face* selectedFace = gGame.selectedDie >= 0 ? RolledFace(&gGame, gGame.selectedDie) : 0;
     if (selectedFace) {
         Text(dc, side.left + 12, side.top + 340, FACE_INFO[selectedFace->kind].name, FaceColor(selectedFace), gFontMedium);
@@ -256,7 +350,8 @@ static void DrawCombat(HDC dc, int width, int height) {
         wsprintfW(result, L"최근 실행  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d",
             gGame.lastTurnDamageDealt, gGame.lastTurnDamageTaken, gGame.lastTurnBlockGained);
         Text(dc, 28, 382, result, C_YELLOW, gFontSmall);
-    } else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
+    } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
+    else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);
     for (int i = 0; i < 3; ++i) DrawDie(dc, i);
     RECT read = ReadButtonRect(); int readHover = Inside(read, gMouse.x, gMouse.y), canRead = !gRolled && !gReadActive;
@@ -409,13 +504,16 @@ static void DrawCombatClear(HDC dc, int width, int height) {
 static void DrawTurnCalculation(HDC dc) {
     RECT panel = MakeRect(28, 396, 884, 730); Panel(dc, panel, RGB(10, 17, 24), C_BLUE);
     Text(dc, panel.left + 18, panel.top + 14, L"턴 계산 과정", C_BLUE, gFontMedium);
-    Text(dc, panel.left + 224, panel.top + 18, L"증폭 → 공격 → 적중 → 방어 → 연쇄 → 적 행동", C_DIM, gFontSmall);
+    if (gGame.lastTurnReversed) Text(dc, panel.left + 224, panel.top + 18, L"역전: 연쇄 → 방어 → 공격 → 증폭 → 적 행동", C_RED, gFontSmall);
+    else Text(dc, panel.left + 224, panel.top + 18, L"증폭 → 공격 → 적중 → 방어 → 연쇄 → 적 행동", C_DIM, gFontSmall);
 
+    // 내부 기록은 최대 12줄, 화면은 최근 8줄을 스크롤해 보여준다.
     int count = gGame.turnTraceCount;
     int shown = (int)(GetTickCount() - gTurnTraceStart) / TURN_TRACE_STEP_MS + 1;
     if (shown > count) shown = count;
-    for (int i = 0; i < shown; ++i) {
-        int y = panel.top + 55 + i * 31;
+    int first = shown > TURN_TRACE_SHOWN ? shown - TURN_TRACE_SHOWN : 0;
+    for (int i = first; i < shown; ++i) {
+        int y = panel.top + 55 + (i - first) * 31;
         COLORREF color = i == shown - 1 && shown < count ? C_YELLOW : C_TEXT;
         Fill(dc, MakeRect(panel.left + 18, y + 3, panel.left + 22, y + 23), color);
         TextRect(dc, MakeRect(panel.left + 34, y, panel.right - 18, y + 27),
@@ -552,34 +650,100 @@ static void DrawDeck(HDC dc, int width, int height) {
         L"현재 보유한 18개 면입니다 (조회 전용). 취소 키로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 }
 
-static void DrawGuide(HDC dc, int width, int height) {
-    RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
-    RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
-    Text(dc, panel.left + 28, panel.top + 18, L"시스템 가이드", C_GREEN, gFontLarge);
-    Text(dc, panel.left + 255, panel.top + 28, L"전투 중에도 F1로 열고 닫을 수 있습니다.", C_DIM, gFontSmall);
-    RECT close = GuideCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
-    TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+// 몹 패턴을 카드 한 줄 역할로 요약한다.
+static const wchar_t* PatternRoleLabel(int pattern) {
+    switch (pattern) {
+    case PATTERN_ASSAULT: return L"공격형 · 공격-공격-강공 주기";
+    case PATTERN_RAMP: return L"공격형 · 턴마다 공격이 강해짐";
+    case PATTERN_BULWARK: return L"방어형 · 방어를 굳히고 강공";
+    case PATTERN_SIEGE: return L"방어형 · 이중 방어 후 강공";
+    case PATTERN_MEDIC: return L"방어형 · 복구와 방어 반복";
+    case PATTERN_CORRUPTER: return L"변칙형 · 오염(관통) 선공";
+    case PATTERN_OPENER: return L"변칙형 · 첫 턴 강공 압박";
+    case PATTERN_ERRATIC: return L"변칙형 · 의도가 매턴 뒤섞임";
+    case PATTERN_SPIKE: return L"변칙형 · 강공과 오염 조합";
+    default: return L"변칙형";
+    }
+}
 
+static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
     Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 126),
         L"1. 주사위를 클릭하거나 1·2·3으로 선택\n2. 서로 다른 슬롯을 클릭해 배치\n3. 적을 클릭해 공격 대상 선택\n4. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 140, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 172, middle - 28, top + 286),
-        L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 24),
-        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n복합 상태는 주사위에 모두 함께 표시\n오염(관통): 표시 수치만큼 체력에 직접 피해. 방어도를 소모하거나 적용받지 않음", C_TEXT, gFontSmall, DT_WORDBREAK);
+    TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
+        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도를 무시하고 체력에 직접 피해", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"볼륨 선택  런 시작 시 드라이브마다 손상 2종 공개 + 고유 특성 1개\n배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"볼륨 선택  드라이브마다 손상 2종 + 특성 1개 + 전용 적·보스 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 전투 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상시 효과를 주는 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 24),
-        L"클릭 / 1·2·3  선택\n4  보상 화면에서 섹터 복구\nK  KEYB 재굴림 (선택한 주사위)\n스페이스  턴 실행\n취소  배치 해제·보상 건너뛰기·가이드 닫기\n엔터  용량 정리 확정\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 88),
+        L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+}
+
+static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
+    int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
+    if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) {
+        Text(dc, left, top, L"드라이브별 적·보스", C_YELLOW, gFontMedium);
+        TextRect(dc, MakeRect(left, top + 32, panel.right - 28, panel.bottom - 88),
+            L"볼륨을 마운트하면 이 페이지에 해당 드라이브의 일반 몹 3종과 층별 보스 3종, 그리고 보스 기믹의 예고·대응법이 표시됩니다.\n\n"
+            L"C:\\ SYSTEM  슬롯 권한 잠금과 시스템 정지\nD:\\ ARCHIVE  피해 목표 미달 시 복원·되감기\nE:\\ REMOVABLE  예고된 주사위 연결 끊김\nN:\\ NETWORK  슬롯 해결 순서 역전\nR:\\ RAMDISK  메모리 압력 게이지와 강화 공격\nX:\\ QUARANTINE  면 격리, 최종 보스는 영구 삭제",
+            C_TEXT, gFontSmall, DT_WORDBREAK);
+        return;
+    }
+    const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive];
+    wchar_t b[160];
+    wsprintfW(b, L"%s%s 전용 로스터", drive->letter, drive->label);
+    Text(dc, left, top, b, (COLORREF)drive->color, gFontMedium);
+
+    Text(dc, left, top + 40, L"일반 몹 (모든 층, 층마다 강해짐)", C_YELLOW, gFontSmall);
+    for (int i = 0; i < DRIVE_MOB_COUNT; ++i) {
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_MOBS[gGame.selectedDrive][i]);
+        int y = top + 68 + i * 66;
+        Text(dc, left, y, info->code, (COLORREF)info->color, gFontMedium);
+        wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
+        TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
+    }
+    TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
+        L"일반전 6회 동안 세 몹이 각각 두 번씩, 시드로 정해진 순서로 등장합니다.", C_DIM, gFontSmall, DT_WORDBREAK);
+
+    Text(dc, middle, top + 40, L"층별 보스와 기믹", C_YELLOW, gFontSmall);
+    for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) {
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_BOSSES[gGame.selectedDrive][i]);
+        const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[info->gimmick];
+        int y = top + 68 + i * 118;
+        wsprintfW(b, L"%d층  %s — %s", i + 1, info->code, gi->name);
+        Text(dc, middle, y, b, (COLORREF)info->color, gFontMedium);
+        wsprintfW(b, L"%s\n대응: %s", gi->rule, gi->counter);
+        TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+    }
+}
+
+static void DrawGuide(HDC dc, int width, int height) {
+    RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
+    RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
+    Text(dc, panel.left + 28, panel.top + 18, gGuidePage == 0 ? L"시스템 가이드 1/2" : L"드라이브 정보 2/2", C_GREEN, gFontLarge);
+    Text(dc, panel.left + 330, panel.top + 28, L"←·→ 키 또는 버튼으로 페이지 이동", C_DIM, gFontSmall);
+    RECT close = GuideCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
+    TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (gGuidePage == 0) DrawGuideCommonPage(dc, width, panel);
+    else DrawGuideDrivePage(dc, width, panel);
+
+    RECT prev = GuidePrevRect(width, height); int hoverPrev = Inside(prev, gMouse.x, gMouse.y);
+    Panel(dc, prev, hoverPrev ? RGB(28, 39, 48) : C_PANEL_2, hoverPrev ? C_BLUE : C_LINE);
+    TextRect(dc, prev, L"◀ 이전 페이지", gGuidePage > 0 ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT next = GuideNextRect(width, height); int hoverNext = Inside(next, gMouse.x, gMouse.y);
+    Panel(dc, next, hoverNext ? RGB(28, 39, 48) : C_PANEL_2, hoverNext ? C_BLUE : C_LINE);
+    TextRect(dc, next, L"다음 페이지 ▶", gGuidePage < 1 ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 void PaintGame(HWND window) {

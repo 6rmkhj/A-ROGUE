@@ -81,6 +81,7 @@ void Bar(HDC dc, const RECT& rect, int value, int maximum, COLORREF color) {
 void FormatFace(const Face* face, wchar_t* out) {
     if (!face) lstrcpyW(out, L"--");
     else if (face->damaged) lstrcpyW(out, L"손상");
+    else if (face->quarantined != QUAR_NONE) lstrcpyW(out, L"격리");
     else if (face->kind == FACE_NUMBER) wsprintfW(out, L"%d", (int)face->value);
     else lstrcpyW(out, FACE_INFO[face->kind].shortName);
 }
@@ -88,6 +89,7 @@ void FormatFace(const Face* face, wchar_t* out) {
 COLORREF FaceColor(const Face* face) {
     if (!face) return C_DIM;
     if (face->damaged) return C_RED;
+    if (face->quarantined != QUAR_NONE) return C_YELLOW;
     return (COLORREF)FACE_INFO[face->kind].color;
 }
 
@@ -125,10 +127,16 @@ static int SpriteCellColor(char cell, COLORREF base, COLORREF* out) {
     return 0;
 }
 
+// 잘못된 kind가 흘러들어도 배열을 선행 접근하지 않도록 폴백으로 대체한다.
+static const char* const* GetEnemySpriteOrUnknown(int kind) {
+    if (kind < 0 || kind >= ENEMY_KIND_COUNT) return UNKNOWN_SPRITE;
+    return ENEMY_SPRITES[kind];
+}
+
 // Runs of identical cells collapse into one FillRect, so a portrait costs ~60 GDI calls.
 void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob) {
-    const char* const* rows = ENEMY_SPRITES[kind];
-    COLORREF base = (COLORREF)ENEMY_INFO[kind].color;
+    const char* const* rows = GetEnemySpriteOrUnknown(kind);
+    COLORREF base = (COLORREF)GetEnemyInfoOrUnknown(kind)->color;
     int boxWidth = box.right - box.left, boxHeight = box.bottom - box.top;
     int scale = (boxWidth < boxHeight ? boxWidth : boxHeight) / SPRITE_SIZE; if (scale < 1) scale = 1;
     int originX = box.left + (boxWidth - scale * SPRITE_SIZE) / 2;
@@ -151,7 +159,7 @@ void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int 
 }
 
 void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob) {
-    Panel(dc, box, alive ? RGB(11, 17, 24) : RGB(13, 13, 15), selected ? (COLORREF)ENEMY_INFO[kind].color : C_LINE);
+    Panel(dc, box, alive ? RGB(11, 17, 24) : RGB(13, 13, 15), selected ? (COLORREF)GetEnemyInfoOrUnknown(kind)->color : C_LINE);
     for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
     if (alive) {
         int centerX = (box.left + box.right) / 2, shadow = box.bottom - 9;

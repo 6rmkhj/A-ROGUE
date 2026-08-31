@@ -24,6 +24,7 @@ extern GameState gGame;
 extern HWND gWindow;
 extern POINT gMouse;
 extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
+extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
 
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
@@ -47,6 +48,8 @@ void SyncIdleAnimation();
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);
 RECT GuideCloseRect(int width);
+RECT GuidePrevRect(int width, int height);
+RECT GuideNextRect(int width, int height);
 RECT SettingsButtonRect(int width);
 RECT SettingsCloseRect(int width);
 RECT DeckButtonRect(int width);

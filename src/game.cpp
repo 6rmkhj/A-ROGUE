@@ -35,12 +35,30 @@ static void PushLog2(GameState* game, const wchar_t* format, const wchar_t* name
 
 static void ClearTurnTrace(GameState* game) {
     game->turnTraceCount = 0;
+    game->turnTraceOverflow = 0;
     ZeroMemory(game->turnTrace, sizeof(game->turnTrace));
 }
 
 static void PushTurnTrace(GameState* game, const wchar_t* text) {
-    if (game->turnTraceCount >= 8) return;
+    if (game->turnTraceCount >= TURN_TRACE_CAP) { game->turnTraceOverflow = 1; return; }
     lstrcpynW(game->turnTrace[game->turnTraceCount++], text, 96);
+}
+
+// ---------------------------------------------------------------------------
+// 안전 조회와 역할 판정. 보스 여부는 enum 범위가 아니라 role 메타데이터다.
+// ---------------------------------------------------------------------------
+
+int IsValidEnemyKind(int kind) {
+    return kind >= 0 && kind < ENEMY_KIND_COUNT;
+}
+
+const EnemyInfo* GetEnemyInfoOrUnknown(int kind) {
+    if (!IsValidEnemyKind(kind)) return &UNKNOWN_ENEMY_INFO;
+    return &ENEMY_INFO[kind];
+}
+
+int IsBossKind(int kind) {
+    return GetEnemyInfoOrUnknown(kind)->role == ROLE_BOSS;
 }
 
 int FaceCost(const Face* face) {
@@ -52,6 +70,7 @@ int FaceCost(const Face* face) {
 
 int FacePower(const Face* face) {
     if (!face || face->damaged || face->kind == FACE_EMPTY) return 0;
+    if (face->quarantined != QUAR_NONE) return 0;   // 격리: 출력만 0, 비용·종류는 유지
     if (face->kind == FACE_NUMBER) return face->value;
     if (face->kind >= FACE_KIND_COUNT) return 0;
     return FACE_INFO[face->kind].power;
@@ -98,7 +117,6 @@ int IsModifierActive(const GameState* game, int modifier) {
 }
 
 // 드라이브가 아직 확정되지 않았으면(-1) 모든 특성이 0으로 죽는다.
-// smoke 테스트처럼 SelectDrive 없이 StartCombat으로 직행하는 경로의 안전장치.
 static int DrivePerkValue(const GameState* game, int perk) {
     if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return 0;
     const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
@@ -126,6 +144,14 @@ int NonEmptyFaceCount(const GameState* game) {
     return total;
 }
 
+int UsableFaceCount(const GameState* game) {
+    int total = 0;
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) if (FacePower(&game->dice[d].faces[f]) >= 1) ++total;
+    }
+    return total;
+}
+
 int LivingEnemyCount(const GameState* game) {
     int total = 0;
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive && game->enemies[i].hp > 0) ++total;
@@ -139,12 +165,428 @@ const Face* RolledFace(const GameState* game, int dieIndex) {
     return &game->dice[dieIndex].faces[face];
 }
 
+int SlotLockedThisTurn(const GameState* game, int slot) {
+    if (slot < 0 || slot >= SLOT_COUNT) return 0;
+    return game->boss.lockedSlot[slot];
+}
+
+int SlotLockedNextTurn(const GameState* game, int slot) {
+    if (slot < 0 || slot >= SLOT_COUNT) return 0;
+    return game->boss.nextLockedSlot[slot];
+}
+
+int ResolveOrderReversed(const GameState* game) {
+    return game->boss.reversed;
+}
+
+// ---------------------------------------------------------------------------
+// 보스 기믹 공용 도우미
+// ---------------------------------------------------------------------------
+
+static EnemyState* BossEnemy(GameState* game) {
+    for (int i = 0; i < game->enemyCount; ++i) {
+        EnemyState* enemy = &game->enemies[i];
+        if (enemy->alive && IsBossKind(enemy->kind)) return enemy;
+    }
+    return 0;
+}
+
+static const BossGimmickInfo* GimmickInfo(const GameState* game) {
+    int gimmick = game->boss.gimmick;
+    if (gimmick <= GIMMICK_NONE || gimmick >= GIMMICK_COUNT) gimmick = GIMMICK_NONE;
+    return &BOSS_GIMMICK_INFO[gimmick];
+}
+
+static void ClearGimmickAnnouncements(BossRuntime* boss) {
+    for (int i = 0; i < SLOT_COUNT; ++i) { boss->lockedSlot[i] = 0; boss->nextLockedSlot[i] = 0; }
+    boss->reversed = 0;
+    boss->nextReversed = 0;
+    boss->offlineDie = -1;
+    boss->nextOfflineDie = -1;
+}
+
+// 전투 종료 경로 공용 정리. 임시 격리·오프라인·잠금·역전을 모두 걷어낸다.
+// 영구 EMPTY(kind 자체가 바뀐 면)만 그대로 남는다.
+static void GimmickCombatEnd(GameState* game) {
+    int released = 0;
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            if (game->dice[d].faces[f].quarantined != QUAR_NONE) {
+                game->dice[d].faces[f].quarantined = QUAR_NONE;
+                ++released;
+            }
+        }
+        game->dice[d].offline = 0;
+    }
+    if (released > 0) PushLog(game, L"격리가 해제되었습니다. 모든 면이 복구되었습니다.");
+    ZeroMemory(&game->boss, sizeof(game->boss));
+    game->boss.offlineDie = -1;
+    game->boss.nextOfflineDie = -1;
+    game->boss.bestSlotLastTurn = -1;
+    game->boss.nextTargetDie = -1;
+    game->boss.nextTargetFace = -1;
+}
+
+// 전투 시작 시 보스 기믹 런타임을 초기화한다.
+static void GimmickInitCombat(GameState* game) {
+    EnemyState* enemy = BossEnemy(game);
+    ZeroMemory(&game->boss, sizeof(game->boss));
+    BossRuntime* boss = &game->boss;
+    boss->offlineDie = -1;
+    boss->nextOfflineDie = -1;
+    boss->bestSlotLastTurn = -1;
+    boss->nextTargetDie = -1;
+    boss->nextTargetFace = -1;
+    if (!enemy) return;
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+    boss->gimmick = info->gimmick;
+    const BossGimmickInfo* gi = GimmickInfo(game);
+    switch (boss->gimmick) {
+    case GIMMICK_TIMEOUT:
+        boss->countdown = gi->p1;
+        break;
+    case GIMMICK_LEAK:
+    case GIMMICK_HEAP_OVERFLOW:
+    case GIMMICK_OUT_OF_MEMORY:
+        boss->gaugeMax = gi->p1;
+        break;
+    case GIMMICK_SAMPLE13:
+    case GIMMICK_ZERO_DAY:
+        boss->gaugeMax = gi->p1;
+        break;
+    case GIMMICK_RESTORE_POINT:
+        boss->checkpointHp = enemy->hp;
+        break;
+    case GIMMICK_MASTER_BACKUP:
+        boss->checkpointHp = enemy->maxHp * gi->p2 / 100;
+        break;
+    default: break;
+    }
+    if (boss->gimmick != GIMMICK_NONE)
+        PushLog2(game, L"보스 기믹 감지: %s", gi->name, 0);
+}
+
+// C:\ ACCESS.DENIED 잠금 순환: 증폭 → 공격 → 방어 → 연쇄
+static int AccessDeniedSlot(int turn) {
+    static const int order[SLOT_COUNT] = {SLOT_AMPLIFY, SLOT_ATTACK, SLOT_DEFEND, SLOT_CHAIN};
+    return order[((turn / 2) - 1) & 3];
+}
+
+static int OfflineFiresOn(int gimmick, int turn) {
+    if (gimmick == GIMMICK_AUTOPLAY) return turn >= 3 && turn % 3 == 0;
+    if (gimmick == GIMMICK_UNSAFE_EJECT) return turn >= 2 && turn % 2 == 0;
+    if (gimmick == GIMMICK_NO_MEDIA) return turn >= 2 && turn % 4 != 0;
+    return 0;
+}
+
+static int OfflineTargetDie(int gimmick, int turn) {
+    if (gimmick == GIMMICK_AUTOPLAY) return ((turn / 3) - 1) % 3;
+    if (gimmick == GIMMICK_UNSAFE_EJECT) return ((turn / 2) - 1) % 3;
+    return turn % 3;   // NO.MEDIA
+}
+
+static int ReverseFiresOn(int gimmick, int turn) {
+    if (gimmick == GIMMICK_PROXY) return turn >= 3 && turn % 3 == 0;
+    if (gimmick == GIMMICK_ROUTING_LOOP) return turn >= 2 && turn % 2 == 0;
+    return 0;
+}
+
+// 턴 시작: 이번 턴 잠금·오프라인·역전을 확정하고 다음 턴을 예고한다.
+static void GimmickTurnBegin(GameState* game) {
+    BossRuntime* boss = &game->boss;
+    ClearGimmickAnnouncements(boss);
+    if (boss->gimmick == GIMMICK_NONE || !BossEnemy(game)) return;
+    int turn = game->turn;
+    wchar_t buffer[96];
+    switch (boss->gimmick) {
+    case GIMMICK_ACCESS_DENIED:
+        if (turn >= 2 && turn % 2 == 0) boss->lockedSlot[AccessDeniedSlot(turn)] = 1;
+        if (turn + 1 >= 2 && (turn + 1) % 2 == 0) boss->nextLockedSlot[AccessDeniedSlot(turn + 1)] = 1;
+        break;
+    case GIMMICK_KERNEL_PANIC:
+        // 직전 턴 최고 출력 슬롯이 잠긴다. 다음 턴 대상은 이번 턴 플레이에 달려
+        // 있으므로 예고는 규칙 문구로 대신한다.
+        if (turn >= 2 && boss->bestSlotLastTurn >= 0 && boss->bestSlotLastTurn < SLOT_COUNT)
+            boss->lockedSlot[boss->bestSlotLastTurn] = 1;
+        break;
+    case GIMMICK_BLUE_SCREEN:
+        if (turn >= 3 && turn % 3 == 0) { boss->lockedSlot[SLOT_AMPLIFY] = 1; boss->lockedSlot[SLOT_CHAIN] = 1; }
+        if ((turn + 1) >= 3 && (turn + 1) % 3 == 0) { boss->nextLockedSlot[SLOT_AMPLIFY] = 1; boss->nextLockedSlot[SLOT_CHAIN] = 1; }
+        break;
+    case GIMMICK_AUTOPLAY:
+    case GIMMICK_UNSAFE_EJECT:
+    case GIMMICK_NO_MEDIA:
+        if (OfflineFiresOn(boss->gimmick, turn)) boss->offlineDie = (int8_t)OfflineTargetDie(boss->gimmick, turn);
+        if (OfflineFiresOn(boss->gimmick, turn + 1)) boss->nextOfflineDie = (int8_t)OfflineTargetDie(boss->gimmick, turn + 1);
+        break;
+    case GIMMICK_PROXY:
+    case GIMMICK_ROUTING_LOOP:
+        boss->reversed = (uint8_t)ReverseFiresOn(boss->gimmick, turn);
+        boss->nextReversed = (uint8_t)ReverseFiresOn(boss->gimmick, turn + 1);
+        break;
+    case GIMMICK_TIMEOUT:
+        if (boss->countdown <= 0) boss->reversed = 1;
+        boss->nextReversed = (boss->countdown == 1);
+        break;
+    default: break;   // D:\ 복원, R:\ 압력, X:\ 격리는 턴말 훅에서 진행
+    }
+    for (int i = 0; i < SLOT_COUNT; ++i) {
+        if (boss->lockedSlot[i]) {
+            // 잠긴 슬롯에 남아 있던 주사위는 배치가 해제된다.
+            for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot == i) game->dice[d].assignedSlot = -1;
+            wsprintfW(buffer, L"권한 거부: 이번 턴 %s 슬롯이 잠겼습니다.", SLOT_NAMES[i]);
+            PushLog(game, buffer);
+        }
+    }
+    if (boss->offlineDie >= 0) {
+        wsprintfW(buffer, L"연결 끊김: 이번 턴 주사위 %d이(가) 오프라인입니다.", boss->offlineDie + 1);
+        PushLog(game, buffer);
+    }
+    if (boss->reversed) PushLog(game, L"경고: 이번 턴 해결 순서가 역전됩니다.");
+    else if (boss->nextReversed) PushLog(game, L"예고: 다음 턴 해결 순서가 역전됩니다.");
+}
+
+// 격리·삭제 대상 선정. 출력 가능한 면 중에서 고르고, 영구 삭제는 삭제 후에도
+// 출력 가능한 면이 최소 하나 남는 경우로만 제한한다.
+static int PickQuarantineTarget(GameState* game, int permanent, int8_t* outDie, int8_t* outFace) {
+    int candidates[18], count = 0;
+    int usable = UsableFaceCount(game);
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            const Face* face = &game->dice[d].faces[f];
+            if (FacePower(face) < 1) continue;             // 이미 출력 0인 면은 위협이 아니다
+            if (permanent && usable - 1 < 1) continue;     // 마지막 남은 출력 면은 지울 수 없다
+            candidates[count++] = d * 6 + f;
+        }
+    }
+    if (count == 0) return 0;
+    int pick = candidates[RandomRange(game, count)];
+    *outDie = (int8_t)(pick / 6);
+    *outFace = (int8_t)(pick % 6);
+    return 1;
+}
+
+static int QuarantineTargetValid(const GameState* game, int permanent) {
+    const BossRuntime* boss = &game->boss;
+    if (boss->nextTargetDie < 0 || boss->nextTargetDie >= 3) return 0;
+    if (boss->nextTargetFace < 0 || boss->nextTargetFace >= 6) return 0;
+    const Face* face = &game->dice[boss->nextTargetDie].faces[boss->nextTargetFace];
+    if (FacePower(face) < 1) return 0;
+    if (permanent && UsableFaceCount(game) - 1 < 1) return 0;
+    return 1;
+}
+
+static void AnnounceQuarantineTarget(GameState* game, int permanent) {
+    BossRuntime* boss = &game->boss;
+    int8_t die = -1, face = -1;
+    if (PickQuarantineTarget(game, permanent, &die, &face)) {
+        boss->nextTargetDie = die;
+        boss->nextTargetFace = face;
+        boss->nextTargetPermanent = (uint8_t)permanent;
+        wchar_t buffer[96];
+        wsprintfW(buffer, permanent ? L"삭제 예고: 주사위 %d의 면 %d이(가) 표적입니다."
+                                    : L"격리 예고: 주사위 %d의 면 %d이(가) 표적입니다.",
+                  die + 1, face + 1);
+        PushLog(game, buffer);
+    } else {
+        boss->nextTargetDie = -1;
+        boss->nextTargetFace = -1;
+        boss->nextTargetPermanent = 0;
+    }
+}
+
+static int ActiveQuarantineCount(const GameState* game) {
+    int total = 0;
+    for (int d = 0; d < 3; ++d)
+        for (int f = 0; f < 6; ++f)
+            if (game->dice[d].faces[f].quarantined != QUAR_NONE) ++total;
+    return total;
+}
+
+// mode: QUAR_COMBAT 또는 남은 턴 수. permanent가 1이면 면을 영구 EMPTY로 만든다.
+static void FireQuarantine(GameState* game, int permanent, int mode) {
+    BossRuntime* boss = &game->boss;
+    if (!QuarantineTargetValid(game, permanent)) {
+        // 예고된 면이 그새 손상·삭제됐다면 즉석에서 재선정한다.
+        AnnounceQuarantineTarget(game, permanent);
+        if (!QuarantineTargetValid(game, permanent)) {
+            if (permanent) {
+                // 영구 삭제가 불가능하면 임시 격리로 대체한다.
+                AnnounceQuarantineTarget(game, 0);
+                if (QuarantineTargetValid(game, 0)) { FireQuarantine(game, 0, QUAR_COMBAT); return; }
+            }
+            boss->nextTargetDie = -1;
+            boss->nextTargetFace = -1;
+            return;
+        }
+    }
+    Face* face = &game->dice[boss->nextTargetDie].faces[boss->nextTargetFace];
+    wchar_t buffer[96];
+    if (permanent) {
+        face->kind = FACE_EMPTY;
+        face->value = 0;
+        face->damaged = 0;
+        face->quarantined = QUAR_NONE;
+        wsprintfW(buffer, L"제로데이: 주사위 %d의 면 %d이(가) 영구 삭제되었습니다!", boss->nextTargetDie + 1, boss->nextTargetFace + 1);
+    } else {
+        face->quarantined = (uint8_t)mode;
+        ++boss->quarantinesDone;
+        wsprintfW(buffer, L"격리 발동: 주사위 %d의 면 %d 출력이 봉인되었습니다.", boss->nextTargetDie + 1, boss->nextTargetFace + 1);
+    }
+    PushLog(game, buffer);
+    PushTurnTrace(game, buffer);
+    boss->nextTargetDie = -1;
+    boss->nextTargetFace = -1;
+    boss->nextTargetPermanent = 0;
+}
+
+// 보스에게 복원·되감기 회복을 적용한다. 현재 체력이 목표보다 높으면 아무것도
+// 하지 않아 복원이 오히려 체력을 낮추는 일이 없다.
+static int RestoreBossHp(GameState* game, EnemyState* enemy, int targetHp, int cap, const wchar_t* label) {
+    if (!enemy || !enemy->alive) return 0;
+    int heal = targetHp - enemy->hp;
+    if (heal <= 0) return 0;
+    if (heal > cap) heal = cap;
+    int hpBefore = enemy->hp;
+    enemy->hp = ClampInt(enemy->hp + heal, 0, enemy->maxHp);
+    heal = enemy->hp - hpBefore;
+    if (heal > 0) {
+        wchar_t buffer[96];
+        wsprintfW(buffer, L"[%s] 보스 체력 +%d (%d → %d)", label, heal, hpBefore, enemy->hp);
+        PushTurnTrace(game, buffer);
+        PushLog(game, buffer);
+    }
+    return heal;
+}
+
+// 턴말 훅: 적 행동이 끝난 뒤 게이지·복원·격리·카운트다운을 진행한다.
+static void GimmickTurnEnd(GameState* game) {
+    // 임시 격리 타이머는 보스 생사와 무관하게 턴이 지나면 줄어든다.
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            Face* face = &game->dice[d].faces[f];
+            if (face->quarantined != QUAR_NONE && face->quarantined != QUAR_COMBAT) {
+                if (--face->quarantined == QUAR_NONE) {
+                    wchar_t buffer[96];
+                    wsprintfW(buffer, L"격리 해제: 주사위 %d의 면 %d이(가) 복구되었습니다.", d + 1, f + 1);
+                    PushLog(game, buffer);
+                }
+            }
+        }
+    }
+    BossRuntime* boss = &game->boss;
+    EnemyState* enemy = BossEnemy(game);
+    if (boss->gimmick == GIMMICK_NONE || !enemy) return;
+    const BossGimmickInfo* gi = GimmickInfo(game);
+    int turn = game->turn;
+    wchar_t buffer[96];
+    switch (boss->gimmick) {
+    case GIMMICK_RESTORE_POINT:
+        if (turn % gi->p1 == 0) {
+            if (boss->restoresUsed < 2 && boss->windowDamage < gi->p2) {
+                if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"복원 지점") > 0) ++boss->restoresUsed;
+            }
+            boss->checkpointHp = enemy->hp;
+            boss->windowDamage = 0;
+        }
+        break;
+    case GIMMICK_TAPE_LOOP: {
+        int totalCap = gi->p3 * 4;   // 되감기 총량 상한
+        if (boss->damageThisTurn < gi->p2 && boss->restoredTotal < totalCap) {
+            int cap = gi->p3;
+            if (cap > totalCap - boss->restoredTotal) cap = totalCap - boss->restoredTotal;
+            boss->restoredTotal += RestoreBossHp(game, enemy, enemy->maxHp, cap, L"테이프 루프");
+        }
+        break;
+    }
+    case GIMMICK_MASTER_BACKUP:
+        if (boss->restoresUsed == 0 && enemy->hp * 100 < enemy->maxHp * gi->p1) {
+            if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"마스터 백업") > 0) boss->restoresUsed = 1;
+        }
+        break;
+    case GIMMICK_TIMEOUT:
+        if (boss->reversed) {
+            boss->countdown = gi->p1;
+        } else {
+            if (boss->damageThisTurn >= gi->p2 && boss->countdown < gi->p1) {
+                ++boss->countdown;
+                PushLog(game, L"타임아웃 지연: 카운트다운이 되감겼습니다.");
+            }
+            --boss->countdown;
+            if (boss->countdown < 0) boss->countdown = 0;
+        }
+        break;
+    case GIMMICK_LEAK:
+    case GIMMICK_HEAP_OVERFLOW:
+    case GIMMICK_OUT_OF_MEMORY:
+        if (boss->empowered) {
+            boss->empowered = 0;
+            boss->gauge = 0;
+            PushLog(game, L"강화 공격 이후 메모리 압력이 초기화되었습니다.");
+        } else {
+            if (boss->damageThisTurn >= gi->p2 && boss->gauge > 0) {
+                int reduce = boss->gimmick == GIMMICK_OUT_OF_MEMORY ? 2 : 1;
+                boss->gauge -= reduce;
+                if (boss->gauge < 0) boss->gauge = 0;
+                wsprintfW(buffer, L"압력 방출: 게이지 -%d (현재 %d/%d)", reduce, boss->gauge, boss->gaugeMax);
+                PushLog(game, buffer);
+            }
+            ++boss->gauge;
+            if (boss->gauge >= boss->gaugeMax) {
+                boss->gauge = boss->gaugeMax;
+                boss->empowered = 1;
+                PushLog(game, L"경고: 압력 한계. 다음 턴 강화 공격이 발동합니다!");
+            }
+        }
+        break;
+    case GIMMICK_SAMPLE13:
+        ++boss->gauge;
+        if (boss->gauge >= gi->p1) {
+            if (boss->quarantinesDone < gi->p2) FireQuarantine(game, 0, QUAR_COMBAT);
+            boss->gauge = 0;
+        } else if (boss->gauge == gi->p1 - 1 && boss->nextTargetDie < 0) {
+            if (boss->quarantinesDone < gi->p2) AnnounceQuarantineTarget(game, 0);
+        }
+        break;
+    case GIMMICK_SANDBOX_BREACH:
+        if (turn >= gi->p1 && turn % gi->p1 == 0) {
+            if (ActiveQuarantineCount(game) < 2) FireQuarantine(game, 0, gi->p2);
+        }
+        if ((turn + 1) % gi->p1 == 0 && ActiveQuarantineCount(game) < 2) AnnounceQuarantineTarget(game, 0);
+        break;
+    case GIMMICK_ZERO_DAY:
+        if (boss->damageThisTurn >= gi->p2 && boss->gauge > 0) {
+            --boss->gauge;
+            wsprintfW(buffer, L"오염 지연: 게이지 -1 (현재 %d/%d)", boss->gauge, boss->gaugeMax);
+            PushLog(game, buffer);
+        }
+        ++boss->gauge;
+        if (boss->gauge >= gi->p1) {
+            FireQuarantine(game, 1, 0);
+            boss->gauge = 0;
+        } else if (boss->gauge == gi->p1 - 1 && boss->nextTargetDie < 0) {
+            AnnounceQuarantineTarget(game, 1);
+        }
+        break;
+    default: break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 런 준비
+// ---------------------------------------------------------------------------
+
 void InitTitle(GameState* game) {
     ZeroMemory(game, sizeof(*game));
     game->phase = PHASE_TITLE;
     game->selectedDie = -1;
     game->selectedReward = -1;
     game->selectedDrive = -1;
+    game->boss.offlineDie = -1;
+    game->boss.nextOfflineDie = -1;
+    game->boss.bestSlotLastTurn = -1;
+    game->boss.nextTargetDie = -1;
+    game->boss.nextTargetFace = -1;
 }
 
 static void SetupStartingDice(GameState* game) {
@@ -153,12 +595,13 @@ static void SetupStartingDice(GameState* game) {
             game->dice[d].faces[f].kind = FACE_NUMBER;
             game->dice[d].faces[f].value = (uint8_t)(f + 1);
             game->dice[d].faces[f].damaged = 0;
-            game->dice[d].faces[f].reserved = 0;
+            game->dice[d].faces[f].quarantined = QUAR_NONE;
         }
         game->dice[d].rolledFace = 0;
         game->dice[d].assignedSlot = -1;
         game->dice[d].disabled = 0;
         game->dice[d].unstable = 0;
+        game->dice[d].offline = 0;
     }
 }
 
@@ -172,66 +615,23 @@ static void PickDriveChoices(GameState* game) {
     }
 }
 
-static void RollDice(GameState* game) {
-    for (int d = 0; d < 3; ++d) {
-        game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
-        game->dice[d].assignedSlot = -1;
-        game->dice[d].disabled = 0;
-        game->dice[d].unstable = 0;
+// 시드에서 파생한 독립 난수로 세 몹의 순서를 섞고 A,B / C,A / B,C로 배치해
+// 6개 일반 전투에서 각 몹이 정확히 두 번씩 등장하게 한다.
+static void BuildMobSchedule(GameState* game, uint32_t seed) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return;
+    uint32_t rng = seed ? seed : 0xA5A5A5A5u;
+    int order[3] = {0, 1, 2};
+    for (int i = 2; i > 0; --i) {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        int j = (int)(rng % (uint32_t)(i + 1));
+        int swap = order[i]; order[i] = order[j]; order[j] = swap;
     }
-    game->selectedDie = -1;
-    if (IsModifierActive(game, MOD_READ_ERROR)) game->dice[RandomRange(game, 3)].unstable = 1;
-}
-
-static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
-    const EnemyInfo* info = &ENEMY_INFO[enemy->kind];
-    int cycle = (game->turn + enemyIndex + enemy->kind) & 3;
-    enemy->intent = INTENT_ATTACK;
-    enemy->intentValue = info->damage + game->floor;
-    if (enemy->kind >= BOSS_DISK_ERROR) {
-        int bossCycle = (game->turn + enemy->kind) % 5;
-        if (bossCycle == 0) {
-            enemy->intent = INTENT_CORRUPT;
-            enemy->intentValue = info->damage - 2;
-        } else if (bossCycle == 2) {
-            enemy->intent = INTENT_GUARD;
-            enemy->intentValue = info->guard + game->floor * 2;
-        } else if (bossCycle == 4) {
-            enemy->intent = INTENT_HEAVY;
-            enemy->intentValue = info->damage + 3 + game->floor;
-        }
-        return;
-    }
-    if (cycle == 1 && (enemy->kind == ENEMY_CACHE || enemy->kind == ENEMY_FRAGMENT)) {
-        enemy->intent = INTENT_GUARD;
-        enemy->intentValue = info->guard;
-    } else if (cycle == 2 && (enemy->kind == ENEMY_WORM || enemy->kind == ENEMY_DAEMON)) {
-        enemy->intent = INTENT_REPAIR;
-        enemy->intentValue = 3 + game->floor;
-    } else if (cycle == 3 && (enemy->kind == ENEMY_TROJAN || enemy->kind == ENEMY_ROOTKIT)) {
-        enemy->intent = INTENT_HEAVY;
-        enemy->intentValue = info->damage + 4;
-    } else if (cycle == 0 && enemy->kind == ENEMY_SPYWARE) {
-        enemy->intent = INTENT_CORRUPT;
-        enemy->intentValue = info->damage;
-    }
-}
-
-static void ApplyFragmentation(GameState* game);
-
-static void BeginTurn(GameState* game) {
-    game->playerBlock = 0;
-    game->lastDamage = 0;
-    game->lastBlock = 0;
-    game->keybUsedThisTurn = 0;
-    if (game->turn == 1 && IsTsrInstalled(game, TSR_SMARTDRV)) {
-        game->playerBlock = TSR_INFO[TSR_SMARTDRV].value;
-        PushLog2(game, L"%s: 선제 캐시 방어도 +%d.", TSR_INFO[TSR_SMARTDRV].name, game->playerBlock);
-    }
-    RollDice(game);
-    ApplyFragmentation(game);
-    for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) PlanEnemy(game, &game->enemies[i], i);
-    PushLog(game, L"주사위를 슬롯에 배치하고 스페이스 키로 실행합니다.");
+    const int* mobs = DRIVE_MOBS[game->selectedDrive];
+    int a = mobs[order[0]], b = mobs[order[1]], c = mobs[order[2]];
+    game->mobSchedule[0] = a; game->mobSchedule[1] = b;   // 1층
+    game->mobSchedule[2] = c; game->mobSchedule[3] = a;   // 2층
+    game->mobSchedule[4] = b; game->mobSchedule[5] = c;   // 3층
+    game->mobScheduleReady = 1;
 }
 
 void NewRun(GameState* game, uint32_t seed) {
@@ -245,6 +645,11 @@ void NewRun(GameState* game, uint32_t seed) {
     game->selectedDie = -1;
     game->selectedReward = -1;
     game->selectedDrive = -1;
+    game->boss.offlineDie = -1;
+    game->boss.nextOfflineDie = -1;
+    game->boss.bestSlotLastTurn = -1;
+    game->boss.nextTargetDie = -1;
+    game->boss.nextTargetFace = -1;
     SetupStartingDice(game);
     PickDriveChoices(game);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
@@ -269,19 +674,41 @@ void SelectDrive(GameState* game, int choiceIndex) {
         face->value = (uint8_t)FACE_INFO[kind].power;
         PushLog2(game, L"격리 데이터 회수: %s 면 설치 (%dB).", FACE_INFO[kind].name, FaceCost(face));
     }
+    BuildMobSchedule(game, NextRandom(game));
     wchar_t buffer[96];
     wsprintfW(buffer, L"%s%s 마운트 완료. 심층 스캔을 시작합니다.", drive->letter, drive->label);
     PushLog(game, buffer);
     StartCombat(game);
 }
 
+// 테스트 전용 경로: 드라이브와 일반전 순서만 준비한다. 특성 적용·전투 시작은
+// 하지 않으며, preserveModifiers면 테스트가 주입한 손상 조합을 보존한다.
+void ConfigureDriveForTest(GameState* game, int drive, uint32_t scheduleSeed, int preserveModifiers) {
+    if (drive < 0 || drive >= DRIVE_COUNT) return;
+    game->selectedDrive = drive;
+    if (!preserveModifiers) {
+        game->modifierA = DRIVE_INFO[drive].modifierA;
+        game->modifierB = DRIVE_INFO[drive].modifierB;
+    }
+    BuildMobSchedule(game, scheduleSeed);
+}
+
+// ---------------------------------------------------------------------------
+// 전투 생성
+// ---------------------------------------------------------------------------
+
 static void AddEnemy(GameState* game, int kind) {
     if (game->enemyCount >= 3) return;
+    if (!IsValidEnemyKind(kind)) {
+        PushLog(game, L"오류: 유효하지 않은 적 데이터가 거부되었습니다.");
+        return;
+    }
+    const EnemyInfo* info = &ENEMY_INFO[kind];
     EnemyState* enemy = &game->enemies[game->enemyCount++];
     ZeroMemory(enemy, sizeof(*enemy));
     enemy->kind = (uint8_t)kind;
     enemy->alive = 1;
-    int hp = ENEMY_INFO[kind].hp + game->floor * 3;
+    int hp = info->hp + info->hpGrowth * game->floor;
     if (IsModifierActive(game, MOD_OVERALLOC)) hp = (hp * 130 + 99) / 100;
     int weaken = DrivePerkValue(game, PERK_ENEMY_HP_DOWN);
     if (weaken > 0) hp = ClampInt(hp * (100 - weaken) / 100, 1, hp);
@@ -289,29 +716,218 @@ static void AddEnemy(GameState* game, int kind) {
     enemy->maxHp = hp;
 }
 
-void StartCombat(GameState* game) {
+static void BeginTurn(GameState* game);
+
+int StartCombat(GameState* game) {
+    // 유효하지 않은 드라이브로는 적을 만들지 않는다. 임의 기본값 대체 금지.
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) {
+        game->phase = PHASE_DRIVE_SELECT;
+        game->enemyCount = 0;
+        ZeroMemory(game->enemies, sizeof(game->enemies));
+        PushLog(game, L"마운트 오류: 볼륨이 확정되지 않아 드라이브 선택으로 복귀합니다.");
+        return 0;
+    }
+    if (!game->mobScheduleReady) BuildMobSchedule(game, NextRandom(game));
     game->phase = PHASE_COMBAT;
     game->turn = 1;
     game->hasTurnResult = 0;
     game->enemyCount = 0;
     game->targetEnemy = 0;
     ZeroMemory(game->enemies, sizeof(game->enemies));
+    int floor = ClampInt(game->floor, 0, 2);
     if (game->encounter == 2) {
-        AddEnemy(game, BOSS_DISK_ERROR + game->floor);
+        AddEnemy(game, DRIVE_BOSSES[game->selectedDrive][floor]);
     } else {
-        int poolStart = game->floor == 0 ? ENEMY_GLITCH : game->floor == 1 ? ENEMY_SPYWARE : ENEMY_FRAGMENT;
-        int poolCount = game->floor == 0 ? 3 : 4;
-        AddEnemy(game, poolStart + RandomRange(game, poolCount));
+        int slot = ClampInt(floor * 2 + game->encounter, 0, 5);
+        AddEnemy(game, game->mobSchedule[slot]);
     }
+    GimmickInitCombat(game);
     BeginTurn(game);
+    return 1;
 }
 
-void AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
-    if (game->phase != PHASE_COMBAT || dieIndex < 0 || dieIndex >= 3 || slotIndex < 0 || slotIndex >= SLOT_COUNT) return;
+// ---------------------------------------------------------------------------
+// 의도 계획: 일반 몹은 패턴, 보스는 공용 주기 + 기믹 오버라이드
+// ---------------------------------------------------------------------------
+
+static void PlanBoss(GameState* game, EnemyState* enemy) {
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+    BossRuntime* boss = &game->boss;
+    const BossGimmickInfo* gi = GimmickInfo(game);
+    int damage = info->damage + info->damageGrowth * game->floor;
+    int guard = info->guard + info->guardGrowth * game->floor;
+    // 압력 한계: 예고된 강화 공격이 이번 턴 모든 주기를 대체한다.
+    if (boss->empowered) {
+        enemy->intent = (uint8_t)(boss->gimmick == GIMMICK_HEAP_OVERFLOW ? INTENT_CORRUPT : INTENT_HEAVY);
+        enemy->intentValue = damage + gi->p3;
+        return;
+    }
+    // 타임아웃 발동 턴: 순서는 역전되지만 보스는 대기(방어)한다.
+    if (boss->gimmick == GIMMICK_TIMEOUT && boss->reversed) {
+        enemy->intent = INTENT_GUARD;
+        enemy->intentValue = guard;
+        return;
+    }
+    int bossCycle = (game->turn + enemy->kind) % 5;
+    if (bossCycle == 0) {
+        enemy->intent = INTENT_CORRUPT;
+        enemy->intentValue = damage - 2 > 1 ? damage - 2 : 1;
+    } else if (bossCycle == 2) {
+        enemy->intent = INTENT_GUARD;
+        enemy->intentValue = guard;
+    } else if (bossCycle == 4) {
+        enemy->intent = INTENT_HEAVY;
+        enemy->intentValue = damage + 3;
+    } else {
+        enemy->intent = INTENT_ATTACK;
+        enemy->intentValue = damage;
+    }
+    // 역전 턴에는 강공·오염을 일반 공격으로 낮춰 억울한 즉사를 막는다.
+    if (boss->reversed && (enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT)) {
+        enemy->intent = INTENT_ATTACK;
+        enemy->intentValue = damage;
+    }
+}
+
+// 기존 8종 몹의 하드코딩 주기를 그대로 재현한다 (레거시 호환).
+static void PlanLegacyMob(GameState* game, EnemyState* enemy, int enemyIndex) {
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+    int cycle = (game->turn + enemyIndex + enemy->kind) & 3;
+    enemy->intent = INTENT_ATTACK;
+    enemy->intentValue = info->damage + game->floor;
+    if (cycle == 1 && (enemy->kind == ENEMY_CACHE || enemy->kind == ENEMY_FRAGMENT)) {
+        enemy->intent = INTENT_GUARD;
+        enemy->intentValue = info->guard;
+    } else if (cycle == 2 && (enemy->kind == ENEMY_WORM || enemy->kind == ENEMY_DAEMON)) {
+        enemy->intent = INTENT_REPAIR;
+        enemy->intentValue = 3 + game->floor;
+    } else if (cycle == 3 && (enemy->kind == ENEMY_TROJAN || enemy->kind == ENEMY_ROOTKIT)) {
+        enemy->intent = INTENT_HEAVY;
+        enemy->intentValue = info->damage + 4;
+    } else if (cycle == 0 && enemy->kind == ENEMY_SPYWARE) {
+        enemy->intent = INTENT_CORRUPT;
+        enemy->intentValue = info->damage;
+    }
+}
+
+static void PlanMob(GameState* game, EnemyState* enemy, int enemyIndex) {
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+    if (info->pattern == PATTERN_LEGACY) { PlanLegacyMob(game, enemy, enemyIndex); return; }
+    int damage = info->damage + info->damageGrowth * game->floor;
+    int guard = info->guard + info->guardGrowth * game->floor;
+    int corrupt = damage - 1 > 1 ? damage - 1 : 1;
+    int turn = game->turn;
+    int step = (turn - 1) & 3;
+    enemy->intent = INTENT_ATTACK;
+    enemy->intentValue = damage;
+    switch (info->pattern) {
+    case PATTERN_ASSAULT:
+        if (step == 2) { enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 3; }
+        break;
+    case PATTERN_CORRUPTER:
+        if (step == 0) { enemy->intent = INTENT_CORRUPT; enemy->intentValue = corrupt; }
+        else if (step == 3) { enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 3; }
+        break;
+    case PATTERN_BULWARK:
+        if (step == 0 || step == 2) { enemy->intent = INTENT_GUARD; enemy->intentValue = guard; }
+        else if (step == 3) { enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 3; }
+        break;
+    case PATTERN_MEDIC:
+        if (step == 1) { enemy->intent = INTENT_REPAIR; enemy->intentValue = 3 + game->floor; }
+        else if (step == 2) { enemy->intent = INTENT_GUARD; enemy->intentValue = guard; }
+        break;
+    case PATTERN_OPENER:
+        if (turn == 1) { enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 3; }
+        else if ((turn - 2) % 3 == 1) { enemy->intent = INTENT_GUARD; enemy->intentValue = guard; }
+        break;
+    case PATTERN_RAMP: {
+        int ramp = turn - 1;
+        if (ramp > 5) ramp = 5;
+        enemy->intentValue = damage + ramp;
+        break;
+    }
+    case PATTERN_ERRATIC: {
+        // 무작위처럼 보이지만 (턴, 종류, 자리)의 순수 함수라 예고와 재현이 가능하다.
+        uint32_t h = (uint32_t)(turn * 2654435761u) ^ (uint32_t)(enemy->kind * 97 + enemyIndex * 31);
+        h ^= h >> 13;
+        switch (h % 4u) {
+        case 1: enemy->intent = INTENT_GUARD; enemy->intentValue = guard; break;
+        case 2: enemy->intent = INTENT_CORRUPT; enemy->intentValue = corrupt; break;
+        case 3: enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 2; break;
+        default: break;
+        }
+        break;
+    }
+    case PATTERN_SPIKE:
+        if (step == 0) { enemy->intent = INTENT_HEAVY; enemy->intentValue = damage + 3; }
+        else if (step == 1) { enemy->intent = INTENT_CORRUPT; enemy->intentValue = corrupt; }
+        break;
+    default: break;
+    }
+}
+
+static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
+    if (IsBossKind(enemy->kind)) PlanBoss(game, enemy);
+    else PlanMob(game, enemy, enemyIndex);
+}
+
+// ---------------------------------------------------------------------------
+// 턴 진행
+// ---------------------------------------------------------------------------
+
+static void ApplyFragmentation(GameState* game);
+
+// 오프라인 발동 턴에는 조각화 적용을 건너뛴다 (중첩 무력화 방지).
+static void ApplyFragmentationIfAllowed(GameState* game) {
+    if (game->boss.offlineDie >= 0) return;
+    ApplyFragmentation(game);
+}
+
+static void RollDice(GameState* game) {
+    for (int d = 0; d < 3; ++d) {
+        game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
+        game->dice[d].assignedSlot = -1;
+        game->dice[d].disabled = 0;
+        game->dice[d].unstable = 0;
+        game->dice[d].offline = 0;
+    }
+    game->selectedDie = -1;
+    if (IsModifierActive(game, MOD_READ_ERROR)) game->dice[RandomRange(game, 3)].unstable = 1;
+}
+
+static void BeginTurn(GameState* game) {
+    game->playerBlock = 0;
+    game->lastDamage = 0;
+    game->lastBlock = 0;
+    game->keybUsedThisTurn = 0;
+    game->boss.damageThisTurn = 0;
+    if (game->turn == 1 && IsTsrInstalled(game, TSR_SMARTDRV)) {
+        game->playerBlock = TSR_INFO[TSR_SMARTDRV].value;
+        PushLog2(game, L"%s: 선제 캐시 방어도 +%d.", TSR_INFO[TSR_SMARTDRV].name, game->playerBlock);
+    }
+    GimmickTurnBegin(game);
+    RollDice(game);
+    if (game->boss.offlineDie >= 0 && game->boss.offlineDie < 3) {
+        game->dice[game->boss.offlineDie].offline = 1;
+        ApplyFragmentationIfAllowed(game);   // 오프라인 턴엔 즉시 반환된다
+    } else {
+        ApplyFragmentation(game);
+    }
+    for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) PlanEnemy(game, &game->enemies[i], i);
+    PushLog(game, L"주사위를 슬롯에 배치하고 스페이스 키로 실행합니다.");
+}
+
+int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
+    if (game->phase != PHASE_COMBAT || dieIndex < 0 || dieIndex >= 3 || slotIndex < 0 || slotIndex >= SLOT_COUNT) return 0;
+    if (game->boss.lockedSlot[slotIndex]) {
+        PushLog2(game, L"권한 거부: %s 슬롯은 이번 턴 잠겨 있습니다.", SLOT_NAMES[slotIndex], 0);
+        return 0;
+    }
     for (int d = 0; d < 3; ++d) if (d != dieIndex && game->dice[d].assignedSlot == slotIndex) game->dice[d].assignedSlot = -1;
     if (game->dice[dieIndex].assignedSlot == slotIndex) game->dice[dieIndex].assignedSlot = -1;
     else game->dice[dieIndex].assignedSlot = (int8_t)slotIndex;
     game->selectedDie = dieIndex;
+    return 1;
 }
 
 void UnassignDie(GameState* game, int dieIndex) {
@@ -343,10 +959,15 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
     enemy->block -= absorbed;
     damage -= absorbed;
     enemy->hp -= damage;
+    // 피해 임계 기믹(복원·압력·오염 지연)은 실제 체력 피해만 센다.
+    if (damage > 0 && IsBossKind(enemy->kind)) {
+        game->boss.damageThisTurn += damage;
+        game->boss.windowDamage += damage;
+    }
     if (enemy->hp <= 0) {
         enemy->hp = 0;
         enemy->alive = 0;
-        PushLog2(game, L"%s 삭제 완료. 피해 %d.", ENEMY_INFO[enemy->kind].name, damage);
+        PushLog2(game, L"%s 삭제 완료. 피해 %d.", GetEnemyInfoOrUnknown(enemy->kind)->name, damage);
         game->targetEnemy = FirstLivingEnemy(game);
     }
     return damage;
@@ -383,32 +1004,58 @@ static int RollOutputSum(const GameState* game) {
 }
 
 static int SlotPower(const GameState* game, int slot, int* kindOut) {
+    if (kindOut) *kindOut = FACE_EMPTY;
+    // 잠긴 슬롯은 배치가 거부되지만, 안전을 위해 해결 단계에서도 출력 0을 보장한다.
+    if (game->boss.lockedSlot[slot]) return 0;
     int die = DieForSlot(game, slot);
-    if (die < 0 || game->dice[die].disabled) {
-        if (kindOut) *kindOut = FACE_EMPTY;
-        return 0;
-    }
+    if (die < 0 || game->dice[die].disabled || game->dice[die].offline) return 0;
     const Face* face = RolledFace(game, die);
     if (!face) return 0;
     if (kindOut) *kindOut = face->kind;
     return FacePower(face);
 }
 
-static void ResolvePlayer(GameState* game) {
+// ---------------------------------------------------------------------------
+// 슬롯별 플레이어 해결기. 해결 순서 변경(역전)을 지원하기 위해 지역 변수 대신
+// ResolveContext로 상태를 잇는다.
+// ---------------------------------------------------------------------------
+
+struct ResolveContext {
+    int ampBonus;
+    int ampKind;
+    int slotOutput[SLOT_COUNT];   // 슬롯별 실제 산출량 (KERNEL.PANIC 잠금 판정)
+};
+
+static void ResolveAmplify(GameState* game, ResolveContext* ctx, int wasted) {
     wchar_t trace[96];
     int ampKind = FACE_EMPTY;
     int ampPower = SlotPower(game, SLOT_AMPLIFY, &ampKind);
     int ampBonus = ampPower / 2;
     if (ampKind == FACE_BOOST) ampBonus = ampPower;
     if (ampKind == FACE_WILD) ampBonus += 2;
+    if (wasted) {
+        // 역전 턴: 공격·방어가 이미 해결된 뒤라 보너스가 소실된다.
+        if (ampPower > 0) wsprintfW(trace, L"[증폭] 역전으로 해결이 끝난 뒤 도착 → 보너스 %d 소실", ampBonus);
+        else lstrcpyW(trace, L"[증폭] 비어 있음 → 보너스 없음");
+        PushTurnTrace(game, trace);
+        ctx->slotOutput[SLOT_AMPLIFY] = 0;
+        return;
+    }
+    ctx->ampBonus = ampBonus;
+    ctx->ampKind = ampKind;
+    ctx->slotOutput[SLOT_AMPLIFY] = ampBonus;
     if (ampPower <= 0) lstrcpyW(trace, L"[증폭] 비어 있음 → 공격·방어 보너스 +0");
     else if (ampKind == FACE_BOOST) wsprintfW(trace, L"[증폭] 증폭 면 %d × 100%% = 공격·방어 +%d", ampPower, ampBonus);
     else if (ampKind == FACE_WILD) wsprintfW(trace, L"[증폭] 와일드 %d ÷ 2 + 특수 2 = 공격·방어 +%d", ampPower, ampBonus);
     else wsprintfW(trace, L"[증폭] 출력 %d ÷ 2 = 공격·방어 +%d", ampPower, ampBonus);
     PushTurnTrace(game, trace);
+}
 
+static void ResolveAttack(GameState* game, ResolveContext* ctx) {
+    wchar_t trace[96];
     int attackKind = FACE_EMPTY;
     int attackPower = SlotPower(game, SLOT_ATTACK, &attackKind);
+    int ampBonus = ctx->ampBonus;
     int checksumBonus = 0;
     if (IsModifierActive(game, MOD_CHECKSUM) && (RollOutputSum(game) & 1) == 0) {
         checksumBonus = 2;
@@ -433,7 +1080,8 @@ static void ResolvePlayer(GameState* game) {
     if (attackKind == FACE_LEECH && dealt > 0) {
         int heal = dealt / 3 + 1;
         int hpBefore = game->playerHp;
-        game->playerHp = ClampInt(game->playerHp + heal, 0, game->playerMaxHp);
+        int upper = game->playerHp + heal;
+        game->playerHp = upper > game->playerMaxHp ? game->playerMaxHp : upper;
         actualHeal = game->playerHp - hpBefore;
     }
     if (attackPower > 0 && attackKind == FACE_FIRE) wsprintfW(trace, L"[적중] 적 방어도 %d 흡수 → 체력 -%d (%d → %d) · 화상 2 부여",
@@ -448,72 +1096,112 @@ static void ResolvePlayer(GameState* game) {
     else lstrcpyW(trace, L"[적중] 적용할 공격 피해 없음");
     PushTurnTrace(game, trace);
     game->lastDamage = attackDamage;
+    ctx->slotOutput[SLOT_ATTACK] = attackDamage;
+}
 
+static void ResolveDefend(GameState* game, ResolveContext* ctx) {
+    wchar_t trace[96];
     int defendKind = FACE_EMPTY;
     int defendPower = SlotPower(game, SLOT_DEFEND, &defendKind);
+    int ampBonus = ctx->ampBonus;
     int block = defendPower > 0 ? defendPower + ampBonus : 0;
     if (defendKind == FACE_SHIELD) block *= 2;
     if (defendKind == FACE_WILD) block += 3;
     game->playerBlock += block;
     game->lastBlock = block;
+    ctx->slotOutput[SLOT_DEFEND] = block;
     if (defendPower <= 0) lstrcpyW(trace, L"[방어] 방어 슬롯이 비어 있음 → 방어도 +0");
     else if (defendKind == FACE_SHIELD) wsprintfW(trace, L"[방어] (기본 %d + 증폭 %d) × 방벽 2 = 방어도 +%d", defendPower, ampBonus, block);
     else if (defendKind == FACE_WILD) wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d + 특수 3 = 방어도 +%d", defendPower, ampBonus, block);
     else wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d = 방어도 +%d", defendPower, ampBonus, block);
     PushTurnTrace(game, trace);
+}
 
+static void ResolveChain(GameState* game, ResolveContext* ctx) {
+    wchar_t trace[96];
     int chainKind = FACE_EMPTY;
     int chainPower = SlotPower(game, SLOT_CHAIN, &chainKind);
-    if (chainPower > 0) {
-        if (game->lastDamage > 0 && LivingEnemyCount(game) > 0) {
-            int repeat = (game->lastDamage * (chainPower + 4)) / 13;
-            if (chainKind == FACE_ECHO) repeat = game->lastDamage;
-            if (chainKind == FACE_WILD) repeat += 2;
-            int chainTarget = FirstLivingEnemy(game);
-            int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
-            int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
-            DamageEnemy(game, chainTarget, repeat);
-            int hpAfter = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
-            int absorbed = blockBefore < repeat ? blockBefore : repeat;
-            if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, repeat, absorbed, hpBefore - hpAfter);
-            else if (chainKind == FACE_WILD) wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
-            else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
-            PushTurnTrace(game, trace);
-        } else if (game->lastBlock > 0) {
-            int repeat = (game->lastBlock * (chainPower + 4)) / 13;
-            if (chainKind == FACE_ECHO) repeat = game->lastBlock;
-            game->playerBlock += repeat;
-            if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d", game->lastBlock, repeat);
-            else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d", game->lastBlock, chainPower, repeat);
-            PushTurnTrace(game, trace);
-        } else PushTurnTrace(game, L"[연쇄] 반복할 공격·방어가 없어 발동하지 않음");
-    } else PushTurnTrace(game, L"[연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음");
+    if (chainPower <= 0) {
+        PushTurnTrace(game, L"[연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음");
+        return;
+    }
+    if (game->lastDamage > 0 && LivingEnemyCount(game) > 0) {
+        int repeat = (game->lastDamage * (chainPower + 4)) / 13;
+        if (chainKind == FACE_ECHO) repeat = game->lastDamage;
+        if (chainKind == FACE_WILD) repeat += 2;
+        int chainTarget = FirstLivingEnemy(game);
+        int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
+        int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
+        DamageEnemy(game, chainTarget, repeat);
+        int hpAfter = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
+        int absorbed = blockBefore < repeat ? blockBefore : repeat;
+        ctx->slotOutput[SLOT_CHAIN] = repeat;
+        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, repeat, absorbed, hpBefore - hpAfter);
+        else if (chainKind == FACE_WILD) wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
+        else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
+        PushTurnTrace(game, trace);
+    } else if (game->lastBlock > 0) {
+        int repeat = (game->lastBlock * (chainPower + 4)) / 13;
+        if (chainKind == FACE_ECHO) repeat = game->lastBlock;
+        game->playerBlock += repeat;
+        ctx->slotOutput[SLOT_CHAIN] = repeat;
+        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d", game->lastBlock, repeat);
+        else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d", game->lastBlock, chainPower, repeat);
+        PushTurnTrace(game, trace);
+    } else PushTurnTrace(game, L"[연쇄] 반복할 공격·방어가 없어 발동하지 않음");
+}
+
+static void ResolvePlayer(GameState* game) {
+    ResolveContext ctx = {};
+    ctx.ampKind = FACE_EMPTY;
+    int reversed = ResolveOrderReversed(game);
+    game->lastTurnReversed = reversed;
+    if (reversed) {
+        PushTurnTrace(game, L"[역전] 해결 순서: 연쇄 → 방어 → 공격 → 증폭");
+        ResolveChain(game, &ctx);
+        ResolveDefend(game, &ctx);
+        ResolveAttack(game, &ctx);
+        ResolveAmplify(game, &ctx, 1);
+    } else {
+        ResolveAmplify(game, &ctx, 0);
+        ResolveAttack(game, &ctx);
+        ResolveDefend(game, &ctx);
+        ResolveChain(game, &ctx);
+    }
+    // KERNEL.PANIC: 이번 턴 출력이 가장 컸던 슬롯이 다음 턴 잠금 대상이 된다.
+    int best = -1, bestValue = 0;
+    for (int s = 0; s < SLOT_COUNT; ++s) {
+        if (ctx.slotOutput[s] > bestValue) { bestValue = ctx.slotOutput[s]; best = s; }
+    }
+    game->boss.bestSlotLastTurn = (int8_t)best;
 }
 
 static void ResolveEnemies(GameState* game) {
     for (int i = 0; i < game->enemyCount; ++i) {
         EnemyState* enemy = &game->enemies[i];
         if (!enemy->alive) continue;
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
         if (enemy->burn > 0) {
             --enemy->burn;
             int hpBefore = enemy->hp;
             DamageEnemy(game, i, 3);
             wchar_t burnTrace[96]; wsprintfW(burnTrace, L"[화상] %s 체력 -%d (%d → %d)",
-                ENEMY_INFO[enemy->kind].code, hpBefore - enemy->hp, hpBefore, enemy->hp);
+                info->code, hpBefore - enemy->hp, hpBefore, enemy->hp);
             PushTurnTrace(game, burnTrace);
             if (!enemy->alive) continue;
         }
         wchar_t trace[96];
         if (enemy->intent == INTENT_GUARD) {
             enemy->block += enemy->intentValue;
-            wsprintfW(trace, L"[적 행동] %s 방어 → 적 방어도 +%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue);
+            wsprintfW(trace, L"[적 행동] %s 방어 → 적 방어도 +%d", info->code, enemy->intentValue);
         } else if (enemy->intent == INTENT_REPAIR) {
             int hpBefore = enemy->hp;
             enemy->hp = ClampInt(enemy->hp + enemy->intentValue, 0, enemy->maxHp);
-            wsprintfW(trace, L"[적 행동] %s 복구 → 체력 +%d (%d → %d)", ENEMY_INFO[enemy->kind].code, enemy->hp - hpBefore, hpBefore, enemy->hp);
+            wsprintfW(trace, L"[적 행동] %s 복구 → 체력 +%d (%d → %d)", info->code, enemy->hp - hpBefore, hpBefore, enemy->hp);
         } else {
             int damage = enemy->intentValue;
             int absorbed = 0;
+            int empowered = game->boss.empowered && IsBossKind(enemy->kind);
             if (enemy->intent != INTENT_CORRUPT) {
                 absorbed = game->playerBlock < damage ? game->playerBlock : damage;
                 game->playerBlock -= absorbed;
@@ -521,13 +1209,17 @@ static void ResolveEnemies(GameState* game) {
             }
             game->playerHp -= damage;
             if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 방어도를 무시했습니다.");
-            if (enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 오염 %d → 방어도 무시, 내 체력 -%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue, damage);
-            else wsprintfW(trace, L"[적 행동] %s 공격 %d - 방어도 %d = 내 체력 -%d", ENEMY_INFO[enemy->kind].code, enemy->intentValue, absorbed, damage);
+            if (empowered && enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 강화 오염 %d → 방어도 무시, 내 체력 -%d", info->code, enemy->intentValue, damage);
+            else if (empowered) wsprintfW(trace, L"[적 행동] %s 강화 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
+            else if (enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 오염 %d → 방어도 무시, 내 체력 -%d", info->code, enemy->intentValue, damage);
+            else wsprintfW(trace, L"[적 행동] %s 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
         }
         PushTurnTrace(game, trace);
         if (game->playerHp <= 0) {
             game->playerHp = 0;
             game->phase = PHASE_GAMEOVER;
+            // 임시 기믹 상태는 게임오버 화면으로도 새어 나가면 안 된다.
+            GimmickCombatEnd(game);
             PushLog(game, L"시스템 정지. R 키로 다시 시작하십시오.");
             return;
         }
@@ -547,7 +1239,6 @@ static void GenerateRewards(GameState* game) {
 
 // 보스 전리품: 아직 설치하지 않은 TSR 중에서 3개를 제시한다. 특정 손상에
 // 대항하는 TSR은 이번 런에 그 손상이 있을 때만 후보가 된다 (죽은 카드 방지).
-// 풀 최소 크기: 6 - 대항 2종 - 기설치 1개 = 3이라 항상 세 장이 나온다.
 static void GenerateTsrRewards(GameState* game) {
     int pool[TSR_COUNT], count = 0;
     for (int i = 0; i < TSR_COUNT; ++i) {
@@ -568,10 +1259,12 @@ static void GenerateTsrRewards(GameState* game) {
 }
 
 static void CombatWon(GameState* game) {
+    // 어떤 조기 return보다 먼저 임시 기믹 상태를 정리한다. 영구 EMPTY만 남는다.
+    GimmickCombatEnd(game);
     ++game->combatsWon;
     if (game->floor == 2 && game->encounter == 2) {
         game->phase = PHASE_VICTORY;
-        PushLog(game, L"포맷 중단. 디스크가 복구되었습니다.");
+        PushLog(game, L"침입 프로세스 전멸. 디스크가 복구되었습니다.");
         return;
     }
     int heal = DrivePerkValue(game, PERK_HEAL_ON_WIN);
@@ -605,6 +1298,7 @@ void EndTurn(GameState* game) {
         return;
     }
     ClearTurnTrace(game);
+    // 읽기 오류의 재굴림은 오프라인 출력 0보다 먼저 처리된다.
     for (int d = 0; d < 3; ++d) {
         if (game->dice[d].unstable) {
             game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
@@ -613,6 +1307,11 @@ void EndTurn(GameState* game) {
             PushTurnTrace(game, trace);
             break;
         }
+    }
+    if (game->boss.offlineDie >= 0) {
+        wchar_t trace[96];
+        wsprintfW(trace, L"[오프라인] 주사위 %d 연결 끊김 → 이번 턴 출력 0", game->boss.offlineDie + 1);
+        PushTurnTrace(game, trace);
     }
     int enemyHpBefore = 0;
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpBefore += game->enemies[i].hp;
@@ -641,6 +1340,7 @@ void EndTurn(GameState* game) {
         game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);
     PushLog(game, result);
     if (game->phase == PHASE_GAMEOVER) return;
+    GimmickTurnEnd(game);
     if (LivingEnemyCount(game) == 0) {
         CombatWon(game);
         return;
@@ -710,8 +1410,7 @@ void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     ContinueAfterReward(game);
 }
 
-// 보스 전리품 카드를 클릭하면 그 자리에서 상주가 시작된다. 면과 달리
-// 교체 없이 순수하게 더해지므로, 청구서는 다음 층의 좁아진 한도에서 돌아온다.
+// 보스 전리품 카드를 클릭하면 그 자리에서 상주가 시작된다.
 void InstallTsr(GameState* game, int rewardIndex) {
     if (game->phase != PHASE_REWARD || !game->rewardIsTsr) return;
     if (rewardIndex < 0 || rewardIndex >= 3) return;
@@ -723,8 +1422,7 @@ void InstallTsr(GameState* game, int rewardIndex) {
     ContinueAfterReward(game);
 }
 
-// 면을 설치하는 대신 체력을 회복한다. 덱 강화를 한 번 포기하는 대가라
-// 이미 체력이 가득 찼다면 아무것도 얻지 못하므로 선택 자체를 막는다.
+// 면을 설치하는 대신 체력을 회복한다.
 void RepairSector(GameState* game) {
     if (game->phase != PHASE_REWARD) return;
     if (game->playerHp >= game->playerMaxHp) return;
@@ -751,11 +1449,11 @@ void PruneFace(GameState* game, int dieIndex, int faceIndex) {
     face->kind = FACE_EMPTY;
     face->value = 0;
     face->damaged = 0;
+    face->quarantined = QUAR_NONE;
     PushLog(game, L"면을 삭제해 용량을 확보했습니다.");
 }
 
-// 정리 화면에서 상주 프로그램을 종료해 용량을 되찾는다. HIMEM을 내리면
-// 한도도 함께 줄지만, 면은 언제든 0B까지 비울 수 있어 막다른 길은 없다.
+// 정리 화면에서 상주 프로그램을 종료해 용량을 되찾는다.
 void UninstallTsr(GameState* game, int tsrIndex) {
     if (game->phase != PHASE_PRUNE) return;
     if (tsrIndex < 0 || tsrIndex >= TSR_COUNT || !game->tsrInstalled[tsrIndex]) return;
@@ -764,13 +1462,12 @@ void UninstallTsr(GameState* game, int tsrIndex) {
 }
 
 // KEYB: 판독이 끝난 뒤 턴마다 한 번, 선택한 주사위를 다시 굴린다.
-// 굴림이 바뀌므로 조각화 중복 판정도 다시 계산한다.
 void KeybReroll(GameState* game, int dieIndex) {
     if (game->phase != PHASE_COMBAT || !IsTsrInstalled(game, TSR_KEYB)) return;
     if (game->keybUsedThisTurn || dieIndex < 0 || dieIndex >= 3) return;
     game->dice[dieIndex].rolledFace = (uint8_t)RandomRange(game, 6);
     game->keybUsedThisTurn = 1;
-    ApplyFragmentation(game);
+    ApplyFragmentationIfAllowed(game);
     wchar_t buffer[96];
     wsprintfW(buffer, L"KEYB: 주사위 %d 재입력 → 출력 %d.", dieIndex + 1, FacePower(RolledFace(game, dieIndex)));
     PushLog(game, buffer);

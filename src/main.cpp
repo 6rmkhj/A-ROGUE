@@ -9,6 +9,7 @@ GameState gGame;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
+int gGuidePage;
 static int gHoverId = -1;
 
 // ---- corrupted-sector dice reveal (display only) --------------------------
@@ -220,7 +221,11 @@ static void ClickCombat(int x, int y) {
     for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
     for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) {
-        if (gGame.selectedDie >= 0) { AssignDieToSlot(&gGame, gGame.selectedDie, i); PlaySfxPitched(SFX_SLOT_SET, i * 2); }
+        if (gGame.selectedDie >= 0) {
+            // 잠긴 슬롯 등으로 배치가 거부되면 성공 효과음을 재생하지 않는다.
+            if (AssignDieToSlot(&gGame, gGame.selectedDie, i)) PlaySfxPitched(SFX_SLOT_SET, i * 2);
+            else PlaySfx(SFX_UI_CLICK);
+        }
         else { int die = DieForSlotUI(i); if (die >= 0) gGame.selectedDie = die; } return;
     }
     if (Inside(EndTurnRect(), x, y)) {
@@ -274,7 +279,12 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
-    if (gGuideOpen) return Inside(GuideCloseRect(BASE_WIDTH), x, y) ? 801 : -1;
+    if (gGuideOpen) {
+        if (Inside(GuideCloseRect(BASE_WIDTH), x, y)) return 801;
+        if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 802;
+        if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 803;
+        return -1;
+    }
     if (gGame.phase == PHASE_TITLE) {
         if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
         return -1;
@@ -325,9 +335,11 @@ static void HandleClick(int x, int y) {
     if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
+        else if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage > 0) { --gGuidePage; PlaySfx(SFX_UI_CLICK); }
+        else if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage < 1) { ++gGuidePage; PlaySfx(SFX_UI_CLICK); }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
@@ -348,8 +360,13 @@ static void HandleKey(WPARAM key) {
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) { if (key == VK_ESCAPE) gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (gGuideOpen) { if (key == VK_ESCAPE) gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gGuideOpen) {
+        if (key == VK_ESCAPE) gGuideOpen = 0;
+        else if (key == VK_LEFT && gGuidePage > 0) --gGuidePage;
+        else if (key == VK_RIGHT && gGuidePage < 1) ++gGuidePage;
+        InvalidateRect(gWindow, 0, FALSE); return;
+    }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
