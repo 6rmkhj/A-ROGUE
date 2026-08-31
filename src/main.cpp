@@ -10,6 +10,7 @@ HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 int gGuidePage;
+int gRestartArmed;
 static int gHoverId = -1;
 
 // ---- corrupted-sector dice reveal (display only) --------------------------
@@ -276,6 +277,7 @@ static int HoverId(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
+        if (Inside(RestartButtonRect(), x, y)) return 921;
         return -1;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
@@ -325,21 +327,26 @@ static void HandleClick(int x, int y) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
+        if (Inside(RestartButtonRect(), x, y)) {
+            if (gRestartArmed) { gRestartArmed = 0; gSettingsOpen = 0; BeginNewRun(); InvalidateRect(gWindow, 0, FALSE); return; }
+            gRestartArmed = 1; InvalidateRect(gWindow, 0, FALSE); return;
+        }
+        gRestartArmed = 0;
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
         else if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage > 0) { --gGuidePage; PlaySfx(SFX_UI_CLICK); }
         else if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage < 1) { ++gGuidePage; PlaySfx(SFX_UI_CLICK); }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
@@ -356,11 +363,11 @@ static void HandleKey(WPARAM key) {
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
-    if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (gSettingsOpen) { if (key == VK_ESCAPE) gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gSettingsOpen) { if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; } InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; gRestartArmed = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (key == VK_ESCAPE) gGuideOpen = 0;
         else if (key == VK_LEFT && gGuidePage > 0) --gGuidePage;

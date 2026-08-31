@@ -25,6 +25,7 @@ extern HWND gWindow;
 extern POINT gMouse;
 extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
+extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 1=한 번 더 누르면 확정
 
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
@@ -56,6 +57,7 @@ RECT DeckButtonRect(int width);
 RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
 RECT FullscreenToggleRect();
+RECT RestartButtonRect();
 RECT StartButtonRect(int width, int height);
 RECT DriveCardRect(int i);
 RECT EnemyRect(int i);
