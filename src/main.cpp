@@ -2,6 +2,7 @@
 #include <windowsx.h>
 #include <mmsystem.h>
 #include "game.h"
+#include "sprites.h"
 
 static GameState gGame;
 static HWND gWindow;
@@ -12,6 +13,7 @@ static int gGuideOpen;
 static const COLORREF C_BG = RGB(8, 12, 17), C_PANEL = RGB(16, 23, 31), C_PANEL_2 = RGB(23, 33, 43);
 static const COLORREF C_LINE = RGB(50, 71, 87), C_TEXT = RGB(218, 232, 238), C_DIM = RGB(120, 145, 157);
 static const COLORREF C_GREEN = RGB(82, 231, 174), C_RED = RGB(255, 92, 82), C_YELLOW = RGB(255, 204, 75), C_BLUE = RGB(83, 170, 255);
+static const COLORREF C_INK = RGB(6, 10, 15);
 
 static RECT MakeRect(int l, int t, int r, int b) { RECT value = {l, t, r, b}; return value; }
 static int Inside(const RECT& rect, int x, int y) { POINT p = {x, y}; return PtInRect(&rect, p); }
@@ -193,24 +195,122 @@ static void DrawTitle(HDC dc, int width, int height) {
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
-static RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 250); }
-static RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 292, left + 154, 416); }
-static RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 458, left + 184, 579); }
-static RECT EndTurnRect() { return MakeRect(712, 500, 884, 563); }
+static COLORREF MixColor(COLORREF from, COLORREF to, int amount) {
+    int r = GetRValue(from) + (GetRValue(to) - GetRValue(from)) * amount / 100;
+    int g = GetGValue(from) + (GetGValue(to) - GetGValue(from)) * amount / 100;
+    int b = GetBValue(from) + (GetBValue(to) - GetBValue(from)) * amount / 100;
+    return RGB(r, g, b);
+}
+
+// Sprite cells carry shading only; the enemy color from data.h supplies the hue.
+static int SpriteCellColor(char cell, COLORREF base, COLORREF* out) {
+    switch (cell) {
+    case 'X': *out = MixColor(base, C_INK, 82); return 1;
+    case '1': *out = MixColor(base, C_INK, 66); return 1;
+    case '2': *out = MixColor(base, C_INK, 46); return 1;
+    case '3': *out = MixColor(base, C_INK, 24); return 1;
+    case '4': *out = base; return 1;
+    case '5': *out = MixColor(base, RGB(255, 255, 255), 45); return 1;
+    case 'o': *out = RGB(9, 13, 18); return 1;
+    case 'W': *out = RGB(232, 242, 247); return 1;
+    case 'e': *out = MixColor(base, RGB(255, 255, 232), 74); return 1;
+    }
+    return 0;
+}
+
+// Runs of identical cells collapse into one FillRect, so a portrait costs ~60 GDI calls.
+static void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob) {
+    const char* const* rows = ENEMY_SPRITES[kind];
+    COLORREF base = (COLORREF)ENEMY_INFO[kind].color;
+    int boxWidth = box.right - box.left, boxHeight = box.bottom - box.top;
+    int scale = (boxWidth < boxHeight ? boxWidth : boxHeight) / SPRITE_SIZE; if (scale < 1) scale = 1;
+    int originX = box.left + (boxWidth - scale * SPRITE_SIZE) / 2;
+    int originY = box.top + (boxHeight - scale * SPRITE_SIZE) / 2 + bob;
+    for (int y = 0; y < SPRITE_SIZE; ++y) {
+        const char* row = rows[y];
+        for (int x = 0; x < SPRITE_SIZE; ) {
+            COLORREF color;
+            if (!SpriteCellColor(row[x], base, &color)) { ++x; continue; }
+            int end = x + 1; while (end < SPRITE_SIZE && row[end] == row[x]) ++end;
+            if (!alive) color = MixColor(color, RGB(34, 40, 48), 74);
+            else if (flash > 0) color = MixColor(color, RGB(255, 255, 255), flash * 78 / 1000);
+            int top = originY + y * scale, bottom = top + scale;
+            // A deleted enemy keeps its silhouette but loses every other pixel.
+            if (alive) Fill(dc, MakeRect(originX + x * scale, top, originX + end * scale, bottom), color);
+            else for (int px = x; px < end; ++px) if (((px + y) & 1) == 0) Fill(dc, MakeRect(originX + px * scale, top, originX + (px + 1) * scale, bottom), color);
+            x = end;
+        }
+    }
+}
+
+static void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob) {
+    Panel(dc, box, alive ? RGB(11, 17, 24) : RGB(13, 13, 15), selected ? (COLORREF)ENEMY_INFO[kind].color : C_LINE);
+    for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
+    if (alive) {
+        int centerX = (box.left + box.right) / 2, shadow = box.bottom - 9;
+        Fill(dc, MakeRect(centerX - 36, shadow, centerX + 36, shadow + 4), RGB(7, 11, 16));
+        Fill(dc, MakeRect(centerX - 26, shadow + 4, centerX + 26, shadow + 6), RGB(9, 14, 20));
+    }
+    DrawSpriteArt(dc, box, kind, alive, flash, bob);
+}
+
+#define HIT_FLASH_MS 240
+
+static int gEnemyShownHp[3];
+static DWORD gEnemyHitAt[3];
+
+// Combat resolves in one call inside game.cpp, so damage is detected by watching HP.
+static void SyncEnemyDamage() {
+    for (int i = 0; i < 3; ++i) {
+        int hp = i < gGame.enemyCount ? gGame.enemies[i].hp : 0;
+        if (hp < gEnemyShownHp[i]) gEnemyHitAt[i] = GetTickCount();
+        gEnemyShownHp[i] = hp;
+    }
+}
+
+static int EnemyHitFlash(int index) {
+    if (!gEnemyHitAt[index]) return 0;
+    int since = (int)(GetTickCount() - gEnemyHitAt[index]);
+    if (since < 0 || since >= HIT_FLASH_MS) return 0;
+    return 1000 - since * 1000 / HIT_FLASH_MS;
+}
+
+// Idle float, phase-shifted per slot so a group never breathes in sync.
+static int EnemyBob(int index) {
+    int phase = (int)((GetTickCount() / 110 + (DWORD)index * 5) % 12u);
+    if (phase > 6) phase = 12 - phase;
+    return 3 - phase;
+}
+
+static int gIdleActive;
+static void SyncIdleAnimation() {
+    int wanted = gGame.phase == PHASE_COMBAT && !gGuideOpen;
+    if (wanted == gIdleActive) return;
+    gIdleActive = wanted;
+    if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
+}
+
+static RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 366); }
+static RECT PortraitRect(const RECT& panel) { return MakeRect(panel.left + 31, panel.top + 8, panel.left + 167, panel.top + 132); }
+static RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 408, left + 154, 532); }
+static RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 574, left + 184, 695); }
+static RECT EndTurnRect() { return MakeRect(712, 616, 884, 679); }
 static int DieForSlotUI(int slot) { for (int d = 0; d < 3; ++d) if (gGame.dice[d].assignedSlot == slot) return d; return -1; }
 
 static void DrawEnemy(HDC dc, int index) {
     const EnemyState* enemy = &gGame.enemies[index]; const EnemyInfo* info = &ENEMY_INFO[enemy->kind]; RECT r = EnemyRect(index);
     int selected = index == gGame.targetEnemy && enemy->alive;
     Panel(dc, r, enemy->alive ? C_PANEL : RGB(18, 18, 20), selected ? C_YELLOW : C_LINE);
-    Text(dc, r.left + 12, r.top + 10, info->code, enemy->alive ? (COLORREF)info->color : C_DIM, gFontMedium);
-    wchar_t b[80]; wsprintfW(b, L"HP %d / %d", enemy->hp, enemy->maxHp); Text(dc, r.left + 12, r.top + 44, b, C_TEXT, gFontSmall);
-    Bar(dc, MakeRect(r.left + 12, r.top + 68, r.right - 12, r.top + 80), enemy->hp, enemy->maxHp, (COLORREF)info->color);
+    DrawPortrait(dc, PortraitRect(r), enemy->kind, enemy->alive, selected, EnemyHitFlash(index), enemy->alive ? EnemyBob(index) : 0);
+    Text(dc, r.left + 12, r.top + 140, info->code, enemy->alive ? (COLORREF)info->color : C_DIM, gFontMedium);
+    Text(dc, r.left + 12, r.top + 165, info->name, C_DIM, gFontSmall);
+    wchar_t b[80]; wsprintfW(b, L"HP %d / %d", enemy->hp, enemy->maxHp); Text(dc, r.left + 12, r.top + 187, b, C_TEXT, gFontSmall);
+    Bar(dc, MakeRect(r.left + 12, r.top + 208, r.right - 12, r.top + 220), enemy->hp, enemy->maxHp, (COLORREF)info->color);
     if (enemy->alive) {
         wsprintfW(b, L"의도: %s %d", INTENT_NAMES[enemy->intent], enemy->intentValue);
-        Text(dc, r.left + 12, r.top + 92, b, enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT ? C_RED : C_YELLOW, gFontSmall);
-        if (enemy->block > 0 || enemy->burn > 0) { wsprintfW(b, L"BLOCK %d   BURN %d", enemy->block, enemy->burn); Text(dc, r.left + 12, r.top + 120, b, C_DIM, gFontSmall); }
-    } else Text(dc, r.left + 12, r.top + 100, L"[ DELETED ]", C_DIM, gFontSmall);
+        Text(dc, r.left + 12, r.top + 227, b, enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT ? C_RED : C_YELLOW, gFontSmall);
+        if (enemy->block > 0 || enemy->burn > 0) { wsprintfW(b, L"BLOCK %d   BURN %d", enemy->block, enemy->burn); Text(dc, r.left + 12, r.top + 247, b, C_DIM, gFontSmall); }
+    } else Text(dc, r.left + 12, r.top + 227, L"[ DELETED ]", C_DIM, gFontSmall);
 }
 
 static void DrawSlot(HDC dc, int slot) {
@@ -268,8 +368,9 @@ static void DrawSidebar(HDC dc, int width, int height) {
 }
 
 static void DrawCombat(HDC dc, int width, int height) {
+    SyncEnemyDamage();
     for (int i = 0; i < gGame.enemyCount; ++i) DrawEnemy(dc, i);
-    Text(dc, 28, 266, L"주사위 하나당 슬롯 하나 · 한 슬롯은 비워집니다", C_DIM, gFontSmall);
+    Text(dc, 28, 382, L"주사위 하나당 슬롯 하나 · 한 슬롯은 비워집니다", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i); for (int i = 0; i < 3; ++i) DrawDie(dc, i);
     RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y); Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
     TextRect(dc, end, L"EXECUTE [SPACE]", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE); DrawSidebar(dc, width, height);
@@ -355,6 +456,7 @@ static void DrawGuide(HDC dc, int width, int height) {
 static void PaintGame(HWND window) {
     PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); RECT client; GetClientRect(window, &client); int width = client.right, height = client.bottom;
     HDC memory = CreateCompatibleDC(dc); HBITMAP bitmap = CreateCompatibleBitmap(dc, width, height); HBITMAP old = (HBITMAP)SelectObject(memory, bitmap);
+    SyncIdleAnimation();
     Fill(memory, client, C_BG); DrawHeader(memory, width);
     if (gGame.phase == PHASE_TITLE) DrawTitle(memory, width, height); else if (gGame.phase == PHASE_COMBAT) DrawCombat(memory, width, height);
     else if (gGame.phase == PHASE_REWARD) DrawReward(memory, width, height); else if (gGame.phase == PHASE_PRUNE) DrawPrune(memory, width, height);
@@ -438,11 +540,11 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_MOUSEMOVE: gMouse.x = GET_X_LPARAM(lParam); gMouse.y = GET_Y_LPARAM(lParam); InvalidateRect(window, 0, FALSE); return 0;
     case WM_LBUTTONDOWN: HandleClick(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
-    case WM_TIMER: if (wParam == 1u) TickRollAnimation(); return 0;
+    case WM_TIMER: if (wParam == 1u) TickRollAnimation(); else if (wParam == 2u) InvalidateRect(window, 0, FALSE); return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
-        KillTimer(window, 1);
+        KillTimer(window, 1); KillTimer(window, 2);
         if (gFontSmall) DeleteObject(gFontSmall); if (gFontMedium) DeleteObject(gFontMedium); if (gFontLarge) DeleteObject(gFontLarge); if (gFontHuge) DeleteObject(gFontHuge);
         PlaySoundW(0, 0, 0); PostQuitMessage(0); return 0;
     }
