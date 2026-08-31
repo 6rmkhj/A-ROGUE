@@ -486,7 +486,6 @@ void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     Face* face = &game->dice[dieIndex].faces[faceIndex];
     face->kind = (uint8_t)game->rewardKinds[reward];
     face->value = (uint8_t)game->rewardValues[reward];
-    face->damaged = 0;
     ++game->facesInstalled;
     PushLog2(game, L"%s 면 설치. 현재 덱 %dB.", FACE_INFO[face->kind].name, DeckBytes(game));
     ContinueAfterReward(game);
