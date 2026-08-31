@@ -5,6 +5,7 @@
 
 enum GamePhase {
     PHASE_TITLE = 0,
+    PHASE_DRIVE_SELECT,
     PHASE_COMBAT,
     PHASE_REWARD,
     PHASE_PRUNE,
@@ -54,6 +55,8 @@ struct GameState {
     DieState dice[3];
     int modifierA;
     int modifierB;
+    int driveChoices[3];
+    int selectedDrive;
     int rewardKinds[3];
     int rewardValues[3];
     int selectedReward;
@@ -73,6 +76,7 @@ struct GameState {
 
 void InitTitle(GameState* game);
 void NewRun(GameState* game, uint32_t seed);
+void SelectDrive(GameState* game, int choiceIndex);
 void StartCombat(GameState* game);
 void AssignDieToSlot(GameState* game, int dieIndex, int slotIndex);
 void UnassignDie(GameState* game, int dieIndex);

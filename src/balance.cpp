@@ -33,7 +33,9 @@ static int BestReward(const GameState* game) {
 static int Run(unsigned int seed, int* combats) {
     GameState game; NewRun(&game, seed); int steps = 0;
     while (game.phase != PHASE_VICTORY && game.phase != PHASE_GAMEOVER && steps++ < 600) {
-        if (game.phase == PHASE_COMBAT) {
+        if (game.phase == PHASE_DRIVE_SELECT) {
+            SelectDrive(&game, (int)(seed % 3u));
+        } else if (game.phase == PHASE_COMBAT) {
             int target = -1, hp = 100000;
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive && game.enemies[i].hp < hp) { target = i; hp = game.enemies[i].hp; }
             if (target >= 0) SelectEnemy(&game, target);

@@ -38,11 +38,28 @@ static int RunCompleteGame(int modifierA, int modifierB, unsigned int seed) {
 int main() {
     GameState base; NewRun(&base, 0x12345678u);
     if (DeckBytes(&base) != 63) return Fail("starting deck must be 63 bytes");
+    if (base.phase != PHASE_DRIVE_SELECT) return Fail("new run must offer drive choices");
+    if (base.driveChoices[0] == base.driveChoices[1] || base.driveChoices[0] == base.driveChoices[2]
+        || base.driveChoices[1] == base.driveChoices[2]) return Fail("drive choices must be unique");
+    SelectDrive(&base, 1);
+    if (base.selectedDrive != base.driveChoices[1]) return Fail("selecting a drive must store the chosen drive");
+    if (base.modifierA != DRIVE_INFO[base.selectedDrive].modifierA
+        || base.modifierB != DRIVE_INFO[base.selectedDrive].modifierB) return Fail("selecting a drive must apply its modifiers");
     if (base.modifierA == base.modifierB) return Fail("modifiers must be unique");
+    if (base.phase != PHASE_COMBAT) return Fail("selecting a drive must start combat");
     Face damaged = {FACE_FIRE, 8, 1, 0};
     if (FaceCost(&damaged) != 24 || FacePower(&damaged) != 0) return Fail("damaged faces retain cost and lose power");
-    base.floor = 2; base.modifierA = MOD_OVERALLOC; base.modifierB = MOD_CHECKSUM;
+    base.floor = 2; base.modifierA = MOD_OVERALLOC; base.modifierB = MOD_CHECKSUM; base.selectedDrive = -1;
     if (EffectiveCapacity(&base) != 190) return Fail("overallocation must add 60 bytes");
+
+    GameState capPerk; NewRun(&capPerk, 0xD01D01u);
+    capPerk.driveChoices[0] = 1; // D:\ ARCHIVE - 용량 +15B, 손상에 과잉 할당 포함
+    SelectDrive(&capPerk, 0);
+    if (EffectiveCapacity(&capPerk) != 240 + 60 + DRIVE_INFO[1].perkValue) return Fail("capacity perk must add its bonus");
+    GameState hpPerk; NewRun(&hpPerk, 0xD02D02u);
+    hpPerk.driveChoices[0] = 0; // C:\ SYSTEM - 시작 최대 체력 +6
+    SelectDrive(&hpPerk, 0);
+    if (hpPerk.playerMaxHp != 40 + DRIVE_INFO[0].perkValue || hpPerk.playerHp != hpPerk.playerMaxHp) return Fail("hp perk must raise starting hp");
 
     GameState prune; NewRun(&prune, 0xCAFEBABEu); prune.floor = 2; prune.modifierA = MOD_CHECKSUM; prune.modifierB = MOD_FRAGMENTATION; prune.phase = PHASE_PRUNE;
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
@@ -54,12 +71,12 @@ int main() {
     }
     ConfirmPrune(&prune); if (prune.phase != PHASE_COMBAT) return Fail("valid pruned deck must continue");
 
-    GameState burn; NewRun(&burn, 0xB0010001u); burn.modifierA = MOD_BAD_SECTOR; burn.modifierB = MOD_CHECKSUM;
+    GameState burn; NewRun(&burn, 0xB0010001u); burn.modifierA = MOD_BAD_SECTOR; burn.modifierB = MOD_CHECKSUM; StartCombat(&burn);
     burn.enemies[0].hp = 3; burn.enemies[0].burn = 1; burn.enemies[0].intent = INTENT_GUARD; burn.enemies[0].intentValue = 0;
     AssignDieToSlot(&burn, 0, SLOT_DEFEND); EndTurn(&burn);
     if (burn.phase != PHASE_REWARD || burn.combatsWon != 1) return Fail("burn killing the last enemy must end combat immediately");
 
-    GameState corrupt; NewRun(&corrupt, 0xC0110001u); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM;
+    GameState corrupt; NewRun(&corrupt, 0xC0110001u); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM; StartCombat(&corrupt);
     corrupt.enemies[0].hp = corrupt.enemies[0].maxHp; corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 5;
     int hpBeforeCorrupt = corrupt.playerHp; AssignDieToSlot(&corrupt, 0, SLOT_DEFEND); EndTurn(&corrupt);
     if (corrupt.playerHp != hpBeforeCorrupt - 5) return Fail("corrupt intent must ignore player block");

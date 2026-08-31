@@ -246,6 +246,32 @@ static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
     SetTimer(gWindow, 4, 16, 0);
 }
 
+// ---- drive mount / descent transition -------------------------------------
+// 볼륨 마운트(런 시작)와 층 하강(보스 처치 후) 때 재생되는 탐색 연출.
+// 게임 상태는 이미 game.cpp에서 확정된 뒤라 여기서는 보여주는 방식만 정한다.
+#define DESCENT_MS 2400
+static int gDescentActive;
+static DWORD gDescentStart;
+static int gDescentToFloor;   // 진입하는 층 (0 = 최초 마운트)
+static int gDescentTonePhase; // 진행 중 한 번씩 재생하는 시크 사운드 단계
+
+static void FinishDescent() {
+    if (!gDescentActive) return;
+    gDescentActive = 0;
+    KillTimer(gWindow, 5);
+    PlayTone(720, 90);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static void BeginDescent(int toFloor) {
+    gDescentToFloor = toFloor;
+    gDescentTonePhase = 0;
+    gDescentStart = GetTickCount();
+    gDescentActive = 1;
+    PlayTone(140, 120);
+    SetTimer(gWindow, 5, 16, 0);
+}
+
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
 static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
 static int DieSettled(int die) { return !gReadActive || ReadElapsed() >= DieReadEnd(die); }
@@ -313,9 +339,17 @@ static void TickRollAnimation() {
 static void DrawHeader(HDC dc, int width) {
     Fill(dc, MakeRect(0, 0, width, 68), RGB(10, 16, 22)); Fill(dc, MakeRect(0, 67, width, 68), C_GREEN);
     Text(dc, 24, 14, L"A:\\ROGUE", C_GREEN, gFontLarge);
-    if (gGame.phase != PHASE_TITLE) {
-        wchar_t b[128]; wsprintfW(b, L"%d층/3  ·  %d구역/3  ·  %d턴", gGame.floor + 1, gGame.encounter + 1, gGame.turn);
-        Text(dc, 230, 14, b, C_TEXT, gFontMedium); wsprintfW(b, L"체력 %d/%d", gGame.playerHp, gGame.playerMaxHp);
+    if (gGame.phase != PHASE_TITLE && gGame.phase != PHASE_DRIVE_SELECT) {
+        wchar_t b[128];
+        if (gGame.selectedDrive >= 0) {
+            int floorIndex = gGame.floor > 2 ? 2 : gGame.floor;
+            wsprintfW(b, L"%s  ·  %d층/3  ·  %d구역/3  ·  %d턴", DRIVE_INFO[gGame.selectedDrive].paths[floorIndex], gGame.floor + 1, gGame.encounter + 1, gGame.turn);
+            Text(dc, 230, 18, b, C_TEXT, gFontSmall);
+        } else {
+            wsprintfW(b, L"%d층/3  ·  %d구역/3  ·  %d턴", gGame.floor + 1, gGame.encounter + 1, gGame.turn);
+            Text(dc, 230, 14, b, C_TEXT, gFontMedium);
+        }
+        wsprintfW(b, L"체력 %d/%d", gGame.playerHp, gGame.playerMaxHp);
         Text(dc, width - 440, 14, b, gGame.playerHp <= 10 ? C_RED : C_TEXT, gFontMedium);
         wsprintfW(b, L"덱 %dB / %dB", DeckBytes(&gGame), EffectiveCapacity(&gGame));
         Text(dc, width - 305, 14, b, DeckBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
@@ -439,7 +473,7 @@ static int EnemyBob(int index) {
 
 static int gIdleActive;
 static void SyncIdleAnimation() {
-    int wanted = gGame.phase == PHASE_COMBAT && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
+    int wanted = (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT) && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
@@ -619,6 +653,109 @@ static void DrawCombat(HDC dc, int width, int height) {
     DrawSidebar(dc, width, height);
 }
 
+// 카드에는 사이드바용 긴 설명 대신 한 줄 요약을 쓴다 (카드 폭 제약).
+static const wchar_t* const MODIFIER_BRIEF[MODIFIER_COUNT] = {
+    L"층 하강 시 무작위 면 1개 영구 손상",
+    L"경고된 주사위가 실행 순간 재굴림",
+    L"중복 굴림 결과는 뒤쪽이 비활성화",
+    L"용량 +60B · 적 체력 +30%",
+    L"굴림 합이 짝수면 공격 +2"
+};
+
+static RECT DriveCardRect(int i) { int left = 56 + i * 344; return MakeRect(left, 140, left + 320, 640); }
+
+static void DrawDriveModifier(HDC dc, const RECT& card, int top, int modifier) {
+    Text(dc, card.left + 16, top, MODIFIER_INFO[modifier].name, C_YELLOW, gFontSmall);
+    TextRect(dc, MakeRect(card.left + 16, top + 21, card.right - 14, top + 58), MODIFIER_BRIEF[modifier], C_DIM, gFontSmall, DT_WORDBREAK);
+}
+
+static void DrawDriveSelect(HDC dc, int width, int height) {
+    TextRect(dc, MakeRect(0, 78, width, 102), L"감염된 저장소 감지  →  [현재: 탐색 볼륨 선택]  →  마운트  →  전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, 98, width, 126), L"탐색할 볼륨을 선택하십시오 · 디스크 손상과 볼륨 특성이 미리 공개됩니다", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    for (int i = 0; i < 3; ++i) {
+        RECT r = DriveCardRect(i);
+        const DriveInfo* drive = &DRIVE_INFO[gGame.driveChoices[i]];
+        int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)drive->color : C_LINE);
+        wchar_t b[16]; wsprintfW(b, L"[%d]", i + 1);
+        Text(dc, r.left + 12, r.top + 10, b, C_DIM, gFontSmall);
+        RECT letterRect = MakeRect(r.left + 8, r.top + 20, r.right - 8, r.top + 86);
+        DrawSectorStatic(dc, letterRect, gGame.driveChoices[i], (int)(GetTickCount() / 260u), 60);
+        TextRect(dc, letterRect, drive->letter, (COLORREF)drive->color, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawScanlines(dc, letterRect);
+        TextRect(dc, MakeRect(r.left + 8, r.top + 92, r.right - 8, r.top + 118), drive->label, (COLORREF)drive->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 126, r.right - 14, r.top + 178), drive->description, C_DIM, gFontSmall, DT_WORDBREAK);
+        Fill(dc, MakeRect(r.left + 12, r.top + 182, r.right - 12, r.top + 183), C_LINE);
+        Text(dc, r.left + 16, r.top + 192, L"디스크 손상", C_RED, gFontSmall);
+        DrawDriveModifier(dc, r, r.top + 216, drive->modifierA);
+        DrawDriveModifier(dc, r, r.top + 278, drive->modifierB);
+        Fill(dc, MakeRect(r.left + 12, r.top + 342, r.right - 12, r.top + 343), C_LINE);
+        Text(dc, r.left + 16, r.top + 352, L"볼륨 특성", C_GREEN, gFontSmall);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 374, r.right - 14, r.top + 414), drive->perkText, C_TEXT, gFontSmall, DT_WORDBREAK);
+        Text(dc, r.left + 16, r.top + 420, L"탐색 경로", C_BLUE, gFontSmall);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 442, r.right - 14, r.top + 466), drive->pathPreview, C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
+        TextRect(dc, MakeRect(r.left + 8, r.bottom - 34, r.right - 8, r.bottom - 10), hover ? L"클릭하여 마운트" : L"클릭 또는 숫자 키", hover ? (COLORREF)drive->color : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    }
+    TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"선택한 볼륨의 디스크 손상 2종이 이번 런 내내 적용됩니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
+static void DrawDescent(HDC dc, int width, int height) {
+    const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
+    int elapsed = (int)(GetTickCount() - gDescentStart);
+    if (elapsed < 0) elapsed = 0; if (elapsed > DESCENT_MS) elapsed = DESCENT_MS;
+    int mount = gDescentToFloor == 0;
+    Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
+    RECT panel = MakeRect(170, 150, width - 170, height - 150);
+    Panel(dc, panel, C_PANEL, (COLORREF)drive->color);
+    Text(dc, panel.left + 26, panel.top + 20, mount ? L"볼륨 마운트" : L"심층 탐색", C_GREEN, gFontLarge);
+    wchar_t b[160];
+    wsprintfW(b, L"%d층 / 3", gDescentToFloor + 1);
+    TextRect(dc, MakeRect(panel.right - 160, panel.top + 28, panel.right - 26, panel.top + 54), b, C_DIM, gFontMedium, DT_RIGHT | DT_SINGLELINE);
+    if (mount) wsprintfW(b, L"대상 볼륨  %s%s", drive->letter, drive->label);
+    else wsprintfW(b, L"현재 경로  %s", drive->paths[gDescentToFloor - 1]);
+    Text(dc, panel.left + 26, panel.top + 68, b, C_DIM, gFontSmall);
+
+    // 목표 경로가 한 글자씩 타이핑된다.
+    const wchar_t* path = drive->paths[gDescentToFloor];
+    int length = lstrlenW(path);
+    int typed = elapsed * length / (DESCENT_MS * 3 / 5);
+    if (typed > length) typed = length;
+    wchar_t typedText[64] = L"> ";
+    lstrcpynW(typedText + 2, path, typed + 1);
+    if (typed < length && ((elapsed / 220) & 1)) lstrcatW(typedText, L"_");
+    TextRect(dc, MakeRect(panel.left + 26, panel.top + 98, panel.right - 26, panel.top + 148), typedText, (COLORREF)drive->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // 판독 노이즈 밴드: 진행될수록 정적이 걷힌다.
+    int noiseLevel = 900 - elapsed * 900 / DESCENT_MS;
+    RECT band = MakeRect(panel.left + 26, panel.top + 162, panel.right - 26, panel.top + 272);
+    Panel(dc, band, RGB(8, 13, 19), C_LINE);
+    RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
+    DrawSectorStatic(dc, inner, gGame.selectedDrive + 11, elapsed / NOISE_CHURN_MS, 200 + noiseLevel);
+    DrawSectorHex(dc, inner, gGame.selectedDrive + 5, elapsed / NOISE_CHURN_MS, 300 + noiseLevel);
+    DrawScanlines(dc, inner);
+
+    RECT barRect = MakeRect(panel.left + 26, panel.top + 288, panel.right - 26, panel.top + 306);
+    Bar(dc, barRect, elapsed, DESCENT_MS, (COLORREF)drive->color);
+    wsprintfW(b, L"%d%%", elapsed * 100 / DESCENT_MS);
+    TextRect(dc, MakeRect(panel.right - 106, panel.top + 310, panel.right - 26, panel.top + 332), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+
+    int capacity = EffectiveCapacity(&gGame);
+    if (mount) wsprintfW(b, L"층 한도 %dB  ·  디스크 손상: %s + %s", capacity, MODIFIER_INFO[gGame.modifierA].name, MODIFIER_INFO[gGame.modifierB].name);
+    else {
+        int bonus = capacity - FLOOR_CAPACITY[gGame.floor > 2 ? 2 : gGame.floor];
+        wsprintfW(b, L"용량 한도 %dB → %dB  ·  적이 더 강해집니다", FLOOR_CAPACITY[gDescentToFloor - 1] + bonus, capacity);
+    }
+    Text(dc, panel.left + 26, panel.top + 322, b, C_YELLOW, gFontSmall);
+    if (mount) wsprintfW(b, L"볼륨 특성: %s", drive->perkText);
+    else lstrcpyW(b, L"감염 코어에 접근하기 위해 더 깊은 섹터로 진입합니다.");
+    Text(dc, panel.left + 26, panel.top + 348, b, C_TEXT, gFontSmall);
+    const wchar_t* hint = gGame.phase == PHASE_PRUNE
+        ? L"진입 후 용량 정리가 필요합니다 · 클릭이나 키로 바로 넘기기"
+        : L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기";
+    TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
 static void DrawCombatClear(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(190, 184, width - 190, height - 176); Panel(dc, panel, C_PANEL, C_GREEN);
@@ -745,9 +882,9 @@ static void DrawGuide(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 24),
         L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n복합 상태는 주사위에 모두 함께 표시\n오염(관통): 표시 수치만큼 체력에 직접 피해. 방어도를 소모하거나 적용받지 않음", C_TEXT, gFontSmall, DT_WORDBREAK);
 
-    Text(dc, middle, top, L"디스크 손상", C_YELLOW, gFontMedium);
+    Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"볼륨 선택  런 시작 시 드라이브마다 손상 2종 공개 + 고유 특성 1개\n배드 섹터  층 이동 시 무작위 면 영구 손상 (설치해도 복구 안 됨)\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 204, L"덱·보상·용량", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
         L"18개 면의 비용 합이 덱 용량입니다. 전투 뒤 보상 면을 골라 기존 면과 교체합니다. 현재 층 및 다음 층 한도를 넘으면 빈 면(0B)이 되도록 면을 삭제해야 합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
@@ -767,10 +904,12 @@ static void PaintGame(HWND window) {
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
     if (gTurnTraceActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
-    else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
+    else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gCombatClearActive) DrawCombatClear(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDeckOpen) DrawDeck(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -823,6 +962,14 @@ static void ClickCombat(int x, int y) {
     }
 }
 
+static void ClickDriveSelect(int x, int y) {
+    for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) {
+        SelectDrive(&gGame, i);
+        if (gGame.phase == PHASE_COMBAT) { PlayTone(520, 90); BeginDescent(0); }
+        return;
+    }
+}
+
 static void ClickReward(int x, int y) {
     for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlayTone(600 + i * 80, 50); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlayTone(760, 85); return; }
@@ -852,6 +999,10 @@ static int HoverId(int x, int y) {
         if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
         return -1;
     }
+    if (gGame.phase == PHASE_DRIVE_SELECT) {
+        for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
+        return -1;
+    }
     if (gGame.phase == PHASE_COMBAT) {
         for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) return 100 + i;
         for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) return 200 + i;
@@ -875,6 +1026,7 @@ static int HoverId(int x, int y) {
 
 static void HandleClick(int x, int y) {
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
+    if (gDescentActive) { FinishDescent(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (gDeckOpen) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
@@ -894,15 +1046,20 @@ static void HandleClick(int x, int y) {
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
+    int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
+    else if (gGame.phase == PHASE_DRIVE_SELECT) ClickDriveSelect(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
+    // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void HandleKey(WPARAM key) {
     if (gTurnTraceActive) return;
+    if (gDescentActive) { FinishDescent(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
@@ -911,7 +1068,14 @@ static void HandleKey(WPARAM key) {
     if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) { if (key == VK_ESCAPE) gGuideOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
+    int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
+    else if (gGame.phase == PHASE_DRIVE_SELECT) {
+        if (key >= '1' && key <= '3') {
+            SelectDrive(&gGame, (int)(key - '1'));
+            if (gGame.phase == PHASE_COMBAT) { PlayTone(520, 90); BeginDescent(0); }
+        }
+    }
     else if (gGame.phase == PHASE_COMBAT) {
         if (key == 'R') BeginRead();
         else if (!gRolled) { /* sector not read yet */ }
@@ -922,6 +1086,7 @@ static void HandleKey(WPARAM key) {
         if (key >= '1' && key <= '3') SelectReward(&gGame, (int)(key - '1')); else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (key == 'R' || key == VK_RETURN) BeginNewRun();
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -953,11 +1118,18 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if ((int)(GetTickCount() - gTurnTraceStart) >= TurnTraceRevealDuration()) KillTimer(window, 4);
             InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == 5u) {
+            int descentElapsed = (int)(GetTickCount() - gDescentStart);
+            if (gDescentTonePhase == 0 && descentElapsed >= DESCENT_MS / 3) { ++gDescentTonePhase; PlayTone(300, 45); }
+            else if (gDescentTonePhase == 1 && descentElapsed >= DESCENT_MS * 2 / 3) { ++gDescentTonePhase; PlayTone(420, 45); }
+            if (descentElapsed >= DESCENT_MS) FinishDescent();
+            else InvalidateRect(window, 0, FALSE);
+        }
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
-        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
+        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 5);
         if (gFontSmall) DeleteObject(gFontSmall); if (gFontMedium) DeleteObject(gFontMedium); if (gFontLarge) DeleteObject(gFontLarge); if (gFontHuge) DeleteObject(gFontHuge);
         PlaySoundW(0, 0, 0); PostQuitMessage(0); return 0;
     }

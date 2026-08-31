@@ -67,10 +67,19 @@ int IsModifierActive(const GameState* game, int modifier) {
     return game->modifierA == modifier || game->modifierB == modifier;
 }
 
+// 드라이브가 아직 확정되지 않았으면(-1) 모든 특성이 0으로 죽는다.
+// smoke 테스트처럼 SelectDrive 없이 StartCombat으로 직행하는 경로의 안전장치.
+static int DrivePerkValue(const GameState* game, int perk) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return 0;
+    const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
+    return drive->perk == perk ? drive->perkValue : 0;
+}
+
 int EffectiveCapacity(const GameState* game) {
     int floor = ClampInt(game->floor, 0, 2);
     int capacity = FLOOR_CAPACITY[floor];
     if (IsModifierActive(game, MOD_OVERALLOC)) capacity += 60;
+    capacity += DrivePerkValue(game, PERK_CAPACITY);
     return capacity;
 }
 
@@ -100,6 +109,7 @@ void InitTitle(GameState* game) {
     game->phase = PHASE_TITLE;
     game->selectedDie = -1;
     game->selectedReward = -1;
+    game->selectedDrive = -1;
 }
 
 static void SetupStartingDice(GameState* game) {
@@ -117,9 +127,14 @@ static void SetupStartingDice(GameState* game) {
     }
 }
 
-static void PickModifiers(GameState* game) {
-    game->modifierA = RandomRange(game, MODIFIER_COUNT);
-    do game->modifierB = RandomRange(game, MODIFIER_COUNT); while (game->modifierB == game->modifierA);
+static void PickDriveChoices(GameState* game) {
+    int count = 0;
+    while (count < 3) {
+        int pick = RandomRange(game, DRIVE_COUNT);
+        int duplicate = 0;
+        for (int i = 0; i < count; ++i) if (game->driveChoices[i] == pick) duplicate = 1;
+        if (!duplicate) game->driveChoices[count++] = pick;
+    }
 }
 
 static void RollDice(GameState* game) {
@@ -182,16 +197,41 @@ static void BeginTurn(GameState* game) {
 void NewRun(GameState* game, uint32_t seed) {
     ZeroMemory(game, sizeof(*game));
     game->rng = seed ? seed : 0xC0FFEE11u;
-    game->phase = PHASE_COMBAT;
+    game->phase = PHASE_DRIVE_SELECT;
     game->floor = 0;
     game->encounter = 0;
     game->playerMaxHp = 40;
     game->playerHp = 40;
     game->selectedDie = -1;
     game->selectedReward = -1;
+    game->selectedDrive = -1;
     SetupStartingDice(game);
-    PickModifiers(game);
-    PushLog(game, L"A:\\ROGUE 부팅 완료.");
+    PickDriveChoices(game);
+    PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
+}
+
+void SelectDrive(GameState* game, int choiceIndex) {
+    if (game->phase != PHASE_DRIVE_SELECT || choiceIndex < 0 || choiceIndex >= 3) return;
+    game->selectedDrive = game->driveChoices[choiceIndex];
+    const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
+    game->modifierA = drive->modifierA;
+    game->modifierB = drive->modifierB;
+    if (drive->perk == PERK_MAX_HP) {
+        game->playerMaxHp += drive->perkValue;
+        game->playerHp = ClampInt(game->playerHp + drive->perkValue, 1, game->playerMaxHp);
+    } else if (drive->perk == PERK_ATTACK_UP) {
+        game->playerMaxHp -= 4;
+        game->playerHp = ClampInt(game->playerHp, 1, game->playerMaxHp);
+    } else if (drive->perk == PERK_BONUS_FACE) {
+        int kind = FACE_FIRE + RandomRange(game, FACE_ECHO - FACE_FIRE + 1);
+        Face* face = &game->dice[RandomRange(game, 3)].faces[RandomRange(game, 6)];
+        face->kind = (uint8_t)kind;
+        face->value = (uint8_t)FACE_INFO[kind].power;
+        PushLog2(game, L"격리 데이터 회수: %s 면 설치 (%dB).", FACE_INFO[kind].name, FaceCost(face));
+    }
+    wchar_t buffer[96];
+    wsprintfW(buffer, L"%s%s 마운트 완료. 심층 스캔을 시작합니다.", drive->letter, drive->label);
+    PushLog(game, buffer);
     StartCombat(game);
 }
 
@@ -203,6 +243,8 @@ static void AddEnemy(GameState* game, int kind) {
     enemy->alive = 1;
     int hp = ENEMY_INFO[kind].hp + game->floor * 3;
     if (IsModifierActive(game, MOD_OVERALLOC)) hp = (hp * 130 + 99) / 100;
+    int weaken = DrivePerkValue(game, PERK_ENEMY_HP_DOWN);
+    if (weaken > 0) hp = ClampInt(hp * (100 - weaken) / 100, 1, hp);
     enemy->hp = hp;
     enemy->maxHp = hp;
 }
@@ -329,7 +371,8 @@ static void ResolvePlayer(GameState* game) {
         PushLog(game, L"체크섬 일치: 이번 공격 피해 +2.");
     }
     int attackDamage = attackPower > 0 ? attackPower + ampBonus + checksumBonus : 0;
-    int attackSpecial = attackKind == FACE_FIRE ? 4 : attackKind == FACE_WILD ? 2 : 0;
+    // 드라이브 특성 보너스는 '특수' 항목에 합산해 계산 추적의 합계와 일치시킨다.
+    int attackSpecial = (attackKind == FACE_FIRE ? 4 : attackKind == FACE_WILD ? 2 : 0) + DrivePerkValue(game, PERK_ATTACK_UP);
     attackDamage += attackPower > 0 ? attackSpecial : 0;
     int target = FirstLivingEnemy(game);
     int targetBlockBefore = target >= 0 ? game->enemies[target].block : 0;
@@ -463,6 +506,12 @@ static void CombatWon(GameState* game) {
         game->phase = PHASE_VICTORY;
         PushLog(game, L"포맷 중단. 디스크가 복구되었습니다.");
         return;
+    }
+    int heal = DrivePerkValue(game, PERK_HEAL_ON_WIN);
+    if (heal > 0) {
+        int hpBefore = game->playerHp;
+        game->playerHp = ClampInt(game->playerHp + heal, 0, game->playerMaxHp);
+        if (game->playerHp > hpBefore) PushLog2(game, L"%s 특성: 체력 %d 회복.", DRIVE_INFO[game->selectedDrive].letter, game->playerHp - hpBefore);
     }
     GenerateRewards(game);
     game->phase = PHASE_REWARD;

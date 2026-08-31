@@ -124,4 +124,48 @@ enum EnemyIntent {
 
 static const wchar_t* const INTENT_NAMES[INTENT_COUNT] = {L"공격", L"강공", L"방어", L"복구", L"오염(관통)"};
 static const int FLOOR_CAPACITY[3] = {240, 180, 130};
-static const wchar_t* const FLOOR_NAMES[3] = {L"디스크", L"부트", L"포맷"};
+
+enum DrivePerk {
+    PERK_MAX_HP = 0,     // 시작 최대 체력 증감 (perkValue = 증감량)
+    PERK_CAPACITY,       // 모든 층 용량 한도 가산 (perkValue = 바이트)
+    PERK_HEAL_ON_WIN,    // 전투 승리 시 회복 (perkValue = 회복량)
+    PERK_ENEMY_HP_DOWN,  // 적 최대 체력 감소 (perkValue = %)
+    PERK_ATTACK_UP,      // 공격 피해 가산 (perkValue = 피해, 최대 체력 -4 동반)
+    PERK_BONUS_FACE      // 마운트 시 무작위 특수 면 1개 설치
+};
+
+struct DriveInfo {
+    const wchar_t* letter;      // 예: L"C:\\"
+    const wchar_t* label;       // 볼륨명
+    const wchar_t* description;
+    int modifierA, modifierB;   // 이 볼륨에서 활성화되는 디스크 손상 2종
+    int perk;                   // DrivePerk
+    int perkValue;
+    const wchar_t* perkText;    // 카드/연출 표시용 요약
+    const wchar_t* paths[3];    // 층별 현재 경로
+    const wchar_t* pathPreview; // 카드에 보여줄 탐색 경로 요약
+    uint32_t color;
+};
+
+#define DRIVE_COUNT 6
+
+static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
+    {L"C:\\", L"SYSTEM", L"기본 시스템 볼륨. 전원부가 안정적이라 코어 무결성이 높습니다.",
+     MOD_BAD_SECTOR, MOD_CHECKSUM, PERK_MAX_HP, 6, L"시작 최대 체력 +6",
+     {L"C:\\", L"C:\\WINDOWS", L"C:\\WINDOWS\\SYSTEM32"}, L"C:\\ → WINDOWS → SYSTEM32", AR_COLOR(83, 170, 255)},
+    {L"D:\\", L"ARCHIVE", L"오래된 백업 창고. 공간은 넓지만 섹터 노화가 심합니다.",
+     MOD_BAD_SECTOR, MOD_OVERALLOC, PERK_CAPACITY, 15, L"모든 층 용량 한도 +15B",
+     {L"D:\\", L"D:\\BACKUP", L"D:\\BACKUP\\1998"}, L"D:\\ → BACKUP → 1998", AR_COLOR(255, 204, 75)},
+    {L"E:\\", L"REMOVABLE", L"이동식 저장 장치. 접촉 불량으로 판독이 불안정합니다.",
+     MOD_READ_ERROR, MOD_FRAGMENTATION, PERK_HEAL_ON_WIN, 5, L"전투 승리 시 체력 5 회복",
+     {L"E:\\", L"E:\\DCIM", L"E:\\DCIM\\LOST"}, L"E:\\ → DCIM → LOST", AR_COLOR(95, 225, 176)},
+    {L"N:\\", L"NETWORK", L"네트워크 공유 볼륨. 원격 격리로 감염 개체가 약화되어 있습니다.",
+     MOD_READ_ERROR, MOD_CHECKSUM, PERK_ENEMY_HP_DOWN, 10, L"모든 적 최대 체력 -10%",
+     {L"N:\\", L"N:\\SHARE", L"N:\\SHARE\\HIDDEN"}, L"N:\\ → SHARE → HIDDEN", AR_COLOR(90, 190, 230)},
+    {L"R:\\", L"RAMDISK", L"휘발성 램디스크. 접근은 빠르지만 데이터가 쉽게 증발합니다.",
+     MOD_FRAGMENTATION, MOD_CHECKSUM, PERK_ATTACK_UP, 1, L"공격 피해 +1 · 최대 체력 -4",
+     {L"R:\\", L"R:\\HEAP", L"R:\\HEAP\\STACK"}, L"R:\\ → HEAP → STACK", AR_COLOR(210, 105, 235)},
+    {L"X:\\", L"QUARANTINE", L"격리 구역. 위험하지만 압수된 특수 데이터가 남아 있습니다.",
+     MOD_OVERALLOC, MOD_READ_ERROR, PERK_BONUS_FACE, 1, L"시작 시 무작위 특수 면 1개 설치",
+     {L"X:\\", L"X:\\VAULT", L"X:\\VAULT\\CORE"}, L"X:\\ → VAULT → CORE", AR_COLOR(255, 92, 82)}
+};
