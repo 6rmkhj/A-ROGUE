@@ -93,7 +93,9 @@ struct GameState {
     int modifierA;
     int modifierB;
     int driveChoices[3];
+    int driveDifficulty[3];       // 카드별 난이도 (세 장 모두 다름)
     int selectedDrive;
+    int difficulty;               // 마운트한 볼륨의 난이도 (마운트 전 -1)
     int mobSchedule[6];           // 일반전 6회의 등장 순서 (드라이브 확정 시 셔플)
     int mobScheduleReady;
     BossRuntime boss;
@@ -109,6 +111,7 @@ struct GameState {
     int lastTurnDamageDealt;
     int lastTurnDamageTaken;
     int lastTurnBlockGained;
+    int lastTurnSlotOutput[SLOT_COUNT];   // 슬롯별 산출량 (미리보기·UI 표기)
     int lastTurnReversed;         // 직전 해결이 역전 순서였는지 (UI 표기)
     // 타격 연출용 기록. 규칙에는 전혀 관여하지 않고 화면이 읽기만 하므로
     // 스모크·밸런스의 결정론은 그대로다.
@@ -126,6 +129,21 @@ struct GameState {
     int pruneAdvancePending;
     wchar_t logs[5][96];
 };
+
+// 실행 전 미리보기. 상태 사본에서 EndTurn을 돌려 숫자만 읽으므로 원본은 변하지 않고
+// 규칙에도 관여하지 않는다. 읽기 오류가 걸린 주사위는 실행 순간 다시 굴러가므로
+// 그때는 uncertain이 서고, 미리보기 값은 확정이 아니라 현재 굴림 기준의 예상이다.
+struct TurnPreview {
+    int valid;                    // 배치된 주사위가 없으면 0
+    int damageDealt;              // 적이 잃을 체력
+    int damageTaken;              // 내가 잃을 체력
+    int blockGained;              // 이번 턴 얻는 방어도
+    int slotOutput[SLOT_COUNT];   // 슬롯별 산출량
+    int combatEnds;               // 이 배치로 적이 전멸하는가
+    int playerDies;               // 이 배치로 내가 쓰러지는가
+    int uncertain;                // 읽기 오류로 확정할 수 없음
+};
+void PreviewTurn(const GameState* game, TurnPreview* out);
 
 void InitTitle(GameState* game);
 void NewRun(GameState* game, uint32_t seed);
@@ -164,6 +182,10 @@ int SectorRepairAmount(const GameState* game);
 int NonEmptyFaceCount(const GameState* game);
 int UsableFaceCount(const GameState* game);   // FacePower ≥ 1로 실제 출력 가능한 면 수
 int IsModifierActive(const GameState* game, int modifier);
+// 난이도가 정해지지 않았으면(테스트 경로) DIFFICULTY_BASE_PERCENT를 돌려준다.
+int CorruptPercent(const GameState* game);
+int ScaleCorruptDamage(const GameState* game, int damage);
+const DifficultyInfo* DifficultyInfoOrNull(int difficulty);
 int LivingEnemyCount(const GameState* game);
 const Face* RolledFace(const GameState* game, int dieIndex);
 

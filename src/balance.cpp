@@ -64,9 +64,10 @@ static void AssignDice(GameState* game) {
     }
 }
 
-static int Run(int drive, unsigned int seed, int* combats) {
+static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
     GameState game; NewRun(&game, seed);
     game.driveChoices[0] = drive;   // 검사 대상 드라이브를 강제로 첫 카드에 놓는다
+    *difficulty = game.driveDifficulty[0];
     int steps = 0;
     while (game.phase != PHASE_VICTORY && game.phase != PHASE_GAMEOVER && steps++ < 600) {
         if (game.phase == PHASE_DRIVE_SELECT) {
@@ -95,13 +96,17 @@ int main() {
     const int runsPerDrive = 300;
     int totalWins = 0, failed = 0;
     double totalAvg = 0.0;
+    // 난이도는 카드마다 무작위로 붙으므로 등급별 표본이 저절로 쌓인다.
+    int gradeRuns[DIFFICULTY_COUNT] = {}, gradeWins[DIFFICULTY_COUNT] = {};
     printf("BALANCE per-drive (%d seeds each)\n", runsPerDrive);
     for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
         int wins = 0, totalCombats = 0;
         int bossReached[3] = {}, bossKilled[3] = {};
         for (int i = 0; i < runsPerDrive; ++i) {
-            int combats = 0;
-            wins += Run(drive, 0x77110000u + (unsigned int)(drive * 7717 + i * 7919), &combats);
+            int combats = 0, difficulty = -1;
+            int won = Run(drive, 0x77110000u + (unsigned int)(drive * 7717 + i * 7919), &combats, &difficulty);
+            wins += won;
+            if (difficulty >= 0 && difficulty < DIFFICULTY_COUNT) { ++gradeRuns[difficulty]; gradeWins[difficulty] += won; }
             totalCombats += combats;
             // 보스 도달·처치는 승리한 전투 수에서 직접 유도된다.
             for (int f = 0; f < 3; ++f) {
@@ -119,6 +124,11 @@ int main() {
         // 게이트: 어떤 드라이브도 0승이면 안 되고, 1층 보스 도달률이 바닥이면 실패
         if (wins == 0) { printf("  GATE FAIL: drive %d has zero wins\n", drive); failed = 1; }
         if (bossReached[0] < runsPerDrive / 10) { printf("  GATE FAIL: drive %d rarely reaches boss 1\n", drive); failed = 1; }
+    }
+    for (int g = 0; g < DIFFICULTY_COUNT; ++g) {
+        printf("  difficulty %d (corrupt %d%%): wins %d/%d\n",
+            g, DIFFICULTY_INFO[g].corruptPercent, gradeWins[g], gradeRuns[g]);
+        if (gradeRuns[g] > 0 && gradeWins[g] == 0) { printf("  GATE FAIL: difficulty %d has zero wins\n", g); failed = 1; }
     }
     printf("BALANCE: %d/%d total heuristic wins, %.2f average combats\n",
         totalWins, runsPerDrive * DRIVE_COUNT, totalAvg / DRIVE_COUNT);
