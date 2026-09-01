@@ -17,6 +17,7 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define COMBAT_CLEAR_MS 1500
 #define TURN_TRACE_STEP_MS 360
 #define DESCENT_MS 2400
+#define DIR_ENTER_MS 900       // 디렉터리 진입 연출
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
 // ---- 피격·위독·정지 연출 --------------------------------------------------
@@ -44,6 +45,9 @@ extern int gTurnTraceActive;
 extern DWORD gTurnTraceStart;
 extern int gDescentActive, gDescentToFloor;
 extern DWORD gDescentStart;
+// 디렉터리 진입: 고른 경로 조각이 타이핑되는 짧은 오버레이
+extern int gDirEnterActive, gDirEnterKind;
+extern DWORD gDirEnterStart;
 // 체력 0 이후의 정지 연출 (노이즈가 화면을 삼키고 나면 재시작 화면으로 넘어간다)
 extern int gDeathActive;
 extern DWORD gDeathStart;
@@ -101,6 +105,7 @@ RECT FullscreenToggleRect();
 RECT RestartButtonRect();
 RECT StartButtonRect(int width, int height);
 RECT DriveCardRect(int i);
+RECT DirectoryChoiceRect(int i);
 RECT EnemyRect(int i);
 RECT SlotRect(int i);
 RECT DieRect(int i);

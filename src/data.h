@@ -455,3 +455,95 @@ static const int DRIVE_BOSSES[DRIVE_COUNT][DRIVE_BOSS_COUNT] = {
     {BOSS_R_LEAK_DLL, BOSS_R_HEAP_OVERFLOW, BOSS_R_OUT_OF_MEMORY},
     {BOSS_X_SAMPLE13, BOSS_X_SANDBOX_BREACH, BOSS_X_ZERO_DAY}
 };
+
+// ---------------------------------------------------------------------------
+// 디렉터리 경로 노드
+//
+// 층마다 두 번, 다음 일반전 직전에 고르는 하위 디렉터리다. 노드는 면이나
+// 상주 프로그램을 직접 주지 않고 다음 전투와 그 보상의 조건만 바꾼다.
+// 내부 명칭에 Route를 쓰지 않는 이유는 N:\ 보스 기믹의 FAM_ROUTE와 충돌하기
+// 때문이다. 경로 문자열은 저장하지 않고 segment와 층 경로에서 조합한다.
+// ---------------------------------------------------------------------------
+
+enum DirectoryNodeKind {
+    DIR_NODE_NONE = 0,
+    DIR_NODE_PROCESS,
+    DIR_NODE_TEMP,
+    DIR_NODE_CACHE,
+    DIR_NODE_LOGS,
+    DIR_NODE_INFECTED,
+    DIR_NODE_CORRUPTED,
+    DIR_NODE_RECOVERY,
+    DIR_NODE_UNKNOWN,
+    DIR_NODE_COUNT
+};
+
+// 두 선택지는 서로 다른 가치 축에서 뽑는다. 같은 카테고리끼리는 둘 다
+// High Risk가 아닌 한 함께 제시되지 않는다 (TEMP + RECOVERY 금지 규칙).
+enum DirectoryCategory {
+    DIR_CAT_COMBAT = 0,
+    DIR_CAT_MAINTENANCE,
+    DIR_CAT_INTEL,
+    DIR_CAT_ANOMALY
+};
+
+enum DirectoryRisk {
+    DIR_RISK_LOW = 0,
+    DIR_RISK_MEDIUM,
+    DIR_RISK_HIGH,
+    DIR_RISK_UNKNOWN
+};
+
+// 노드 수치. 규칙 문서와 화면 문구가 같은 값을 참조하도록 상수로 둔다.
+#define DIR_TEMP_HEAL 6
+#define DIR_CACHE_BYTES 20
+#define DIR_CACHE_BLOCK 6
+#define DIR_LOGS_BLOCK 4
+#define DIR_INFECTED_HP_PERCENT 120
+#define DIR_RECOVERY_HP_COST 5
+#define DIR_CORRUPTED_MIN_FACES 4
+#define DIRECTORY_CHOICE_COUNT 2
+#define DIRECTORY_PER_FLOOR 2
+#define DIRECTORY_GEN_ATTEMPTS 8
+
+struct DirectoryNodeInfo {
+    const wchar_t* segment;    // 경로에 붙는 조각 (11자 이하 ASCII)
+    const wchar_t* name;       // 카드 표시명
+    const wchar_t* effect;     // 효과 한 줄
+    const wchar_t* cost;       // 비용 한 줄
+    uint8_t category;          // DirectoryCategory
+    uint8_t risk;              // DirectoryRisk
+    uint8_t maxPerFloor;       // 층당 최대 등장 수
+    uint8_t enabled;           // 0 = 2차 확장 대기. 생성에서 제외된다
+    uint8_t rewardTier;        // 0 = 표준 보상, 1 = 강화 보상
+    uint8_t rewardChoices;     // 이 노드 뒤 면 보상 후보 수
+    uint32_t color;
+};
+
+static const DirectoryNodeInfo DIRECTORY_NODE_INFO[DIR_NODE_COUNT] = {
+    {L"", L"-", L"-", L"-", DIR_CAT_COMBAT, DIR_RISK_LOW, 0, 0, 0, 3, AR_COLOR(120, 145, 157)},
+    {L"PROCESS",   L"PROCESS",   L"예정된 프로세스와 그대로 교전합니다.",     L"추가 이득 없음",              DIR_CAT_COMBAT,      DIR_RISK_LOW,    2, 1, 0, 3, AR_COLOR(120, 145, 157)},
+    {L"TEMP",      L"TEMP",      L"체력 +6 (최대치 초과 없음)",              L"다음 면 보상 후보 3 → 2",     DIR_CAT_MAINTENANCE, DIR_RISK_LOW,    1, 1, 0, 2, AR_COLOR(95, 225, 176)},
+    {L"CACHE",     L"CACHE",     L"이번 층 용량 한도 +20B",                  L"적이 방어도 6으로 시작",      DIR_CAT_MAINTENANCE, DIR_RISK_MEDIUM, 1, 1, 0, 3, AR_COLOR(255, 204, 75)},
+    {L"LOGS",      L"LOGS",      L"이번 층의 적·보스 정보를 임시 공개",      L"적이 방어도 4로 시작",        DIR_CAT_INTEL,       DIR_RISK_MEDIUM, 1, 1, 0, 3, AR_COLOR(83, 170, 255)},
+    {L"INFECTED",  L"INFECTED",  L"적 최대 체력 +20%",                       L"전투가 길어집니다",           DIR_CAT_COMBAT,      DIR_RISK_HIGH,   1, 1, 1, 3, AR_COLOR(255, 92, 82)},
+    {L"CORRUPTED", L"CORRUPTED", L"면 하나를 이번 전투 동안 격리",           L"격리된 면은 비용만 남습니다", DIR_CAT_ANOMALY,     DIR_RISK_HIGH,   1, 1, 1, 3, AR_COLOR(210, 105, 235)},
+    {L"RECOVERY",  L"RECOVERY",  L"손상된 면 하나를 복구",                   L"현재 체력 -5",                DIR_CAT_MAINTENANCE, DIR_RISK_MEDIUM, 1, 0, 0, 3, AR_COLOR(182, 96, 220)},
+    {L"UNKNOWN",   L"UNKNOWN",   L"결과가 공개되지 않습니다",                L"영구 삭제와 즉사는 없음",     DIR_CAT_ANOMALY,     DIR_RISK_UNKNOWN,1, 0, 0, 3, AR_COLOR(255, 139, 209)}
+};
+
+static const wchar_t* const DIRECTORY_RISK_NAMES[4] = {L"LOW", L"MEDIUM", L"HIGH", L"UNKNOWN"};
+static const wchar_t* const DIRECTORY_RISK_LABELS[4] = {L"낮음", L"보통", L"높음", L"불명"};
+static const wchar_t* const DIRECTORY_CATEGORY_NAMES[4] = {L"전투", L"정비", L"정보", L"변칙"};
+
+// 드라이브별 고정 가중치 (0~5). 0이면 그 볼륨에서는 등장하지 않는다.
+// 드라이브 개성은 별도 노드가 아니라 이 표와 기존 로스터·손상·특성이 만든다.
+static const uint8_t DIRECTORY_DRIVE_WEIGHT[DRIVE_COUNT][DIR_NODE_COUNT] = {
+    //   NONE PROCESS TEMP CACHE LOGS INFECTED CORRUPTED RECOVERY UNKNOWN
+    {0, 5, 3, 2, 2, 3, 1, 5, 1},   // C:\ SYSTEM     배드 섹터가 있어 복구 성향
+    {0, 4, 2, 3, 4, 2, 3, 5, 3},   // D:\ ARCHIVE    백업 테마: 복구와 정보
+    {0, 4, 1, 2, 3, 4, 3, 0, 4},   // E:\ REMOVABLE  승리 회복이 있어 TEMP 감소
+    {0, 3, 1, 2, 5, 5, 2, 0, 4},   // N:\ NETWORK    네트워크 테마: 정보와 감염
+    {0, 3, 2, 5, 2, 5, 4, 0, 3},   // R:\ RAMDISK    메모리 테마: 용량과 위험
+    {0, 2, 1, 1, 3, 5, 5, 0, 5}    // X:\ QUARANTINE 격리 테마: 변칙과 감염
+};
