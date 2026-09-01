@@ -121,7 +121,6 @@ struct GameState {
     uint8_t lastTurnEnemyStruck[3];      // 이번 실행에서 나를 때린 적 (막혀서 피해 0이어도 1)
     int lastTurnEnemyStrikeDamage[3];    // 방어도를 뚫고 들어온 피해
     int lastTurnEnemyStrikeTrace[3];     // 그 행동이 적힌 계산 줄 번호 (-1 = 없음)
-    int hasTurnResult;
     int turnTraceCount;
     int turnTraceOverflow;        // 12줄을 넘겨 기록이 버려졌으면 1 (회귀 검사용)
     wchar_t turnTrace[TURN_TRACE_CAP][96];

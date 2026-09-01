@@ -777,7 +777,6 @@ int StartCombat(GameState* game) {
     if (!game->mobScheduleReady) BuildMobSchedule(game, NextRandom(game));
     game->phase = PHASE_COMBAT;
     game->turn = 1;
-    game->hasTurnResult = 0;
     game->enemyCount = 0;
     game->targetEnemy = 0;
     ZeroMemory(game->enemies, sizeof(game->enemies));
@@ -1416,7 +1415,6 @@ void EndTurn(GameState* game) {
     if (LivingEnemyCount(game) == 0) {
         game->lastTurnDamageDealt = enemyHpBefore - enemyHpAfterPlayer;
         game->lastTurnDamageTaken = 0;
-        game->hasTurnResult = 1;
         CombatWon(game);
         return;
     }
@@ -1427,7 +1425,6 @@ void EndTurn(GameState* game) {
     game->lastTurnDamageDealt = enemyHpBefore - lowestEnemyHp;
     game->lastTurnDamageTaken = playerHpBefore - game->playerHp;
     if (game->lastTurnDamageTaken < 0) game->lastTurnDamageTaken = 0;
-    game->hasTurnResult = 1;
     wchar_t result[96];
     wsprintfW(result, L"실행 결과: 적 체력 -%d · 내 체력 -%d · 방어도 %d.",
         game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);

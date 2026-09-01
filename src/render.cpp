@@ -210,9 +210,10 @@ void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level) {
     }
 }
 
-// 코드명을 길이 그대로 노이즈로 바꾼다. 구분 기호(. -)와 공백은 남겨 두어
-// 원래 형태가 어렴풋이 읽히고, 판독되는 순간의 대비가 살아난다.
-void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int step) {
+// 글자마다 주기가 다르다. 빠른 글자는 쉴 새 없이 튀고 느린 글자는 잠깐 멈춘 것처럼
+// 보여서, 한 줄이 통째로 갈리는 것보다 훨씬 "뚫리는 중"으로 읽힌다. 구분 기호(. -)와
+// 공백은 남겨 두어 원래 형태가 어렴풋이 읽히고, 판독되는 순간의 대비가 살아난다.
+void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, uint32_t tick) {
     if (!out || cap <= 0) return;
     out[0] = 0;
     if (!source) return;
@@ -220,7 +221,8 @@ void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int ste
     for (; source[n] && n < cap - 1; ++n) {
         wchar_t c = source[n];
         if (c == L' ' || c == L'.' || c == L'-') { out[n] = c; continue; }
-        uint32_t h = Hash3(seed, step, n);
+        uint32_t period = 45u + (Hash3(seed, n, 0x51CE) % 210u);   // 45~254ms
+        uint32_t h = Hash3(seed * 13 + n, (int)(tick / period), n);
         out[n] = (h & 7u) == 0 ? L'?' : (h & 7u) == 1 ? L'#' : HEX_DIGIT[(h >> 4) & 15u];
     }
     out[n] = 0;
@@ -228,21 +230,29 @@ void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int ste
 
 // 사각형을 헥스 덤프로 채운다. 판독 전 설명문 자리를 통째로 덮는 용도다.
 // 한글은 폭이 두 배라 글자 단위로 갈아 끼우면 폭이 무너지므로, 설명문은
-// 바꾸지 않고 이렇게 덮는다.
-void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, int step, int rows) {
+// 바꾸지 않고 이렇게 덮는다. 칸마다 주기가 다르고, 밝은 주사선 한 줄이
+// 위에서 아래로 훑어 내려가며, 줄마다 좌우로 몇 px씩 어긋난다.
+void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t tick, int rows) {
     int width = area.right - area.left;
     if (width <= 0 || rows <= 0) return;
     int columns = width / 9;              // Consolas 16px의 ASCII 한 칸이 대략 9px
     if (columns > 62) columns = 62;
     if (columns < 4) columns = 4;
+    int scanRow = (int)((tick / 170u) % (uint32_t)rows);
+    COLORREF bright = MixColor(color, C_GREEN, 62);
     wchar_t line[64];
     for (int row = 0; row < rows; ++row) {
         int top = area.top + row * 19;
         if (top + 14 > area.bottom) break;
-        for (int i = 0; i < columns; ++i)
-            line[i] = (i % 3 == 2) ? L' ' : HEX_DIGIT[Hash3(seed * 31 + row, step, i) & 15u];
+        for (int i = 0; i < columns; ++i) {
+            if (i % 3 == 2) { line[i] = L' '; continue; }
+            uint32_t period = 40u + (Hash3(seed + row, i, 0x7A5D) % 190u);   // 40~229ms
+            line[i] = HEX_DIGIT[Hash3(seed * 31 + row, (int)(tick / period), i) & 15u];
+        }
         line[columns] = 0;
-        TextRect(dc, MakeRect(area.left, top, area.right, top + 18), line, color, gFontSmall, DT_LEFT | DT_SINGLELINE);
+        int jitter = (int)(Hash3(seed, row, (int)(tick / 90u)) % 4u);
+        TextRect(dc, MakeRect(area.left + jitter, top, area.right, top + 18), line,
+            row == scanRow ? bright : color, gFontSmall, DT_LEFT | DT_SINGLELINE);
     }
 }
 

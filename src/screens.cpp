@@ -409,11 +409,6 @@ static void DrawCombat(HDC dc, int width, int height) {
             wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d%s",
                 gPreview.damageDealt, gPreview.damageTaken, gPreview.blockGained, note);
         Text(dc, 28, 382, result, gPreview.playerDies ? C_RED : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
-    } else if (gGame.hasTurnResult) {
-        wchar_t result[128];
-        wsprintfW(result, L"최근 실행  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d",
-            gGame.lastTurnDamageDealt, gGame.lastTurnDamageTaken, gGame.lastTurnBlockGained);
-        Text(dc, 28, 382, result, C_YELLOW, gFontSmall);
     } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
     else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);
@@ -762,6 +757,14 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
         L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
+int GuideNoiseActive() {
+    if (!gGuideOpen || gGuidePage != 1) return 0;
+    if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) return 0;
+    for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_MOBS[gGame.selectedDrive][i])) return 1;
+    for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_BOSSES[gGame.selectedDrive][i])) return 1;
+    return 0;
+}
+
 static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
     if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) {
@@ -780,7 +783,8 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
     // 처치한 개체만 정보가 열린다. 아직 만나지 않은 칸은 살아 있는 헥스 노이즈로 덮인다.
     const int* mobs = DRIVE_MOBS[gGame.selectedDrive];
     const int* bosses = DRIVE_BOSSES[gGame.selectedDrive];
-    int step = (int)(GetTickCount() / 260u), scanned = 0;
+    uint32_t tick = GetTickCount();
+    int scanned = 0;
     for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (IsEnemyScanned(&gGame, mobs[i])) ++scanned;
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (IsEnemyScanned(&gGame, bosses[i])) ++scanned;
     wsprintfW(b, L"판독 %d / %d  ·  처치한 개체만 열립니다", scanned, DRIVE_MOB_COUNT + DRIVE_BOSS_COUNT);
@@ -796,10 +800,10 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
             wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
             TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
         } else {
-            wchar_t garbled[32]; CorruptCode(info->code, garbled, 32, mobs[i], step);
+            wchar_t garbled[32]; CorruptCode(info->code, garbled, 32, mobs[i], tick);
             Text(dc, left, y, garbled, C_LINE, gFontMedium);
             TextRect(dc, MakeRect(left, y, middle - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], step, 2);
+            DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], tick, 2);
         }
     }
     TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
@@ -817,12 +821,12 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
             TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
         } else {
             wchar_t garbledCode[32], garbledName[24];
-            CorruptCode(info->code, garbledCode, 32, bosses[i], step);
-            CorruptCode(L"????????", garbledName, 24, bosses[i] + 101, step);
+            CorruptCode(info->code, garbledCode, 32, bosses[i], tick);
+            CorruptCode(L"????????", garbledName, 24, bosses[i] + 101, tick);
             wsprintfW(b, L"%d층  %s — %s", i + 1, garbledCode, garbledName);
             Text(dc, middle, y, b, C_LINE, gFontMedium);
             TextRect(dc, MakeRect(middle, y, panel.right - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            DrawHexBlock(dc, MakeRect(middle, y + 28, panel.right - 28, y + 110), C_LINE, bosses[i], step, 4);
+            DrawHexBlock(dc, MakeRect(middle, y + 28, panel.right - 28, y + 110), C_LINE, bosses[i], tick, 4);
         }
     }
 }

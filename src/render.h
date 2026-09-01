@@ -49,9 +49,10 @@ void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF colo
 // 미판독 정보를 가리는 노이즈.
 //   CorruptCode  ASCII 코드명을 길이 그대로 헥스·기호로 갈아 끼운다 (폭이 유지된다).
 //   DrawHexBlock 사각형을 헥스 덤프로 채운다. 한글 설명문을 통째로 덮을 때 쓴다.
-// 둘 다 step이 바뀌면 다시 섞이므로 살아 있는 노이즈처럼 보인다.
-void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int step);
-void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, int step, int rows);
+// 둘 다 tick(밀리초)을 받아 글자·칸마다 다른 주기로 흔들린다. 줄이 통째로 갈리는
+// 대신 낱글자가 제각기 튀므로, 고정된 노이즈가 아니라 지금 뚫리는 중으로 보인다.
+void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, uint32_t tick);
+void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t tick, int rows);
 
 // 화면 전체를 삼키는 노이즈. level은 0(깨끗)~1000(완전 백색소음)이고
 // 그 값이 그대로 화면을 덮는 비율이 된다 (1000이면 빈틈이 없다).
