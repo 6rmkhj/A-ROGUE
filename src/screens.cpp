@@ -276,6 +276,14 @@ static void DrawEnemy(HDC dc, int index) {
 // 실행 전 미리보기. DrawCombat이 프레임마다 한 번 계산하고 아래에서 읽기만 한다.
 static TurnPreview gPreview;
 
+static COLORREF SlotAccent(int slot) {
+    return slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN;
+}
+
+// 주사위 번호 배지. 세 주사위가 같은 값을 내면 값만으로는 구분할 수 없으므로,
+// 슬롯과 주사위 카드 양쪽에 같은 기호를 찍어 짝을 드러낸다.
+static const wchar_t* const DIE_BADGE[3] = {L"①", L"②", L"③"};
+
 static void DrawSlot(HDC dc, int slot) {
     RECT r = SlotRect(slot); int die = DieForSlotUI(slot); int hover = Inside(r, gMouse.x, gMouse.y);
     int locked = SlotLockedThisTurn(&gGame, slot), lockedNext = SlotLockedNextTurn(&gGame, slot);
@@ -288,12 +296,11 @@ static void DrawSlot(HDC dc, int slot) {
         return;
     }
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
-    Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN, gFontMedium);
+    Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], SlotAccent(slot), gFontMedium);
     // 예상 산출량. 0이면 이 슬롯이 이번 턴 아무 일도 하지 않는다는 뜻이라 흐리게 둔다.
     if (gPreview.valid && die >= 0) {
         wchar_t out[24]; wsprintfW(out, L"→ %d", gPreview.slotOutput[slot]);
-        COLORREF tint = gPreview.slotOutput[slot] > 0
-            ? (slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN) : C_DIM;
+        COLORREF tint = gPreview.slotOutput[slot] > 0 ? SlotAccent(slot) : C_DIM;
         TextRect(dc, MakeRect(r.left + 58, r.top + 10, r.right - 8, r.top + 32), out, tint, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
     if (die >= 0) {
@@ -301,8 +308,13 @@ static void DrawSlot(HDC dc, int slot) {
         int offline = gGame.dice[die].offline;
         if (offline) TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), L"오프라인", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         else TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        wchar_t b[48]; wsprintfW(b, L"주사위 %d · %dB", die + 1, FaceCost(face));
-        TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        wchar_t b[48]; wsprintfW(b, L"%s 주사위 %d · %dB", DIE_BADGE[die], die + 1, FaceCost(face));
+        TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b,
+            die == gGame.selectedDie ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    } else if (gGame.selectedDie >= 0) {
+        // 고른 주사위가 있으면 빈 슬롯이 클릭 결과를 미리 말해 준다.
+        wchar_t hint[32]; wsprintfW(hint, L"주사위 %d 배치", gGame.selectedDie + 1);
+        TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), hint, C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
     if (lockedNext) TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6),
         die >= 0 ? L"" : L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -317,12 +329,24 @@ static void DrawDie(HDC dc, int index) {
     RECT cell = MakeRect(r.left + 6, r.top + 25, r.right - 6, r.top + 72);
     RECT statusRect = MakeRect(r.left + 7, r.top + 74, r.right - 7, r.bottom - 5);
 
-    COLORREF border = selected ? C_GREEN : hover ? C_BLUE : C_LINE;
+    COLORREF border = selected ? C_YELLOW : hover ? C_BLUE : C_LINE;
     if (noise > 0) border = (step & 1) ? C_RED : RGB(96, 58, 58);
     else if (flash > 0) border = C_GREEN;
-    Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, border);
-    wchar_t b[64]; wsprintfW(b, L"주사위 %d", index + 1);
-    Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
+    Panel(dc, r, selected ? RGB(42, 36, 18) : C_PANEL, border);
+    // 판독 연출의 붉은·초록 테두리가 선택 표시를 덮어 버리므로, 선택은 그 위에
+    // 두께 2로 덧그려 어느 상태에서도 사라지지 않게 한다.
+    if (selected) Outline(dc, r, C_YELLOW, 2);
+    wchar_t b[64]; wsprintfW(b, L"%s 주사위 %d", DIE_BADGE[index], index + 1);
+    Text(dc, r.left + 10, r.top + 8, b, selected ? C_YELLOW : C_TEXT, gFontSmall);
+    // 배치돼 있으면 어느 슬롯인지를 그 슬롯 색으로 적는다. 선택 표시는 테두리가
+    // 이미 하고 있으므로, 자리를 두고 다투게 두지 않는다.
+    int placedIn = gGame.dice[index].assignedSlot;
+    if (placedIn >= 0 && placedIn < SLOT_COUNT) {
+        wchar_t where[32]; wsprintfW(where, L"→ %s", SLOT_SHORT_NAMES[placedIn]);
+        TextRect(dc, MakeRect(r.left + 80, r.top + 6, r.right - 10, r.top + 26), where,
+            SlotAccent(placedIn), gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    } else if (selected) TextRect(dc, MakeRect(r.left + 80, r.top + 6, r.right - 10, r.top + 26),
+        L"▶ 선택", C_YELLOW, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     if (!gRolled && !gReadActive) {   // sector never read this turn: faint drift
         DrawSectorStatic(dc, cell, index, (int)(GetTickCount() / 260u), 70);
