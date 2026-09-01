@@ -302,7 +302,12 @@ static void DrawSlot(HDC dc, int slot) {
         if (offline) TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), L"오프라인", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         else TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         wchar_t b[48]; wsprintfW(b, L"주사위 %d · %dB", die + 1, FaceCost(face));
-        TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b,
+            die == gGame.selectedDie ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    } else if (gGame.selectedDie >= 0) {
+        // 고른 주사위가 있으면 빈 슬롯이 클릭 결과를 미리 말해 준다.
+        wchar_t hint[32]; wsprintfW(hint, L"주사위 %d 배치", gGame.selectedDie + 1);
+        TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), hint, C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
     if (lockedNext) TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6),
         die >= 0 ? L"" : L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -317,12 +322,17 @@ static void DrawDie(HDC dc, int index) {
     RECT cell = MakeRect(r.left + 6, r.top + 25, r.right - 6, r.top + 72);
     RECT statusRect = MakeRect(r.left + 7, r.top + 74, r.right - 7, r.bottom - 5);
 
-    COLORREF border = selected ? C_GREEN : hover ? C_BLUE : C_LINE;
+    COLORREF border = selected ? C_YELLOW : hover ? C_BLUE : C_LINE;
     if (noise > 0) border = (step & 1) ? C_RED : RGB(96, 58, 58);
     else if (flash > 0) border = C_GREEN;
-    Panel(dc, r, selected ? RGB(26, 48, 49) : C_PANEL, border);
+    Panel(dc, r, selected ? RGB(42, 36, 18) : C_PANEL, border);
+    // 판독 연출의 붉은·초록 테두리가 선택 표시를 덮어 버리므로, 선택은 그 위에
+    // 두께 2로 덧그려 어느 상태에서도 사라지지 않게 한다.
+    if (selected) Outline(dc, r, C_YELLOW, 2);
     wchar_t b[64]; wsprintfW(b, L"주사위 %d", index + 1);
-    Text(dc, r.left + 10, r.top + 8, b, selected ? C_GREEN : C_TEXT, gFontSmall);
+    Text(dc, r.left + 10, r.top + 8, b, selected ? C_YELLOW : C_TEXT, gFontSmall);
+    if (selected) TextRect(dc, MakeRect(r.left + 60, r.top + 6, r.right - 10, r.top + 26),
+        L"▶ 선택", C_YELLOW, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     if (!gRolled && !gReadActive) {   // sector never read this turn: faint drift
         DrawSectorStatic(dc, cell, index, (int)(GetTickCount() / 260u), 70);
