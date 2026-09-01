@@ -378,8 +378,10 @@ int EnemyBob(int index) {
 
 static int gIdleActive;
 void SyncIdleAnimation() {
-    int wanted = (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT || AmbientNoiseLevel() > 0)
-        && !gGuideOpen && !gSettingsOpen && !gDeckOpen;
+    // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
+    // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
+    int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT || AmbientNoiseLevel() > 0)
+        && !gGuideOpen && !gSettingsOpen && !gDeckOpen) || GuideNoiseActive();
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);

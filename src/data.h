@@ -396,6 +396,39 @@ static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
 };
 
 // ---------------------------------------------------------------------------
+// 볼륨 난이도. 드라이브 선택 카드 3장에 서로 다른 등급이 무작위로 배정된다.
+// corruptPercent는 오염(관통) 피해를 받는 비율(%)이며 악몽(100)이 기준값이다.
+// 난이도는 오염 의도의 예고 수치를 직접 배율하므로, 적 카드에 뜨는 숫자가
+// 곧 실제로 들어올 피해다.
+// ---------------------------------------------------------------------------
+
+enum DifficultyKind {
+    DIFF_BEGINNER = 0,
+    DIFF_INTERMEDIATE,
+    DIFF_EXPERT,
+    DIFF_NIGHTMARE,
+    DIFF_MADNESS
+};
+
+#define DIFFICULTY_COUNT 5
+#define DIFFICULTY_BASE_PERCENT 100   // 난이도가 정해지지 않은 상태(테스트 경로)의 기준값
+
+struct DifficultyInfo {
+    const wchar_t* name;
+    int corruptPercent;         // 오염(관통) 피해 배율 (%)
+    const wchar_t* brief;       // 카드/사이드바용 한 줄 요약
+    uint32_t color;
+};
+
+static const DifficultyInfo DIFFICULTY_INFO[DIFFICULTY_COUNT] = {
+    {L"초급자", 25,  L"오염(관통) 피해 25%",  AR_COLOR(95, 225, 176)},
+    {L"중급자", 50,  L"오염(관통) 피해 50%",  AR_COLOR(83, 170, 255)},
+    {L"전문가", 75,  L"오염(관통) 피해 75%",  AR_COLOR(255, 204, 75)},
+    {L"악몽",   100, L"오염(관통) 피해 100%", AR_COLOR(255, 139, 92)},
+    {L"광기",   200, L"오염(관통) 피해 200%", AR_COLOR(255, 92, 82)}
+};
+
+// ---------------------------------------------------------------------------
 // 드라이브별 전투 로스터. 소속과 등장 위치의 단일 진실원이다.
 // 활성 적 = 이 두 테이블이 참조하는 종류의 합집합 (총 36종).
 // DRIVE_MOBS[drive]의 세 몹은 모든 층에 등장하며 base + growth × floor로

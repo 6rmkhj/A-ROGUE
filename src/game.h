@@ -93,7 +93,9 @@ struct GameState {
     int modifierA;
     int modifierB;
     int driveChoices[3];
+    int driveDifficulty[3];       // 카드별 난이도 (세 장 모두 다름)
     int selectedDrive;
+    int difficulty;               // 마운트한 볼륨의 난이도 (마운트 전 -1)
     int mobSchedule[6];           // 일반전 6회의 등장 순서 (드라이브 확정 시 셔플)
     int mobScheduleReady;
     BossRuntime boss;
@@ -104,18 +106,21 @@ struct GameState {
     uint8_t tsrInstalled[TSR_COUNT];
     uint8_t keybUsedThisTurn;
     uint8_t tsrReserved[2];
+    // 판독한 적. 처치한 종류만 1이 되고 가이드의 노이즈가 걷힌다.
+    // 런 단위로만 유지된다 (NewRun의 ZeroMemory가 초기화).
+    uint8_t enemyScanned[ENEMY_KIND_COUNT];
     int lastDamage;
     int lastBlock;
     int lastTurnDamageDealt;
     int lastTurnDamageTaken;
     int lastTurnBlockGained;
+    int lastTurnSlotOutput[SLOT_COUNT];   // 슬롯별 산출량 (미리보기·UI 표기)
     int lastTurnReversed;         // 직전 해결이 역전 순서였는지 (UI 표기)
     // 타격 연출용 기록. 규칙에는 전혀 관여하지 않고 화면이 읽기만 하므로
     // 스모크·밸런스의 결정론은 그대로다.
     uint8_t lastTurnEnemyStruck[3];      // 이번 실행에서 나를 때린 적 (막혀서 피해 0이어도 1)
     int lastTurnEnemyStrikeDamage[3];    // 방어도를 뚫고 들어온 피해
     int lastTurnEnemyStrikeTrace[3];     // 그 행동이 적힌 계산 줄 번호 (-1 = 없음)
-    int hasTurnResult;
     int turnTraceCount;
     int turnTraceOverflow;        // 12줄을 넘겨 기록이 버려졌으면 1 (회귀 검사용)
     wchar_t turnTrace[TURN_TRACE_CAP][96];
@@ -126,6 +131,21 @@ struct GameState {
     int pruneAdvancePending;
     wchar_t logs[5][96];
 };
+
+// 실행 전 미리보기. 상태 사본에서 EndTurn을 돌려 숫자만 읽으므로 원본은 변하지 않고
+// 규칙에도 관여하지 않는다. 읽기 오류가 걸린 주사위는 실행 순간 다시 굴러가므로
+// 그때는 uncertain이 서고, 미리보기 값은 확정이 아니라 현재 굴림 기준의 예상이다.
+struct TurnPreview {
+    int valid;                    // 배치된 주사위가 없으면 0
+    int damageDealt;              // 적이 잃을 체력
+    int damageTaken;              // 내가 잃을 체력
+    int blockGained;              // 이번 턴 얻는 방어도
+    int slotOutput[SLOT_COUNT];   // 슬롯별 산출량
+    int combatEnds;               // 이 배치로 적이 전멸하는가
+    int playerDies;               // 이 배치로 내가 쓰러지는가
+    int uncertain;                // 읽기 오류로 확정할 수 없음
+};
+void PreviewTurn(const GameState* game, TurnPreview* out);
 
 void InitTitle(GameState* game);
 void NewRun(GameState* game, uint32_t seed);
@@ -164,6 +184,10 @@ int SectorRepairAmount(const GameState* game);
 int NonEmptyFaceCount(const GameState* game);
 int UsableFaceCount(const GameState* game);   // FacePower ≥ 1로 실제 출력 가능한 면 수
 int IsModifierActive(const GameState* game, int modifier);
+// 난이도가 정해지지 않았으면(테스트 경로) DIFFICULTY_BASE_PERCENT를 돌려준다.
+int CorruptPercent(const GameState* game);
+int ScaleCorruptDamage(const GameState* game, int damage);
+const DifficultyInfo* DifficultyInfoOrNull(int difficulty);
 int LivingEnemyCount(const GameState* game);
 const Face* RolledFace(const GameState* game, int dieIndex);
 
@@ -171,6 +195,8 @@ const Face* RolledFace(const GameState* game, int dieIndex);
 const EnemyInfo* GetEnemyInfoOrUnknown(int kind);
 int IsBossKind(int kind);
 int IsValidEnemyKind(int kind);
+// 이번 런에서 처치해 본 적인가. 가이드가 정보를 드러낼지 판정한다.
+int IsEnemyScanned(const GameState* game, int kind);
 
 // ---- 보스 기믹 상태 질의 (UI·휴리스틱 공용) --------------------------------
 int SlotLockedThisTurn(const GameState* game, int slot);

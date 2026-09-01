@@ -112,8 +112,31 @@ int InstalledTsrAt(const GameState* game, int slot) {
     return -1;
 }
 
+int IsEnemyScanned(const GameState* game, int kind) {
+    if (!game || !IsValidEnemyKind(kind)) return 0;
+    return game->enemyScanned[kind] != 0;
+}
+
 int IsModifierActive(const GameState* game, int modifier) {
     return game->modifierA == modifier || game->modifierB == modifier;
+}
+
+const DifficultyInfo* DifficultyInfoOrNull(int difficulty) {
+    if (difficulty < 0 || difficulty >= DIFFICULTY_COUNT) return 0;
+    return &DIFFICULTY_INFO[difficulty];
+}
+
+int CorruptPercent(const GameState* game) {
+    const DifficultyInfo* info = DifficultyInfoOrNull(game->difficulty);
+    return info ? info->corruptPercent : DIFFICULTY_BASE_PERCENT;
+}
+
+// 오염(관통) 피해에만 난이도 배율을 건다. 반올림하되 원래 피해가 있었다면
+// 최소 1은 남겨, 초급자에서도 오염이 완전히 무해해지지는 않게 한다.
+int ScaleCorruptDamage(const GameState* game, int damage) {
+    if (damage <= 0) return damage;
+    int scaled = (damage * CorruptPercent(game) + 50) / 100;
+    return scaled < 1 ? 1 : scaled;
 }
 
 // 드라이브가 아직 확정되지 않았으면(-1) 모든 특성이 0으로 죽는다.
@@ -582,6 +605,7 @@ void InitTitle(GameState* game) {
     game->selectedDie = -1;
     game->selectedReward = -1;
     game->selectedDrive = -1;
+    game->difficulty = -1;
     game->boss.offlineDie = -1;
     game->boss.nextOfflineDie = -1;
     game->boss.bestSlotLastTurn = -1;
@@ -615,6 +639,21 @@ static void PickDriveChoices(GameState* game) {
     }
 }
 
+// 카드 3장에 서로 다른 난이도를 배정한다. 드라이브 추첨과 같은 난수열을 쓰면
+// 이후 굴림 순서가 통째로 밀리므로, 시드에서 파생한 독립 난수를 쓴다.
+// 5종을 섞어 앞 3개만 가져오므로 중복이 나올 수 없다.
+static void PickDriveDifficulties(GameState* game, uint32_t seed) {
+    uint32_t rng = seed ? seed : 0x5EED1EEDu;
+    int pool[DIFFICULTY_COUNT];
+    for (int i = 0; i < DIFFICULTY_COUNT; ++i) pool[i] = i;
+    for (int i = DIFFICULTY_COUNT - 1; i > 0; --i) {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        int j = (int)(rng % (uint32_t)(i + 1));
+        int swap = pool[i]; pool[i] = pool[j]; pool[j] = swap;
+    }
+    for (int i = 0; i < 3; ++i) game->driveDifficulty[i] = pool[i];
+}
+
 // 시드에서 파생한 독립 난수로 세 몹의 순서를 섞고 A,B / C,A / B,C로 배치해
 // 6개 일반 전투에서 각 몹이 정확히 두 번씩 등장하게 한다.
 static void BuildMobSchedule(GameState* game, uint32_t seed) {
@@ -645,6 +684,7 @@ void NewRun(GameState* game, uint32_t seed) {
     game->selectedDie = -1;
     game->selectedReward = -1;
     game->selectedDrive = -1;
+    game->difficulty = -1;
     game->boss.offlineDie = -1;
     game->boss.nextOfflineDie = -1;
     game->boss.bestSlotLastTurn = -1;
@@ -652,12 +692,14 @@ void NewRun(GameState* game, uint32_t seed) {
     game->boss.nextTargetFace = -1;
     SetupStartingDice(game);
     PickDriveChoices(game);
+    PickDriveDifficulties(game, game->rng ^ 0x9E3779B9u);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
 }
 
 void SelectDrive(GameState* game, int choiceIndex) {
     if (game->phase != PHASE_DRIVE_SELECT || choiceIndex < 0 || choiceIndex >= 3) return;
     game->selectedDrive = game->driveChoices[choiceIndex];
+    game->difficulty = game->driveDifficulty[choiceIndex];
     const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
     game->modifierA = drive->modifierA;
     game->modifierB = drive->modifierB;
@@ -678,6 +720,11 @@ void SelectDrive(GameState* game, int choiceIndex) {
     wchar_t buffer[96];
     wsprintfW(buffer, L"%s%s 마운트 완료. 심층 스캔을 시작합니다.", drive->letter, drive->label);
     PushLog(game, buffer);
+    const DifficultyInfo* difficulty = DifficultyInfoOrNull(game->difficulty);
+    if (difficulty) {
+        wsprintfW(buffer, L"난이도 %s · %s.", difficulty->name, difficulty->brief);
+        PushLog(game, buffer);
+    }
     StartCombat(game);
 }
 
@@ -730,7 +777,6 @@ int StartCombat(GameState* game) {
     if (!game->mobScheduleReady) BuildMobSchedule(game, NextRandom(game));
     game->phase = PHASE_COMBAT;
     game->turn = 1;
-    game->hasTurnResult = 0;
     game->enemyCount = 0;
     game->targetEnemy = 0;
     ZeroMemory(game->enemies, sizeof(game->enemies));
@@ -869,6 +915,9 @@ static void PlanMob(GameState* game, EnemyState* enemy, int enemyIndex) {
 static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
     if (IsBossKind(enemy->kind)) PlanBoss(game, enemy);
     else PlanMob(game, enemy, enemyIndex);
+    // 볼륨 난이도는 오염(관통) 의도에만 걸린다. 예고 수치를 여기서 확정해 두면
+    // 적 카드에 뜨는 숫자가 곧 실제로 들어올 피해가 된다.
+    if (enemy->intent == INTENT_CORRUPT) enemy->intentValue = ScaleCorruptDamage(game, enemy->intentValue);
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +1016,8 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
     if (enemy->hp <= 0) {
         enemy->hp = 0;
         enemy->alive = 0;
+        // 처치한 순간 그 종류가 판독된다. 가이드의 노이즈가 여기서 걷힌다.
+        if (IsValidEnemyKind(enemy->kind)) game->enemyScanned[enemy->kind] = 1;
         PushLog2(game, L"%s 삭제 완료. 피해 %d.", GetEnemyInfoOrUnknown(enemy->kind)->name, damage);
         game->targetEnemy = FirstLivingEnemy(game);
     }
@@ -1171,6 +1222,7 @@ static void ResolvePlayer(GameState* game) {
     // KERNEL.PANIC: 이번 턴 출력이 가장 컸던 슬롯이 다음 턴 잠금 대상이 된다.
     int best = -1, bestValue = 0;
     for (int s = 0; s < SLOT_COUNT; ++s) {
+        game->lastTurnSlotOutput[s] = ctx.slotOutput[s];
         if (ctx.slotOutput[s] > bestValue) { bestValue = ctx.slotOutput[s]; best = s; }
     }
     game->boss.bestSlotLastTurn = (int8_t)best;
@@ -1202,7 +1254,14 @@ static void ResolveEnemies(GameState* game) {
             int damage = enemy->intentValue;
             int absorbed = 0;
             int empowered = game->boss.empowered && IsBossKind(enemy->kind);
-            if (enemy->intent != INTENT_CORRUPT) {
+            if (enemy->intent == INTENT_CORRUPT) {
+                // 관통은 방어도를 절반만 인정한다. 막아낸 만큼의 두 배가 소모되므로
+                // 방어도 자체는 음수가 되지 않는다.
+                int usable = game->playerBlock / 2;
+                absorbed = usable < damage ? usable : damage;
+                game->playerBlock -= absorbed * 2;
+                damage -= absorbed;
+            } else {
                 absorbed = game->playerBlock < damage ? game->playerBlock : damage;
                 game->playerBlock -= absorbed;
                 damage -= absorbed;
@@ -1212,10 +1271,10 @@ static void ResolveEnemies(GameState* game) {
             game->lastTurnEnemyStruck[i] = 1;
             game->lastTurnEnemyStrikeDamage[i] = damage;
             game->lastTurnEnemyStrikeTrace[i] = game->turnTraceCount;
-            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격이 방어도를 무시했습니다.");
-            if (empowered && enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 강화 오염 %d → 방어도 무시, 내 체력 -%d", info->code, enemy->intentValue, damage);
+            if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격은 방어도를 절반만 인정합니다.");
+            if (empowered && enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 강화 오염 %d - 방어 절반 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
             else if (empowered) wsprintfW(trace, L"[적 행동] %s 강화 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
-            else if (enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 오염 %d → 방어도 무시, 내 체력 -%d", info->code, enemy->intentValue, damage);
+            else if (enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 오염 %d - 방어 절반 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
             else wsprintfW(trace, L"[적 행동] %s 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
         }
         PushTurnTrace(game, trace);
@@ -1228,6 +1287,30 @@ static void ResolveEnemies(GameState* game) {
             return;
         }
     }
+}
+
+// 사본에서 한 턴을 그대로 실행해 결과 숫자만 돌려준다. 원본은 읽기만 하므로
+// 난수도, 기믹 상태도, 전투 진행도 전혀 움직이지 않는다.
+void PreviewTurn(const GameState* game, TurnPreview* out) {
+    if (!out) return;
+    ZeroMemory(out, sizeof(*out));
+    if (!game || game->phase != PHASE_COMBAT) return;
+    int assigned = 0;
+    for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot >= 0) ++assigned;
+    if (assigned == 0) return;
+
+    GameState copy = *game;
+    // 읽기 오류는 실행하는 순간 다시 굴러간다. 그 주사위가 있으면 예상은 확정이 아니다.
+    for (int d = 0; d < 3; ++d) if (copy.dice[d].unstable) out->uncertain = 1;
+    EndTurn(&copy);
+
+    out->valid = 1;
+    out->damageDealt = copy.lastTurnDamageDealt;
+    out->damageTaken = copy.lastTurnDamageTaken;
+    out->blockGained = copy.lastTurnBlockGained;
+    for (int s = 0; s < SLOT_COUNT; ++s) out->slotOutput[s] = copy.lastTurnSlotOutput[s];
+    out->playerDies = copy.phase == PHASE_GAMEOVER;
+    out->combatEnds = !out->playerDies && LivingEnemyCount(&copy) == 0;
 }
 
 static void GenerateRewards(GameState* game) {
@@ -1332,7 +1415,6 @@ void EndTurn(GameState* game) {
     if (LivingEnemyCount(game) == 0) {
         game->lastTurnDamageDealt = enemyHpBefore - enemyHpAfterPlayer;
         game->lastTurnDamageTaken = 0;
-        game->hasTurnResult = 1;
         CombatWon(game);
         return;
     }
@@ -1343,7 +1425,6 @@ void EndTurn(GameState* game) {
     game->lastTurnDamageDealt = enemyHpBefore - lowestEnemyHp;
     game->lastTurnDamageTaken = playerHpBefore - game->playerHp;
     if (game->lastTurnDamageTaken < 0) game->lastTurnDamageTaken = 0;
-    game->hasTurnResult = 1;
     wchar_t result[96];
     wsprintfW(result, L"실행 결과: 적 체력 -%d · 내 체력 -%d · 방어도 %d.",
         game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);

@@ -29,6 +29,7 @@ void Panel(HDC dc, const RECT& rect, COLORREF fillColor, COLORREF borderColor);
 void Text(HDC dc, int x, int y, const wchar_t* value, COLORREF color, HFONT font);
 void TextRect(HDC dc, const RECT& rect, const wchar_t* value, COLORREF color, HFONT font, UINT flags);
 void Bar(HDC dc, const RECT& rect, int value, int maximum, COLORREF color);
+int TextWidth(HDC dc, const wchar_t* value, HFONT font);
 COLORREF MixColor(COLORREF from, COLORREF to, int amount);
 
 void FormatFace(const Face* face, wchar_t* out);
@@ -45,6 +46,19 @@ void DrawSectorStatic(HDC dc, const RECT& area, int die, int step, int level);
 void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level);
 void DrawScanlines(HDC dc, const RECT& area);
 void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF color, int die, int step, int level);
+
+// 미판독 정보를 가리는 노이즈.
+//   CorruptCode  ASCII 코드명을 길이 그대로 헥스·기호로 갈아 끼운다 (폭이 유지된다).
+//   DrawHexBlock 사각형을 헥스 덤프로 채운다. 한글 설명문을 통째로 덮을 때 쓴다.
+// 둘 다 tick(밀리초)을 받아 글자·칸마다 다른 주기로 흔들린다. 줄이 통째로 갈리는
+// 대신 낱글자가 제각기 튀므로, 고정된 노이즈가 아니라 지금 뚫리는 중으로 보인다.
+//   DrawGlitchLine 고정폭 노이즈 한 줄을 그리되 낱글자 몇 개만 밝게 띄운다.
+//                  반짝이는 자리와 시점이 글자마다 달라 줄 단위로 밝아지는 것보다
+//                  훨씬 살아 있어 보인다. ASCII 고정폭 문자열에만 쓸 것.
+void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, uint32_t tick);
+void DrawGlitchLine(HDC dc, int x, int y, const wchar_t* text, COLORREF dim, COLORREF lit,
+                    HFONT font, int seed, uint32_t tick);
+void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t tick, int rows);
 
 // 화면 전체를 삼키는 노이즈. level은 0(깨끗)~1000(완전 백색소음)이고
 // 그 값이 그대로 화면을 덮는 비율이 된다 (1000이면 빈틈이 없다).

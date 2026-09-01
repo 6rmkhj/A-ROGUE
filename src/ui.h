@@ -57,6 +57,9 @@ void SyncEnemyDamage();
 int EnemyHitFlash(int index);
 int EnemyBob(int index);
 void SyncIdleAnimation();
+// 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
+// 동안에도 리페인트를 계속 돌려야 노이즈가 멈추지 않는다.
+int GuideNoiseActive();
 
 // 계산 재생에서 지금까지 드러난 줄 수 (0 = 아직 없음)
 int TurnTraceShown();

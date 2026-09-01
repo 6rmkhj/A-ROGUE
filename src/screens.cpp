@@ -88,6 +88,11 @@ static void DrawHeader(HDC dc, int width) {
             int floorIndex = gGame.floor > 2 ? 2 : gGame.floor;
             wsprintfW(b, L"%s  ·  %d층/3  ·  %d구역/3  ·  %d턴", DRIVE_INFO[gGame.selectedDrive].paths[floorIndex], gGame.floor + 1, gGame.encounter + 1, gGame.turn);
             Text(dc, 230, 18, b, C_TEXT, gFontSmall);
+            const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
+            if (difficulty) {
+                wsprintfW(b, L"난이도 %s  ·  %s", difficulty->name, difficulty->brief);
+                Text(dc, 230, 38, b, (COLORREF)difficulty->color, gFontSmall);
+            }
         } else {
             wsprintfW(b, L"%d층/3  ·  %d구역/3  ·  %d턴", gGame.floor + 1, gGame.encounter + 1, gGame.turn);
             Text(dc, 230, 14, b, C_TEXT, gFontMedium);
@@ -268,6 +273,9 @@ static void DrawEnemy(HDC dc, int index) {
     } else Text(dc, r.left + 12, r.top + 227, L"[ 삭제됨 ]", C_DIM, gFontSmall);
 }
 
+// 실행 전 미리보기. DrawCombat이 프레임마다 한 번 계산하고 아래에서 읽기만 한다.
+static TurnPreview gPreview;
+
 static void DrawSlot(HDC dc, int slot) {
     RECT r = SlotRect(slot); int die = DieForSlotUI(slot); int hover = Inside(r, gMouse.x, gMouse.y);
     int locked = SlotLockedThisTurn(&gGame, slot), lockedNext = SlotLockedNextTurn(&gGame, slot);
@@ -281,6 +289,13 @@ static void DrawSlot(HDC dc, int slot) {
     }
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN, gFontMedium);
+    // 예상 산출량. 0이면 이 슬롯이 이번 턴 아무 일도 하지 않는다는 뜻이라 흐리게 둔다.
+    if (gPreview.valid && die >= 0) {
+        wchar_t out[24]; wsprintfW(out, L"→ %d", gPreview.slotOutput[slot]);
+        COLORREF tint = gPreview.slotOutput[slot] > 0
+            ? (slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN) : C_DIM;
+        TextRect(dc, MakeRect(r.left + 58, r.top + 10, r.right - 8, r.top + 32), out, tint, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
     if (die >= 0) {
         const Face* face = RolledFace(&gGame, die); wchar_t value[24]; FormatFace(face, value);
         int offline = gGame.dice[die].offline;
@@ -360,6 +375,13 @@ static void DrawSidebar(HDC dc, int width, int height) {
         Text(dc, side.left + 12, side.top + 340, FACE_INFO[selectedFace->kind].name, FaceColor(selectedFace), gFontMedium);
         TextRect(dc, MakeRect(side.left + 12, side.top + 372, side.right - 10, side.top + 430), FACE_INFO[selectedFace->kind].description, C_DIM, gFontSmall, DT_WORDBREAK);
     }
+    const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
+    if (difficulty) {
+        Text(dc, side.left + 12, side.top + 448, L"볼륨 난이도", (COLORREF)difficulty->color, gFontSmall);
+        wchar_t d[96];
+        wsprintfW(d, L"%s · 오염 %d%%\n관통은 방어 절반만", difficulty->name, difficulty->corruptPercent);
+        TextRect(dc, MakeRect(side.left + 12, side.top + 470, side.right - 10, side.top + 526), d, C_DIM, gFontSmall, DT_WORDBREAK);
+    }
     Text(dc, side.left + 12, side.bottom - 112, L"시스템 기록", C_GREEN, gFontSmall);
     for (int i = 0; i < 3; ++i) TextRect(dc, MakeRect(side.left + 12, side.bottom - 88 + i * 25, side.right - 8, side.bottom - 66 + i * 25), gGame.logs[i], i == 0 ? C_TEXT : C_DIM, gFontSmall, DT_END_ELLIPSIS | DT_SINGLELINE);
 }
@@ -368,11 +390,25 @@ static void DrawCombat(HDC dc, int width, int height) {
     SyncEnemyDamage();
     for (int i = 0; i < gGame.enemyCount; ++i) DrawEnemy(dc, i);
     DrawTsrPanel(dc);
-    if (gGame.hasTurnResult) {
-        wchar_t result[128];
-        wsprintfW(result, L"최근 실행  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d",
-            gGame.lastTurnDamageDealt, gGame.lastTurnDamageTaken, gGame.lastTurnBlockGained);
-        Text(dc, 28, 382, result, C_YELLOW, gFontSmall);
+    // 판독이 끝난 뒤에만 계산한다. 판독 전에 미리보기를 돌리면 아직 가려 둔 굴림이 새어 나간다.
+    if (gRolled && !gReadActive) PreviewTurn(&gGame, &gPreview);
+    else ZeroMemory(&gPreview, sizeof(gPreview));
+    if (gPreview.valid) {
+        // 미리보기가 안내 줄을 덮으므로, 이 줄에만 있던 경고는 뒤에 붙여 그대로 남긴다.
+        wchar_t note[80]; note[0] = 0;
+        if (ResolveOrderReversed(&gGame)) lstrcatW(note, L"  ·  역전 턴!");
+        if (gPreview.uncertain) lstrcatW(note, L"  ·  읽기 오류로 확정 아님");
+        wchar_t result[200];
+        if (gPreview.playerDies)
+            wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  →  시스템 정지%s",
+                gPreview.damageDealt, gPreview.damageTaken, note);
+        else if (gPreview.combatEnds)
+            wsprintfW(result, L"예상 결과  적 체력 -%d  →  적 삭제  ·  획득 방어도 %d%s",
+                gPreview.damageDealt, gPreview.blockGained, note);
+        else
+            wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d%s",
+                gPreview.damageDealt, gPreview.damageTaken, gPreview.blockGained, note);
+        Text(dc, 28, 382, result, gPreview.playerDies ? C_RED : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
     } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
     else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);
@@ -425,6 +461,12 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)drive->color : C_LINE);
         wchar_t b[16]; wsprintfW(b, L"[%d]", i + 1);
         Text(dc, r.left + 12, r.top + 10, b, C_DIM, gFontSmall);
+        const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.driveDifficulty[i]);
+        wchar_t badge[64];
+        if (difficulty) {
+            wsprintfW(badge, L"난이도 · %s", difficulty->name);
+            TextRect(dc, MakeRect(r.left + 56, r.top + 10, r.right - 12, r.top + 30), badge, (COLORREF)difficulty->color, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        }
         RECT letterRect = MakeRect(r.left + 8, r.top + 20, r.right - 8, r.top + 86);
         DrawSectorStatic(dc, letterRect, gGame.driveChoices[i], (int)(GetTickCount() / 260u), 60);
         TextRect(dc, letterRect, drive->letter, (COLORREF)drive->color, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -433,6 +475,10 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 16, r.top + 126, r.right - 14, r.top + 178), drive->description, C_DIM, gFontSmall, DT_WORDBREAK);
         Fill(dc, MakeRect(r.left + 12, r.top + 182, r.right - 12, r.top + 183), C_LINE);
         Text(dc, r.left + 16, r.top + 192, L"디스크 손상", C_RED, gFontSmall);
+        if (difficulty) {
+            wsprintfW(badge, L"오염(관통) %d%%", difficulty->corruptPercent);
+            TextRect(dc, MakeRect(r.left + 130, r.top + 192, r.right - 16, r.top + 212), badge, (COLORREF)difficulty->color, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        }
         DrawDriveModifier(dc, r, r.top + 216, drive->modifierA);
         DrawDriveModifier(dc, r, r.top + 278, drive->modifierB);
         Fill(dc, MakeRect(r.left + 12, r.top + 342, r.right - 12, r.top + 343), C_LINE);
@@ -442,7 +488,7 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 16, r.top + 442, r.right - 14, r.top + 466), drive->pathPreview, C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
         TextRect(dc, MakeRect(r.left + 8, r.bottom - 34, r.right - 8, r.bottom - 10), hover ? L"클릭하여 마운트" : L"클릭 또는 숫자 키", hover ? (COLORREF)drive->color : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
-    TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"선택한 볼륨의 디스크 손상 2종이 이번 런 내내 적용됩니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"카드마다 서로 다른 난이도가 배정됩니다 · 난이도는 오염(관통) 피해 배율이며, 방어도는 관통을 절반만 막습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 // 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
@@ -698,7 +744,7 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
         L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
-        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도를 무시하고 체력에 직접 피해", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200\n숫자는 받는 오염 피해 %, 카드마다 다른 등급", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
@@ -709,6 +755,14 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 88),
         L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+}
+
+int GuideNoiseActive() {
+    if (!gGuideOpen || gGuidePage != 1) return 0;
+    if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) return 0;
+    for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_MOBS[gGame.selectedDrive][i])) return 1;
+    for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_BOSSES[gGame.selectedDrive][i])) return 1;
+    return 0;
 }
 
 static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
@@ -726,26 +780,57 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
     wsprintfW(b, L"%s%s 전용 로스터", drive->letter, drive->label);
     Text(dc, left, top, b, (COLORREF)drive->color, gFontMedium);
 
+    // 처치한 개체만 정보가 열린다. 아직 만나지 않은 칸은 살아 있는 헥스 노이즈로 덮인다.
+    const int* mobs = DRIVE_MOBS[gGame.selectedDrive];
+    const int* bosses = DRIVE_BOSSES[gGame.selectedDrive];
+    uint32_t tick = GetTickCount();
+    int scanned = 0;
+    for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (IsEnemyScanned(&gGame, mobs[i])) ++scanned;
+    for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (IsEnemyScanned(&gGame, bosses[i])) ++scanned;
+    wsprintfW(b, L"판독 %d / %d  ·  처치한 개체만 열립니다", scanned, DRIVE_MOB_COUNT + DRIVE_BOSS_COUNT);
+    TextRect(dc, MakeRect(middle, top, panel.right - 28, top + 24), b,
+        scanned == DRIVE_MOB_COUNT + DRIVE_BOSS_COUNT ? C_GREEN : C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
     Text(dc, left, top + 40, L"일반 몹 (모든 층, 층마다 강해짐)", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_MOB_COUNT; ++i) {
-        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_MOBS[gGame.selectedDrive][i]);
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(mobs[i]);
         int y = top + 68 + i * 66;
-        Text(dc, left, y, info->code, (COLORREF)info->color, gFontMedium);
-        wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
-        TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
+        if (IsEnemyScanned(&gGame, mobs[i])) {
+            Text(dc, left, y, info->code, (COLORREF)info->color, gFontMedium);
+            wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
+            TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
+        } else {
+            wchar_t garbled[32]; CorruptCode(info->code, garbled, 32, mobs[i], tick);
+            DrawGlitchLine(dc, left, y, garbled, C_LINE, MixColor(C_LINE, C_GREEN, 82), gFontMedium, mobs[i], tick);
+            TextRect(dc, MakeRect(left, y, middle - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], tick, 2);
+        }
     }
     TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
         L"일반전 6회 동안 세 몹이 각각 두 번씩, 시드로 정해진 순서로 등장합니다.", C_DIM, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top + 40, L"층별 보스와 기믹", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) {
-        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_BOSSES[gGame.selectedDrive][i]);
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(bosses[i]);
         const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[info->gimmick];
         int y = top + 68 + i * 118;
-        wsprintfW(b, L"%d층  %s — %s", i + 1, info->code, gi->name);
-        Text(dc, middle, y, b, (COLORREF)info->color, gFontMedium);
-        wsprintfW(b, L"%s\n대응: %s", gi->rule, gi->counter);
-        TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+        if (IsEnemyScanned(&gGame, bosses[i])) {
+            wsprintfW(b, L"%d층  %s — %s", i + 1, info->code, gi->name);
+            Text(dc, middle, y, b, (COLORREF)info->color, gFontMedium);
+            wsprintfW(b, L"%s\n대응: %s", gi->rule, gi->counter);
+            TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+        } else {
+            wchar_t garbledCode[32], garbledName[24];
+            CorruptCode(info->code, garbledCode, 32, bosses[i], tick);
+            CorruptCode(L"????????", garbledName, 24, bosses[i] + 101, tick);
+            wchar_t prefix[16]; wsprintfW(prefix, L"%d층  ", i + 1);
+            Text(dc, middle, y, prefix, C_LINE, gFontMedium);
+            wsprintfW(b, L"%s - %s", garbledCode, garbledName);
+            DrawGlitchLine(dc, middle + TextWidth(dc, prefix, gFontMedium), y, b, C_LINE,
+                MixColor(C_LINE, C_GREEN, 82), gFontMedium, bosses[i], tick);
+            TextRect(dc, MakeRect(middle, y, panel.right - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawHexBlock(dc, MakeRect(middle, y + 28, panel.right - 28, y + 110), C_LINE, bosses[i], tick, 4);
+        }
     }
 }
 

@@ -732,10 +732,131 @@ int main() {
 
     GameState corrupt; NewRun(&corrupt, 0xC0110001u); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&corrupt, TEST_DRIVE, TEST_SEED, 1); StartCombat(&corrupt);
-    corrupt.enemies[0].hp = corrupt.enemies[0].maxHp; corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 5;
+    SetAllFaces(&corrupt, FACE_NUMBER, 6);   // 어떤 면이 나와도 방어도는 6
+    corrupt.enemies[0].hp = corrupt.enemies[0].maxHp; corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 12;
     // PlanEnemy가 다음 턴 의도를 덮어쓰기 전에 이번 턴 효과만 본다
     int hpBeforeCorrupt = corrupt.playerHp; AssignDieToSlot(&corrupt, 0, SLOT_DEFEND); EndTurn(&corrupt);
-    if (hpBeforeCorrupt - corrupt.playerHp < 5) return Fail("corrupt intent must ignore player block");
+    // 방어도 6은 관통을 3만 막고, 막은 몫의 두 배가 소모된다.
+    if (hpBeforeCorrupt - corrupt.playerHp != 9) return Fail("corrupt intent must only be halved by player block");
+    if (corrupt.playerBlock != 0) return Fail("blocking corrupt damage must spend twice what it absorbs");
+
+    GameState grades; NewRun(&grades, 0xD1FF0001u);
+    if (grades.difficulty != -1) return Fail("difficulty must stay unset until a volume is mounted");
+    for (int i = 0; i < 3; ++i) {
+        if (grades.driveDifficulty[i] < 0 || grades.driveDifficulty[i] >= DIFFICULTY_COUNT)
+            return Fail("each drive card must carry a valid difficulty");
+    }
+    if (grades.driveDifficulty[0] == grades.driveDifficulty[1] || grades.driveDifficulty[0] == grades.driveDifficulty[2]
+        || grades.driveDifficulty[1] == grades.driveDifficulty[2]) return Fail("drive difficulties must be unique");
+    SelectDrive(&grades, 2);
+    if (grades.difficulty != grades.driveDifficulty[2]) return Fail("mounting must store the chosen card's difficulty");
+
+    GameState scale; NewRun(&scale, 0xD1FF0002u);
+    scale.difficulty = DIFF_BEGINNER;
+    if (CorruptPercent(&scale) != 25) return Fail("beginner must take a quarter of the corrupt damage");
+    if (ScaleCorruptDamage(&scale, 12) != 3) return Fail("corrupt damage must scale by the difficulty percent");
+    if (ScaleCorruptDamage(&scale, 1) != 1) return Fail("scaled corrupt damage must never round down to zero");
+    if (ScaleCorruptDamage(&scale, 0) != 0) return Fail("no corrupt damage must stay zero");
+    scale.difficulty = DIFF_MADNESS;
+    if (ScaleCorruptDamage(&scale, 12) != 24) return Fail("madness must double the corrupt damage");
+    scale.difficulty = -1;
+    if (CorruptPercent(&scale) != DIFFICULTY_BASE_PERCENT) return Fail("an unset difficulty must fall back to the base percent");
+
+    // 같은 시드·같은 보스에서 등급만 바꿔, 예고된 오염 수치 자체가 배율되는지 본다.
+    // 난이도는 난수를 건드리지 않으므로 두 런은 턴마다 같은 상황을 지난다.
+    GameState baseline, easier;
+    SetupBossFight(&baseline, 4, 1, 0xD1FF0003u, 3);   // R:\ HEAP.OVERFLOW - 오염을 예고하는 보스
+    SetupBossFight(&easier, 4, 1, 0xD1FF0003u, 3);
+    baseline.difficulty = DIFF_NIGHTMARE;   // 기준값 100%
+    easier.difficulty = DIFF_BEGINNER;
+    int baseCorrupt = 0, easyCorrupt = 0;
+    for (int t = 0; t < 12 && !baseCorrupt; ++t) {
+        AssignDieToSlot(&baseline, 0, SLOT_DEFEND); EndTurn(&baseline);
+        AssignDieToSlot(&easier, 0, SLOT_DEFEND); EndTurn(&easier);
+        if (baseline.phase != PHASE_COMBAT || easier.phase != PHASE_COMBAT) break;
+        if (baseline.enemies[0].intent != INTENT_CORRUPT || easier.enemies[0].intent != INTENT_CORRUPT) continue;
+        baseCorrupt = baseline.enemies[0].intentValue;
+        easyCorrupt = easier.enemies[0].intentValue;
+    }
+    if (baseCorrupt <= 0 || easyCorrupt <= 0) return Fail("the pressure boss must telegraph a corrupt intent");
+    if (easyCorrupt != ScaleCorruptDamage(&easier, baseCorrupt))
+        return Fail("the telegraphed corrupt value must already carry the difficulty multiplier");
+
+    // 판독: 처치한 종류만 열리고, 미리보기나 새 런으로는 열리지 않는다.
+    GameState codex; NewRun(&codex, 0x5CA40001u); codex.modifierA = MOD_BAD_SECTOR; codex.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&codex, TEST_DRIVE, TEST_SEED, 1); StartCombat(&codex);
+    int scanKind = codex.enemies[0].kind;
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("a fresh run must start with nothing scanned");
+    for (int k = 0; k < ENEMY_KIND_COUNT; ++k) if (IsEnemyScanned(&codex, k)) return Fail("a fresh run must scan no enemy kind");
+    if (IsEnemyScanned(&codex, -1) || IsEnemyScanned(&codex, ENEMY_KIND_COUNT)) return Fail("an out of range kind must never read as scanned");
+    SetAllFaces(&codex, FACE_NUMBER, 6);
+    codex.enemies[0].hp = 1; codex.enemies[0].block = 0;
+    // 미리보기로 죽여 보는 것만으로는 판독되면 안 된다.
+    AssignDieToSlot(&codex, 0, SLOT_ATTACK);
+    TurnPreview peek; PreviewTurn(&codex, &peek);
+    if (!peek.combatEnds) return Fail("the scan setup must preview a kill");
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("previewing a kill must not scan the enemy");
+    EndTurn(&codex);
+    if (!IsEnemyScanned(&codex, scanKind)) return Fail("killing an enemy must scan its kind");
+    for (int k = 0; k < ENEMY_KIND_COUNT; ++k)
+        if (k != scanKind && IsEnemyScanned(&codex, k)) return Fail("killing one enemy must not scan any other kind");
+    NewRun(&codex, 0x5CA40001u);
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("a new run must clear every scan");
+
+    // 미리보기는 원본을 한 바이트도 건드리지 않고, 실제 실행과 같은 숫자를 내야 한다.
+    GameState preview; NewRun(&preview, 0x9E1E0001u); preview.modifierA = MOD_BAD_SECTOR; preview.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&preview, TEST_DRIVE, TEST_SEED, 1); StartCombat(&preview);
+    SetAllFaces(&preview, FACE_NUMBER, 4);
+    preview.enemies[0].hp = 99; preview.enemies[0].maxHp = 99;
+    TurnPreview empty; PreviewTurn(&preview, &empty);
+    if (empty.valid) return Fail("an empty placement must not produce a preview");
+    AssignDieToSlot(&preview, 0, SLOT_ATTACK);
+    AssignDieToSlot(&preview, 1, SLOT_DEFEND);
+    GameState untouched = preview;
+    TurnPreview ahead; PreviewTurn(&preview, &ahead);
+    if (!ahead.valid) return Fail("placing a die must produce a preview");
+    if (memcmp(&untouched, &preview, sizeof(GameState)) != 0) return Fail("preview must not mutate the game state");
+    if (ahead.uncertain) return Fail("a turn with no read error must preview a certain result");
+    if (ahead.slotOutput[SLOT_ATTACK] <= 0 || ahead.slotOutput[SLOT_DEFEND] <= 0)
+        return Fail("preview must report the output of every filled slot");
+    if (ahead.slotOutput[SLOT_CHAIN] != 0) return Fail("an empty slot must preview zero output");
+    EndTurn(&preview);
+    if (ahead.damageDealt != preview.lastTurnDamageDealt) return Fail("preview damage dealt must match the real turn");
+    if (ahead.damageTaken != preview.lastTurnDamageTaken) return Fail("preview damage taken must match the real turn");
+    if (ahead.blockGained != preview.lastTurnBlockGained) return Fail("preview block must match the real turn");
+    for (int s = 0; s < SLOT_COUNT; ++s)
+        if (ahead.slotOutput[s] != preview.lastTurnSlotOutput[s]) return Fail("preview slot output must match the real turn");
+
+    // 치명타·사망 예고도 미리 보여야 한다.
+    GameState lethal; NewRun(&lethal, 0x9E1E0002u); lethal.modifierA = MOD_BAD_SECTOR; lethal.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&lethal, TEST_DRIVE, TEST_SEED, 1); StartCombat(&lethal);
+    SetAllFaces(&lethal, FACE_NUMBER, 6);
+    lethal.enemies[0].hp = 1; lethal.enemies[0].block = 0;
+    AssignDieToSlot(&lethal, 0, SLOT_ATTACK);
+    TurnPreview kill; PreviewTurn(&lethal, &kill);
+    if (!kill.combatEnds || kill.playerDies) return Fail("a lethal placement must preview the kill");
+    if (lethal.phase != PHASE_COMBAT) return Fail("previewing a kill must not end the real combat");
+
+    GameState doomed; NewRun(&doomed, 0x9E1E0003u); doomed.modifierA = MOD_BAD_SECTOR; doomed.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&doomed, TEST_DRIVE, TEST_SEED, 1); StartCombat(&doomed);
+    SetAllFaces(&doomed, FACE_NUMBER, 1);
+    doomed.enemies[0].hp = 999; doomed.enemies[0].maxHp = 999;
+    doomed.enemies[0].intent = INTENT_HEAVY; doomed.enemies[0].intentValue = 500;
+    doomed.playerHp = 3;
+    AssignDieToSlot(&doomed, 0, SLOT_ATTACK);
+    TurnPreview fatal; PreviewTurn(&doomed, &fatal);
+    if (!fatal.playerDies) return Fail("a fatal placement must preview the loss");
+    if (doomed.phase != PHASE_COMBAT || doomed.playerHp != 3) return Fail("previewing a loss must not kill the real run");
+
+    // 읽기 오류가 걸린 주사위가 있으면 미리보기는 확정이 아니라고 밝혀야 한다.
+    GameState shaky; NewRun(&shaky, 0x9E1E0004u); shaky.modifierA = MOD_READ_ERROR; shaky.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&shaky, TEST_DRIVE, TEST_SEED, 1); StartCombat(&shaky);
+    SetAllFaces(&shaky, FACE_NUMBER, 4);
+    shaky.enemies[0].hp = 99; shaky.enemies[0].maxHp = 99;
+    AssignDieToSlot(&shaky, 0, SLOT_ATTACK);
+    TurnPreview unsure; PreviewTurn(&shaky, &unsure);
+    if (!unsure.valid) return Fail("a read-error turn must still produce a preview");
+    if (!unsure.uncertain) return Fail("a read error must mark the preview as uncertain");
 
     GameState badSector; NewRun(&badSector, 0xBADD5EC7u); badSector.phase = PHASE_REWARD;
     ConfigureDriveForTest(&badSector, TEST_DRIVE, TEST_SEED, 1);
