@@ -104,6 +104,15 @@ uint32_t Hash3(int a, int b, int c) {
     return h;
 }
 
+int TextWidth(HDC dc, const wchar_t* value, HFONT font) {
+    if (!value || !value[0]) return 0;
+    HFONT old = (HFONT)SelectObject(dc, font);
+    SIZE size;
+    int ok = GetTextExtentPoint32W(dc, value, lstrlenW(value), &size);
+    SelectObject(dc, old);
+    return ok ? size.cx : 0;
+}
+
 COLORREF MixColor(COLORREF from, COLORREF to, int amount) {
     int r = GetRValue(from) + (GetRValue(to) - GetRValue(from)) * amount / 100;
     int g = GetGValue(from) + (GetGValue(to) - GetGValue(from)) * amount / 100;
@@ -228,18 +237,43 @@ void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, uint32_
     out[n] = 0;
 }
 
+// 고정폭 노이즈 한 줄. 낱글자 몇 개만 골라 밝게 띄운다. 어두운 줄에서는 그 자리를
+// 비워 두고 따로 찍으므로 글자가 겹쳐 뭉개지지 않는다. 글자마다 반짝이는 주기가
+// 달라, 줄 단위로 밝아지는 것보다 훨씬 "지금 뚫리는 중"으로 읽힌다.
+void DrawGlitchLine(HDC dc, int x, int y, const wchar_t* text, COLORREF dim, COLORREF lit,
+                    HFONT font, int seed, uint32_t tick) {
+    if (!text || !text[0]) return;
+    wchar_t base[80];
+    int flag[80];
+    int n = 0;
+    for (; text[n] && n < 79; ++n) {
+        base[n] = text[n];
+        uint32_t period = 130u + (Hash3(seed, n, 0x1177) % 300u);   // 130~429ms
+        flag[n] = text[n] != L' ' && (Hash3(seed * 7 + n, (int)(tick / period), n) % 11u) == 0;
+        if (flag[n]) base[n] = L' ';
+    }
+    base[n] = 0;
+    Text(dc, x, y, base, dim, font);
+    int cell = TextWidth(dc, L"0", font);
+    if (cell <= 0) return;
+    for (int i = 0; i < n; ++i) {
+        if (!flag[i]) continue;
+        wchar_t one[2] = {text[i], 0};
+        Text(dc, x + i * cell, y, one, lit, font);
+    }
+}
+
 // 사각형을 헥스 덤프로 채운다. 판독 전 설명문 자리를 통째로 덮는 용도다.
 // 한글은 폭이 두 배라 글자 단위로 갈아 끼우면 폭이 무너지므로, 설명문은
-// 바꾸지 않고 이렇게 덮는다. 칸마다 주기가 다르고, 밝은 주사선 한 줄이
-// 위에서 아래로 훑어 내려가며, 줄마다 좌우로 몇 px씩 어긋난다.
+// 바꾸지 않고 이렇게 덮는다. 칸마다 주기가 다르고, 줄마다 좌우로 몇 px씩
+// 어긋나며, 흩어진 낱글자가 초록으로 반짝인다.
 void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t tick, int rows) {
     int width = area.right - area.left;
     if (width <= 0 || rows <= 0) return;
     int columns = width / 9;              // Consolas 16px의 ASCII 한 칸이 대략 9px
     if (columns > 62) columns = 62;
     if (columns < 4) columns = 4;
-    int scanRow = (int)((tick / 170u) % (uint32_t)rows);
-    COLORREF bright = MixColor(color, C_GREEN, 62);
+    COLORREF lit = MixColor(color, C_GREEN, 82);
     wchar_t line[64];
     for (int row = 0; row < rows; ++row) {
         int top = area.top + row * 19;
@@ -251,8 +285,7 @@ void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t t
         }
         line[columns] = 0;
         int jitter = (int)(Hash3(seed, row, (int)(tick / 90u)) % 4u);
-        TextRect(dc, MakeRect(area.left + jitter, top, area.right, top + 18), line,
-            row == scanRow ? bright : color, gFontSmall, DT_LEFT | DT_SINGLELINE);
+        DrawGlitchLine(dc, area.left + jitter, top, line, color, lit, gFontSmall, seed * 31 + row, tick);
     }
 }
 

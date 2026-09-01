@@ -801,7 +801,7 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
             TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
         } else {
             wchar_t garbled[32]; CorruptCode(info->code, garbled, 32, mobs[i], tick);
-            Text(dc, left, y, garbled, C_LINE, gFontMedium);
+            DrawGlitchLine(dc, left, y, garbled, C_LINE, MixColor(C_LINE, C_GREEN, 82), gFontMedium, mobs[i], tick);
             TextRect(dc, MakeRect(left, y, middle - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
             DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], tick, 2);
         }
@@ -823,8 +823,11 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
             wchar_t garbledCode[32], garbledName[24];
             CorruptCode(info->code, garbledCode, 32, bosses[i], tick);
             CorruptCode(L"????????", garbledName, 24, bosses[i] + 101, tick);
-            wsprintfW(b, L"%d층  %s — %s", i + 1, garbledCode, garbledName);
-            Text(dc, middle, y, b, C_LINE, gFontMedium);
+            wchar_t prefix[16]; wsprintfW(prefix, L"%d층  ", i + 1);
+            Text(dc, middle, y, prefix, C_LINE, gFontMedium);
+            wsprintfW(b, L"%s - %s", garbledCode, garbledName);
+            DrawGlitchLine(dc, middle + TextWidth(dc, prefix, gFontMedium), y, b, C_LINE,
+                MixColor(C_LINE, C_GREEN, 82), gFontMedium, bosses[i], tick);
             TextRect(dc, MakeRect(middle, y, panel.right - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
             DrawHexBlock(dc, MakeRect(middle, y + 28, panel.right - 28, y + 110), C_LINE, bosses[i], tick, 4);
         }
