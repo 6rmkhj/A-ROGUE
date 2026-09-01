@@ -152,6 +152,8 @@ int EffectiveCapacity(const GameState* game) {
     if (IsModifierActive(game, MOD_OVERALLOC)) capacity += 60;
     capacity += DrivePerkValue(game, PERK_CAPACITY);
     if (IsTsrInstalled(game, TSR_HIMEM)) capacity += TSR_INFO[TSR_HIMEM].value;
+    // CACHE 디렉터리의 임시 한도. 다음 층 용량 검사 전에 반드시 0으로 돌아간다.
+    capacity += game->directory.floorCapacityBonus;
     return capacity;
 }
 
@@ -602,6 +604,7 @@ static void GimmickTurnEnd(GameState* game) {
 void InitTitle(GameState* game) {
     ZeroMemory(game, sizeof(*game));
     game->phase = PHASE_TITLE;
+    game->rewardChoiceCount = 3;
     game->selectedDie = -1;
     game->selectedReward = -1;
     game->selectedDrive = -1;
@@ -676,6 +679,12 @@ static void BuildMobSchedule(GameState* game, uint32_t seed) {
 void NewRun(GameState* game, uint32_t seed) {
     ZeroMemory(game, sizeof(*game));
     game->rng = seed ? seed : 0xC0FFEE11u;
+    // 경로 전용 난수는 런 seed에서 고정 salt로 파생한다. 드라이브는 마운트 시 섞인다.
+    game->directory.rng = game->rng ^ 0x4B1D5A17u;
+    game->directory.previousKind = DIR_NODE_NONE;
+    game->pendingContinuation = CONTINUE_NONE;
+    game->rewardChoiceCount = 3;
+    game->rewardTier = 0;
     game->phase = PHASE_DRIVE_SELECT;
     game->floor = 0;
     game->encounter = 0;
@@ -695,6 +704,9 @@ void NewRun(GameState* game, uint32_t seed) {
     PickDriveDifficulties(game, game->rng ^ 0x9E3779B9u);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
 }
+
+// 경로 전용 난수는 아래 디렉터리 절에서 정의된다. 마운트 시 한 번 섞어 준다.
+static void MixDirectoryDrive(GameState* game);
 
 void SelectDrive(GameState* game, int choiceIndex) {
     if (game->phase != PHASE_DRIVE_SELECT || choiceIndex < 0 || choiceIndex >= 3) return;
@@ -717,6 +729,7 @@ void SelectDrive(GameState* game, int choiceIndex) {
         PushLog2(game, L"격리 데이터 회수: %s 면 설치 (%dB).", FACE_INFO[kind].name, FaceCost(face));
     }
     BuildMobSchedule(game, NextRandom(game));
+    MixDirectoryDrive(game);
     wchar_t buffer[96];
     wsprintfW(buffer, L"%s%s 마운트 완료. 심층 스캔을 시작합니다.", drive->letter, drive->label);
     PushLog(game, buffer);
@@ -725,7 +738,7 @@ void SelectDrive(GameState* game, int choiceIndex) {
         wsprintfW(buffer, L"난이도 %s · %s.", difficulty->name, difficulty->brief);
         PushLog(game, buffer);
     }
-    StartCombat(game);
+    BeginDirectorySelection(game);
 }
 
 // 테스트 전용 경로: 드라이브와 일반전 순서만 준비한다. 특성 적용·전투 시작은
@@ -738,6 +751,322 @@ void ConfigureDriveForTest(GameState* game, int drive, uint32_t scheduleSeed, in
         game->modifierB = DRIVE_INFO[drive].modifierB;
     }
     BuildMobSchedule(game, scheduleSeed);
+    MixDirectoryDrive(game);
+}
+
+// ---------------------------------------------------------------------------
+// 디렉터리 경로 선택
+//
+// 층마다 두 번, 다음 일반전 직전에 하위 디렉터리를 고른다. 노드는 면이나
+// 상주 프로그램을 직접 주지 않고 다음 전투와 그 보상의 조건만 바꾼다.
+//
+// 생성은 GameState.rng가 아니라 DirectoryRuntime.rng만 소비한다. 주사위·읽기
+// 오류·보상·배드 섹터의 난수 순서가 경로 시스템 때문에 밀리지 않게 하려는 것이다.
+// 같은 seed·드라이브·선택 이력이면 언제나 같은 선택지가 나오고, 리페인트나
+// hover는 절대 생성 함수를 부르지 않는다.
+// ---------------------------------------------------------------------------
+
+static uint32_t NextDirectoryRandom(GameState* game) {
+    uint32_t x = game->directory.rng;
+    if (x == 0) x = 0x1F35A7C3u;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    game->directory.rng = x;
+    return x;
+}
+
+static int DirectoryRandomRange(GameState* game, int limit) {
+    if (limit <= 1) return 0;
+    return (int)(NextDirectoryRandom(game) % (uint32_t)limit);
+}
+
+// 드라이브가 확정되는 순간 한 번만 섞는다. 런 seed + 드라이브의 순수 함수다.
+static void MixDirectoryDrive(GameState* game) {
+    uint32_t mixed = game->directory.rng ^ ((uint32_t)(game->selectedDrive + 1) * 0x9E3779B9u);
+    game->directory.rng = mixed ? mixed : 0x1F35A7C3u;
+}
+
+const DirectoryNodeInfo* DirectoryNodeInfoOrNull(int kind) {
+    if (kind <= DIR_NODE_NONE || kind >= DIR_NODE_COUNT) return 0;
+    return &DIRECTORY_NODE_INFO[kind];
+}
+
+int DirectoryChoiceCount(const GameState* game) {
+    int count = game->directory.choiceCount;
+    return count > DIRECTORY_CHOICE_COUNT ? DIRECTORY_CHOICE_COUNT : count;
+}
+
+int DirectoryIntelActive(const GameState* game) {
+    return game->directory.intelThisFloor != 0;
+}
+
+static int DirectoryNodeWeight(const GameState* game, int kind) {
+    if (kind <= DIR_NODE_NONE || kind >= DIR_NODE_COUNT) return 0;
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return 0;
+    return DIRECTORY_DRIVE_WEIGHT[game->selectedDrive][kind];
+}
+
+int ScheduledMobKind(const GameState* game) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return -1;
+    if (!game->mobScheduleReady || game->encounter < 0 || game->encounter > 1) return -1;
+    int floor = ClampInt(game->floor, 0, 2);
+    return game->mobSchedule[ClampInt(floor * 2 + game->encounter, 0, 5)];
+}
+
+int FloorBossKind(const GameState* game) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return -1;
+    return DRIVE_BOSSES[game->selectedDrive][ClampInt(game->floor, 0, 2)];
+}
+
+static int DamagedFaceCount(const GameState* game) {
+    int total = 0;
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            const Face* face = &game->dice[d].faces[f];
+            if (face->damaged && face->kind != FACE_EMPTY) ++total;
+        }
+    }
+    return total;
+}
+
+// 플레이어 상태는 노드의 유효성만 결정하고 가중치는 절대 보정하지 않는다.
+// (체력이 낮다고 TEMP 확률이 오르지 않는다.)
+static int DirectoryNodeAllowedInternal(const GameState* game, int kind, int respectPrevious) {
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(kind);
+    if (!info || !info->enabled) return 0;
+    if (DirectoryNodeWeight(game, kind) <= 0) return 0;
+    if (game->directory.floorCounts[kind] >= info->maxPerFloor) return 0;
+    if (respectPrevious && game->directory.previousKind == kind) return 0;
+    switch (kind) {
+    case DIR_NODE_TEMP:
+        return game->playerHp < game->playerMaxHp;
+    case DIR_NODE_LOGS:
+        return !game->directory.intelThisFloor;
+    case DIR_NODE_CORRUPTED:
+        return game->floor >= 1 && UsableFaceCount(game) >= DIR_CORRUPTED_MIN_FACES;
+    case DIR_NODE_RECOVERY:
+        return game->playerHp > DIR_RECOVERY_HP_COST && DamagedFaceCount(game) > 0;
+    default:
+        break;
+    }
+    return 1;
+}
+
+int DirectoryNodeAllowed(const GameState* game, int kind) {
+    return DirectoryNodeAllowedInternal(game, kind, 1);
+}
+
+// 두 카드가 함께 제시돼도 되는가.
+//   - 같은 노드 금지
+//   - 둘 다 고위험 금지 (INFECTED + CORRUPTED)
+//   - 같은 카테고리는 한쪽이 고위험일 때만 허용
+//     (TEMP + RECOVERY는 같은 회복 축이라 금지, PROCESS + INFECTED는 안전 대 위험이라 허용)
+static int DirectoryHighRisk(const DirectoryNodeInfo* info) {
+    return info->risk == DIR_RISK_HIGH || info->risk == DIR_RISK_UNKNOWN;
+}
+
+static int DirectoryPairAllowed(int a, int b) {
+    const DirectoryNodeInfo* ia = DirectoryNodeInfoOrNull(a);
+    const DirectoryNodeInfo* ib = DirectoryNodeInfoOrNull(b);
+    if (!ia || !ib || a == b) return 0;
+    int highA = DirectoryHighRisk(ia), highB = DirectoryHighRisk(ib);
+    if (highA && highB) return 0;
+    if (ia->category == ib->category && !highA && !highB) return 0;
+    return 1;
+}
+
+static int PickWeightedNode(GameState* game, const int* pool, int count) {
+    int total = 0;
+    for (int i = 0; i < count; ++i) total += DirectoryNodeWeight(game, pool[i]);
+    if (total <= 0) return DIR_NODE_NONE;
+    int roll = DirectoryRandomRange(game, total);
+    for (int i = 0; i < count; ++i) {
+        roll -= DirectoryNodeWeight(game, pool[i]);
+        if (roll < 0) return pool[i];
+    }
+    return pool[count - 1];
+}
+
+// 격리해도 출력 가능한 면이 최소 3개 남는 대상만 고른다 (모든 면이 죽는 사고 방지).
+// 실패하면 255를 돌려주고 적용 단계가 격리를 건너뛴다.
+static int PickDirectoryQuarantineFace(GameState* game) {
+    int candidates[18], count = 0;
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            if (FacePower(&game->dice[d].faces[f]) >= 1) candidates[count++] = d * 6 + f;
+        }
+    }
+    if (count < DIR_CORRUPTED_MIN_FACES) return 255;
+    return candidates[DirectoryRandomRange(game, count)];
+}
+
+static void GenerateDirectoryChoices(GameState* game) {
+    int pool[DIR_NODE_COUNT], count = 0;
+    for (int k = DIR_NODE_PROCESS; k < DIR_NODE_COUNT; ++k)
+        if (DirectoryNodeAllowedInternal(game, k, 1)) pool[count++] = k;
+    // 연속 금지 때문에 후보가 말라붙으면 그 규칙만 풀어 준다 (PROCESS는 항상 fallback).
+    if (count < DIRECTORY_CHOICE_COUNT) {
+        count = 0;
+        for (int k = DIR_NODE_PROCESS; k < DIR_NODE_COUNT; ++k)
+            if (DirectoryNodeAllowedInternal(game, k, 0)) pool[count++] = k;
+    }
+
+    int first = DIR_NODE_NONE, second = DIR_NODE_NONE;
+    for (int attempt = 0; attempt < DIRECTORY_GEN_ATTEMPTS && second == DIR_NODE_NONE; ++attempt) {
+        int a = PickWeightedNode(game, pool, count);
+        if (a == DIR_NODE_NONE) break;
+        int legal[DIR_NODE_COUNT], legalCount = 0;
+        for (int i = 0; i < count; ++i) if (DirectoryPairAllowed(a, pool[i])) legal[legalCount++] = pool[i];
+        if (legalCount == 0) continue;
+        int b = PickWeightedNode(game, legal, legalCount);
+        if (b == DIR_NODE_NONE) continue;
+        first = a; second = b;
+    }
+    // 결정론적 fallback: 낮은 kind부터 훑어 합법 조합 하나를 확정한다.
+    if (second == DIR_NODE_NONE) {
+        for (int i = 0; i < count && second == DIR_NODE_NONE; ++i)
+            for (int j = 0; j < count && second == DIR_NODE_NONE; ++j)
+                if (DirectoryPairAllowed(pool[i], pool[j])) { first = pool[i]; second = pool[j]; }
+    }
+    if (second == DIR_NODE_NONE) { first = DIR_NODE_PROCESS; second = DIR_NODE_CACHE; }
+
+    ZeroMemory(game->directory.choices, sizeof(game->directory.choices));
+    game->directory.choices[0].kind = (uint8_t)first;
+    game->directory.choices[1].kind = (uint8_t)second;
+    game->directory.choiceCount = DIRECTORY_CHOICE_COUNT;
+    for (int i = 0; i < DIRECTORY_CHOICE_COUNT; ++i) {
+        DirectoryChoice* choice = &game->directory.choices[i];
+        choice->revealed = (uint8_t)(game->directory.intelThisFloor ? 1 : 0);
+        if (choice->kind == DIR_NODE_CORRUPTED) choice->payload = (uint8_t)PickDirectoryQuarantineFace(game);
+    }
+}
+
+// 다음 전투로 넘어가기 전에 노드가 걸어 둔 조건을 걷어낸다.
+// 면 격리는 전투 종료 경로(GimmickCombatEnd)가 이미 풀어 준다.
+static void ClearDirectoryCombatEffects(GameState* game) {
+    game->directory.activeKind = DIR_NODE_NONE;
+    game->directory.activePayload = 0;
+}
+
+static void ApplyDirectoryChoice(GameState* game, int index) {
+    DirectoryRuntime* dir = &game->directory;
+    DirectoryChoice* choice = &dir->choices[index];
+    int kind = choice->kind;
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(kind);
+    if (!info) return;
+    int floor = ClampInt(game->floor, 0, 2);
+    int slot = ClampInt(game->encounter, 0, DIRECTORY_PER_FLOOR - 1);
+    dir->history[floor][slot] = (uint8_t)kind;
+    if (dir->floorCounts[kind] < 255) ++dir->floorCounts[kind];
+    dir->previousKind = (uint8_t)kind;
+    dir->activeKind = (uint8_t)kind;
+    dir->activePayload = choice->payload;
+
+    wchar_t buffer[96];
+    switch (kind) {
+    case DIR_NODE_TEMP: {
+        int before = game->playerHp;
+        game->playerHp = ClampInt(game->playerHp + DIR_TEMP_HEAL, 0, game->playerMaxHp);
+        wsprintfW(buffer, L"TEMP: 임시 파일 회수 → 체력 +%d (%d → %d).", game->playerHp - before, before, game->playerHp);
+        PushLog(game, buffer);
+        break;
+    }
+    case DIR_NODE_CACHE:
+        dir->floorCapacityBonus += DIR_CACHE_BYTES;
+        wsprintfW(buffer, L"CACHE: 이번 층 한도 +%dB → %dB (층 이동 시 해제).", DIR_CACHE_BYTES, EffectiveCapacity(game));
+        PushLog(game, buffer);
+        break;
+    case DIR_NODE_LOGS:
+        dir->intelThisFloor = 1;
+        PushLog(game, L"LOGS: 이번 층의 적 기록을 열람했습니다. 판독 기록은 바뀌지 않습니다.");
+        break;
+    case DIR_NODE_INFECTED:
+        PushLog(game, L"INFECTED: 감염 구역에 진입합니다. 적이 더 단단하고 보상이 강화됩니다.");
+        break;
+    case DIR_NODE_CORRUPTED:
+        PushLog(game, L"CORRUPTED: 손상 구역에 진입합니다. 면 하나가 이번 전투 동안 격리됩니다.");
+        break;
+    // RECOVERY와 UNKNOWN은 데이터만 준비돼 있고 아직 enabled=0이다 (2차 확장).
+    default:
+        PushLog(game, L"PROCESS: 표준 프로세스와 교전합니다.");
+        break;
+    }
+}
+
+// 선택한 노드가 다음 전투에 거는 조건. 보스 구역은 activeKind가 NONE이라 그대로 지나간다.
+static void ApplyDirectoryCombatSetup(GameState* game) {
+    int kind = game->directory.activeKind;
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(kind);
+    if (!info) return;
+    if (kind == DIR_NODE_INFECTED) {
+        for (int i = 0; i < game->enemyCount; ++i) {
+            EnemyState* enemy = &game->enemies[i];
+            int hp = enemy->maxHp * DIR_INFECTED_HP_PERCENT / 100;
+            if (hp <= enemy->maxHp) hp = enemy->maxHp + 1;
+            enemy->maxHp = hp;
+            enemy->hp = hp;
+        }
+        PushLog2(game, L"%s: 적 최대 체력이 %d%%로 증가했습니다.", info->name, DIR_INFECTED_HP_PERCENT);
+    } else if (kind == DIR_NODE_CACHE || kind == DIR_NODE_LOGS) {
+        int block = kind == DIR_NODE_CACHE ? DIR_CACHE_BLOCK : DIR_LOGS_BLOCK;
+        for (int i = 0; i < game->enemyCount; ++i) game->enemies[i].block += block;
+        PushLog2(game, L"%s: 적이 방어도 %d로 시작합니다.", info->name, block);
+    } else if (kind == DIR_NODE_CORRUPTED) {
+        int target = game->directory.activePayload;
+        if (target < 18) {
+            Face* face = &game->dice[target / 6].faces[target % 6];
+            // 마지막 남은 출력을 격리하지 않는다.
+            if (FacePower(face) >= 1 && UsableFaceCount(game) > 3) {
+                face->quarantined = QUAR_COMBAT;
+                PushLog2(game, L"%s: 주사위 %d의 면이 이번 전투 동안 격리되었습니다.", info->name, target / 6 + 1);
+            }
+        }
+    }
+}
+
+void BeginDirectorySelection(GameState* game) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) {
+        game->phase = PHASE_DRIVE_SELECT;
+        PushLog(game, L"마운트 오류: 볼륨이 확정되지 않아 드라이브 선택으로 복귀합니다.");
+        return;
+    }
+    ClearDirectoryCombatEffects(game);
+    // 보스 구역에는 선택 화면이 없다. 고정 경로로 바로 들어간다.
+    if (game->encounter >= 2) { StartCombat(game); return; }
+    GenerateDirectoryChoices(game);
+    game->phase = PHASE_DIRECTORY;
+    game->selectedDie = -1;
+    game->selectedReward = -1;
+    PushLog(game, L"하위 디렉터리를 선택하십시오. 다음 프로세스의 조건이 바뀝니다.");
+}
+
+void SelectDirectoryChoice(GameState* game, int index) {
+    if (game->phase != PHASE_DIRECTORY) return;
+    if (index < 0 || index >= DirectoryChoiceCount(game)) return;
+    int kind = game->directory.choices[index].kind;
+    if (kind <= DIR_NODE_NONE || kind >= DIR_NODE_COUNT) return;
+    ApplyDirectoryChoice(game, index);
+    StartCombat(game);
+}
+
+// 경로 문자열은 상태에 저장하지 않고 층 경로 + 방문한 노드 segment로 조합한다.
+void FormatCurrentDirectory(const GameState* game, wchar_t* out, int cap) {
+    if (!out || cap <= 0) return;
+    out[0] = 0;
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return;
+    int floor = ClampInt(game->floor, 0, 2);
+    lstrcpynW(out, DRIVE_INFO[game->selectedDrive].paths[floor], cap);
+    for (int i = 0; i < DIRECTORY_PER_FLOOR; ++i) {
+        const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(game->directory.history[floor][i]);
+        if (!info) break;
+        int length = lstrlenW(out);
+        // 1층 경로("C:\\")는 이미 역슬래시로 끝나므로 구분자를 겹치지 않는다.
+        int separator = length > 0 && out[length - 1] == L'\\' ? 0 : 1;
+        if (length + lstrlenW(info->segment) + separator + 1 > cap) break;
+        if (separator) lstrcatW(out, L"\\");
+        lstrcatW(out, info->segment);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +1116,7 @@ int StartCombat(GameState* game) {
         int slot = ClampInt(floor * 2 + game->encounter, 0, 5);
         AddEnemy(game, game->mobSchedule[slot]);
     }
+    ApplyDirectoryCombatSetup(game);
     GimmickInitCombat(game);
     BeginTurn(game);
     return 1;
@@ -1313,13 +1643,28 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
     out->combatEnds = !out->playerDies && LivingEnemyCount(&copy) == 0;
 }
 
+// 디렉터리 노드는 면을 직접 주지 않고 이 표준 보상의 tier와 후보 수만 바꾼다.
+//   표준 : 숫자 7~10, 후보 3개 (기존과 완전히 동일한 난수 소비)
+//   강화 : 숫자 8~11, 세 후보의 종류 중복 없음 (INFECTED / CORRUPTED)
+//   TEMP : 표준 분포지만 후보 2개
 static void GenerateRewards(GameState* game) {
-    for (int i = 0; i < 3; ++i) {
-        int kind;
-        do kind = RandomRange(game, 7); while (i > 0 && kind == game->rewardKinds[i - 1]);
+    const DirectoryNodeInfo* node = DirectoryNodeInfoOrNull(game->directory.activeKind);
+    int tuned = node ? node->rewardTier : 0;
+    int count = node ? node->rewardChoices : 3;
+    count = ClampInt(count, 1, 3);
+    game->rewardTier = tuned;
+    game->rewardChoiceCount = count;
+    for (int i = 0; i < count; ++i) {
+        int kind, duplicate;
+        do {
+            kind = RandomRange(game, 7);
+            duplicate = i > 0 && kind == game->rewardKinds[i - 1];
+            if (tuned) for (int j = 0; j < i; ++j) if (kind == game->rewardKinds[j]) duplicate = 1;
+        } while (duplicate);
         game->rewardKinds[i] = kind;
-        game->rewardValues[i] = kind == FACE_NUMBER ? 7 + RandomRange(game, 4) : FACE_INFO[kind].power;
+        game->rewardValues[i] = kind == FACE_NUMBER ? (tuned ? 8 : 7) + RandomRange(game, 4) : FACE_INFO[kind].power;
     }
+    for (int i = count; i < 3; ++i) { game->rewardKinds[i] = FACE_EMPTY; game->rewardValues[i] = 0; }
     game->rewardIsTsr = 0;
     game->selectedReward = -1;
 }
@@ -1342,6 +1687,8 @@ static void GenerateTsrRewards(GameState* game) {
         game->rewardValues[i] = TSR_INFO[game->rewardKinds[i]].cost;
     }
     game->rewardIsTsr = 1;
+    game->rewardChoiceCount = 3;
+    game->rewardTier = 0;
     game->selectedReward = -1;
 }
 
@@ -1439,8 +1786,14 @@ void EndTurn(GameState* game) {
     BeginTurn(game);
 }
 
+// 후보 수가 정해지지 않은 경로(테스트가 직접 세운 상태)는 기존대로 3개로 본다.
+static int RewardCardCount(const GameState* game) {
+    return game->rewardChoiceCount > 0 && game->rewardChoiceCount <= 3 ? game->rewardChoiceCount : 3;
+}
+
 void SelectReward(GameState* game, int rewardIndex) {
-    if (game->phase != PHASE_REWARD || game->rewardIsTsr || rewardIndex < 0 || rewardIndex >= 3) return;
+    if (game->phase != PHASE_REWARD || game->rewardIsTsr || rewardIndex < 0) return;
+    if (rewardIndex >= RewardCardCount(game)) return;
     game->selectedReward = rewardIndex;
 }
 
@@ -1459,37 +1812,53 @@ static void DamageRandomFace(GameState* game) {
     PushLog(game, L"배드 섹터: 무작위 면 하나가 손상되었습니다.");
 }
 
-static void ContinueAfterReward(GameState* game) {
-    if (UsedBytes(game) > EffectiveCapacity(game)) {
-        game->phase = PHASE_PRUNE;
-        game->pruneAdvancePending = 1;
-        PushLog(game, L"현재 층 용량 초과: 면이나 상주 프로그램을 정리하십시오.");
-        return;
-    }
-    if (game->encounter < 2) {
-        ++game->encounter;
-        StartCombat(game);
-        return;
-    }
+// 층 하강. CACHE의 임시 한도는 다음 층 용량 검사보다 먼저 사라진다.
+static void EnterNextFloor(GameState* game) {
     ++game->floor;
     game->encounter = 0;
     if (game->floor >= 3) {
         game->phase = PHASE_VICTORY;
         return;
     }
+    if (game->directory.floorCapacityBonus != 0) {
+        game->directory.floorCapacityBonus = 0;
+        PushLog(game, L"CACHE 임시 한도가 해제되었습니다.");
+    }
+    game->directory.intelThisFloor = 0;
+    ZeroMemory(game->directory.floorCounts, sizeof(game->directory.floorCounts));
     if (IsModifierActive(game, MOD_BAD_SECTOR)) {
         if (IsTsrInstalled(game, TSR_SCANDISK)) PushLog2(game, L"%s: 배드 섹터 손상을 차단했습니다.", TSR_INFO[TSR_SCANDISK].name, 0);
         else DamageRandomFace(game);
     }
     if (UsedBytes(game) > EffectiveCapacity(game)) {
         game->phase = PHASE_PRUNE;
-        game->pruneAdvancePending = 0;
+        game->pendingContinuation = CONTINUE_DIRECTORY;
         PushLog(game, L"용량 초과: 다음 층 한도에 맞게 정리하십시오.");
-    } else StartCombat(game);
+        return;
+    }
+    BeginDirectorySelection(game);
+}
+
+static void ContinueAfterReward(GameState* game) {
+    if (UsedBytes(game) > EffectiveCapacity(game)) {
+        game->phase = PHASE_PRUNE;
+        game->pendingContinuation = CONTINUE_AFTER_REWARD;
+        PushLog(game, L"현재 층 용량 초과: 면이나 상주 프로그램을 정리하십시오.");
+        return;
+    }
+    if (game->encounter < 2) {
+        ++game->encounter;
+        // 두 번째 일반전 앞에는 다시 디렉터리 선택이 있고, 보스 앞에는 없다.
+        if (game->encounter < 2) BeginDirectorySelection(game);
+        else { ClearDirectoryCombatEffects(game); StartCombat(game); }
+        return;
+    }
+    EnterNextFloor(game);
 }
 
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     if (game->phase != PHASE_REWARD || game->rewardIsTsr || game->selectedReward < 0) return;
+    if (game->selectedReward >= RewardCardCount(game)) return;
     if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return;
     int reward = game->selectedReward;
     Face* face = &game->dice[dieIndex].faces[faceIndex];
@@ -1573,8 +1942,9 @@ void ConfirmPrune(GameState* game) {
         PushLog(game, L"최소 한 면은 남겨야 합니다.");
         return;
     }
-    int advance = game->pruneAdvancePending;
-    game->pruneAdvancePending = 0;
-    if (advance) ContinueAfterReward(game);
-    else StartCombat(game);
+    int continuation = game->pendingContinuation;
+    game->pendingContinuation = CONTINUE_NONE;
+    if (continuation == CONTINUE_AFTER_REWARD) ContinueAfterReward(game);
+    else if (continuation == CONTINUE_DIRECTORY) BeginDirectorySelection(game);
+    else StartCombat(game);   // CONTINUE_COMBAT과 테스트가 직접 세운 경로
 }

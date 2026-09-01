@@ -22,7 +22,9 @@ static int WorstEfficiencyFace(const GameState* game) {
 
 static int BestReward(const GameState* game) {
     int best = 0, scoreBest = -100000;
-    for (int i = 0; i < 3; ++i) {
+    // 보상 후보 수는 디렉터리 노드가 줄일 수 있다 (TEMP면 2개).
+    int count = game->rewardChoiceCount > 0 && game->rewardChoiceCount <= 3 ? game->rewardChoiceCount : 3;
+    for (int i = 0; i < count; ++i) {
         int kind = game->rewardKinds[i], cost = kind == FACE_NUMBER ? game->rewardValues[i] : FACE_INFO[kind].cost;
         int score = game->rewardValues[i] * 10 - cost; if (kind == FACE_WILD || kind == FACE_ECHO) score += 10;
         if (score > scoreBest) { scoreBest = score; best = i; }
@@ -64,14 +66,92 @@ static void AssignDice(GameState* game) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 디렉터리 선택 휴리스틱과 통계
+//
+// 상태를 보고 고르는 플레이어를 흉내 낸다. 체력이 넉넉하면 위험 노드로 성장을
+// 사고, 체력이 낮으면 회복을, 용량이 조이면 임시 한도를 산다. 사람과 같지는
+// 않지만 "한 선택지가 언제나 정답"인 상태를 잡아내기에는 충분하다.
+// ---------------------------------------------------------------------------
+
+static int gOffered[DIR_NODE_COUNT];
+static int gChosen[DIR_NODE_COUNT];
+static int gChosenWins[DIR_NODE_COUNT];
+static int gPairOffered[DIR_NODE_COUNT][DIR_NODE_COUNT];
+static int gPairFirstChosen[DIR_NODE_COUNT][DIR_NODE_COUNT];
+static long gFloorHp[3];
+static int gFloorHpSamples[3];
+static long gFloorBytes[3];
+static int gFloorUsable[3];
+static int gPruneCount;
+
+// 덱의 평균 출력. 위험 노드를 감당할 화력이 있는지 재는 대용치다.
+static int AverageFacePower(const GameState* game) {
+    int total = 0, count = 0;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
+        const Face* face = &game->dice[d].faces[f];
+        if (face->kind == FACE_EMPTY) continue;
+        total += FacePower(face); ++count;
+    }
+    return count > 0 ? total / count : 0;
+}
+
+static int DirectoryScore(const GameState* game, int kind) {
+    int hpPercent = game->playerMaxHp > 0 ? game->playerHp * 100 / game->playerMaxHp : 100;
+    int capacity = EffectiveCapacity(game);
+    int pressure = capacity > 0 ? UsedBytes(game) * 100 / capacity : 0;
+    int power = AverageFacePower(game);
+    int usable = UsableFaceCount(game);
+    switch (kind) {
+    case DIR_NODE_TEMP:      return hpPercent < 70 ? 58 + (70 - hpPercent) / 2 : 18;
+    case DIR_NODE_CACHE:     return pressure > 85 ? 52 + (pressure - 85) : 24;
+    // 보스가 무거워질수록 정보의 값이 오른다.
+    case DIR_NODE_LOGS:      return 32 + game->floor * 4;
+    // 위험 노드는 체력만이 아니라 화력이 받쳐 줄 때만 산다.
+    case DIR_NODE_INFECTED:  return hpPercent >= 70 ? 20 + power * 4 : 10;
+    case DIR_NODE_CORRUPTED: return hpPercent >= 70 && usable >= 12 ? 16 + power * 4 : 8;
+    default:                 return 35;   // PROCESS: 언제나 이해 가능한 기준선
+    }
+}
+
+// 선택과 통계 수집. runChosen은 이 런에서 고른 노드 표시(승률 집계용)다.
+static void ChooseDirectory(GameState* game, int* runChosen) {
+    int count = DirectoryChoiceCount(game);
+    if (count <= 0) { SelectDirectoryChoice(game, 0); return; }
+    int a = game->directory.choices[0].kind;
+    int b = count > 1 ? game->directory.choices[1].kind : a;
+    int scoreA = DirectoryScore(game, a), scoreB = DirectoryScore(game, b);
+    int pick = scoreB > scoreA ? 1 : 0;
+    int kind = pick == 0 ? a : b;
+
+    int floor = game->floor < 0 ? 0 : (game->floor > 2 ? 2 : game->floor);
+    gFloorHp[floor] += game->playerHp * 100 / (game->playerMaxHp > 0 ? game->playerMaxHp : 1);
+    gFloorBytes[floor] += UsedBytes(game);
+    gFloorUsable[floor] += UsableFaceCount(game);
+    ++gFloorHpSamples[floor];
+
+    ++gOffered[a];
+    if (count > 1) ++gOffered[b];
+    int low = a < b ? a : b, high = a < b ? b : a;
+    ++gPairOffered[low][high];
+    if (kind == low) ++gPairFirstChosen[low][high];
+    ++gChosen[kind];
+    runChosen[kind] = 1;
+
+    SelectDirectoryChoice(game, pick);
+}
+
 static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
     GameState game; NewRun(&game, seed);
     game.driveChoices[0] = drive;   // 검사 대상 드라이브를 강제로 첫 카드에 놓는다
     *difficulty = game.driveDifficulty[0];
+    int runChosen[DIR_NODE_COUNT] = {};
     int steps = 0;
     while (game.phase != PHASE_VICTORY && game.phase != PHASE_GAMEOVER && steps++ < 600) {
         if (game.phase == PHASE_DRIVE_SELECT) {
             SelectDrive(&game, 0);
+        } else if (game.phase == PHASE_DIRECTORY) {
+            ChooseDirectory(&game, runChosen);
         } else if (game.phase == PHASE_COMBAT) {
             int target = -1, hp = 100000;
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive && game.enemies[i].hp < hp) { target = i; hp = game.enemies[i].hp; }
@@ -84,12 +164,15 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
             else if (game.rewardIsTsr) InstallTsr(&game, 0);
             else { int reward = BestReward(&game), face = WeakestFace(&game); SelectReward(&game, reward); InstallSelectedReward(&game, face / 6, face % 6); }
         } else if (game.phase == PHASE_PRUNE) {
+            ++gPruneCount;
             while (UsedBytes(&game) > EffectiveCapacity(&game)) { int face = WorstEfficiencyFace(&game); if (face < 0) break; PruneFace(&game, face / 6, face % 6); }
             ConfirmPrune(&game);
         }
     }
     *combats = game.combatsWon;
-    return game.phase == PHASE_VICTORY;
+    int won = game.phase == PHASE_VICTORY;
+    if (won) for (int k = 0; k < DIR_NODE_COUNT; ++k) if (runChosen[k]) ++gChosenWins[k];
+    return won;
 }
 
 int main() {
@@ -130,6 +213,48 @@ int main() {
             g, DIFFICULTY_INFO[g].corruptPercent, gradeWins[g], gradeRuns[g]);
         if (gradeRuns[g] > 0 && gradeWins[g] == 0) { printf("  GATE FAIL: difficulty %d has zero wins\n", g); failed = 1; }
     }
+
+    printf("DIRECTORY node usage (offered / chosen / pick rate / win rate when chosen)\n");
+    int riskyOffered = 0, riskyChosen = 0;
+    for (int k = DIR_NODE_PROCESS; k < DIR_NODE_COUNT; ++k) {
+        if (!DIRECTORY_NODE_INFO[k].enabled) continue;
+        int offered = gOffered[k], chosen = gChosen[k];
+        printf("  %-10ls offered %6d  chosen %6d  pick %3d%%  win %3d%%\n",
+            DIRECTORY_NODE_INFO[k].name, offered, chosen,
+            offered > 0 ? chosen * 100 / offered : 0,
+            chosen > 0 ? gChosenWins[k] * 100 / chosen : 0);
+        if (offered == 0) { printf("  GATE FAIL: node %ls is never offered\n", DIRECTORY_NODE_INFO[k].name); failed = 1; }
+        if (k == DIR_NODE_INFECTED || k == DIR_NODE_CORRUPTED) { riskyOffered += offered; riskyChosen += chosen; }
+        // 성공 기준: 제시될 때 70% 이상 고정 선택되면 사실상 선택지가 아니다.
+        if (offered >= 100 && chosen * 100 / offered >= 70)
+            printf("  WARN: %ls is taken %d%% of the time it appears\n", DIRECTORY_NODE_INFO[k].name, chosen * 100 / offered);
+    }
+    if (riskyOffered > 0) {
+        int riskyRate = riskyChosen * 100 / riskyOffered;
+        printf("  risky (INFECTED+CORRUPTED) pick rate: %d%%\n", riskyRate);
+        // 성공 기준: 위험 노드가 제시될 때 합산 20% 이상은 선택돼야 한다.
+        if (riskyRate < 20) printf("  WARN: risky directories are taken only %d%% of the time\n", riskyRate);
+    }
+
+    printf("DIRECTORY pairs (offered / first-card share)\n");
+    for (int a = DIR_NODE_PROCESS; a < DIR_NODE_COUNT; ++a) {
+        for (int b = a + 1; b < DIR_NODE_COUNT; ++b) {
+            if (gPairOffered[a][b] == 0) continue;
+            printf("  %-10ls vs %-10ls  %5d offers  %3d%% took the first\n",
+                DIRECTORY_NODE_INFO[a].name, DIRECTORY_NODE_INFO[b].name,
+                gPairOffered[a][b], gPairFirstChosen[a][b] * 100 / gPairOffered[a][b]);
+        }
+    }
+
+    printf("DIRECTORY floor state at each choice (average)\n");
+    for (int f = 0; f < 3; ++f) {
+        if (gFloorHpSamples[f] == 0) continue;
+        printf("  floor %d: samples %5d  hp %3ld%%  used %4ldB  usable faces %2d\n",
+            f + 1, gFloorHpSamples[f], gFloorHp[f] / gFloorHpSamples[f],
+            gFloorBytes[f] / gFloorHpSamples[f], gFloorUsable[f] / gFloorHpSamples[f]);
+    }
+    printf("  prune screens entered: %d\n", gPruneCount);
+
     printf("BALANCE: %d/%d total heuristic wins, %.2f average combats\n",
         totalWins, runsPerDrive * DRIVE_COUNT, totalAvg / DRIVE_COUNT);
     return failed;
