@@ -782,6 +782,27 @@ int main() {
     if (easyCorrupt != ScaleCorruptDamage(&easier, baseCorrupt))
         return Fail("the telegraphed corrupt value must already carry the difficulty multiplier");
 
+    // 판독: 처치한 종류만 열리고, 미리보기나 새 런으로는 열리지 않는다.
+    GameState codex; NewRun(&codex, 0x5CA40001u); codex.modifierA = MOD_BAD_SECTOR; codex.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&codex, TEST_DRIVE, TEST_SEED, 1); StartCombat(&codex);
+    int scanKind = codex.enemies[0].kind;
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("a fresh run must start with nothing scanned");
+    for (int k = 0; k < ENEMY_KIND_COUNT; ++k) if (IsEnemyScanned(&codex, k)) return Fail("a fresh run must scan no enemy kind");
+    if (IsEnemyScanned(&codex, -1) || IsEnemyScanned(&codex, ENEMY_KIND_COUNT)) return Fail("an out of range kind must never read as scanned");
+    SetAllFaces(&codex, FACE_NUMBER, 6);
+    codex.enemies[0].hp = 1; codex.enemies[0].block = 0;
+    // 미리보기로 죽여 보는 것만으로는 판독되면 안 된다.
+    AssignDieToSlot(&codex, 0, SLOT_ATTACK);
+    TurnPreview peek; PreviewTurn(&codex, &peek);
+    if (!peek.combatEnds) return Fail("the scan setup must preview a kill");
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("previewing a kill must not scan the enemy");
+    EndTurn(&codex);
+    if (!IsEnemyScanned(&codex, scanKind)) return Fail("killing an enemy must scan its kind");
+    for (int k = 0; k < ENEMY_KIND_COUNT; ++k)
+        if (k != scanKind && IsEnemyScanned(&codex, k)) return Fail("killing one enemy must not scan any other kind");
+    NewRun(&codex, 0x5CA40001u);
+    if (IsEnemyScanned(&codex, scanKind)) return Fail("a new run must clear every scan");
+
     // 미리보기는 원본을 한 바이트도 건드리지 않고, 실제 실행과 같은 숫자를 내야 한다.
     GameState preview; NewRun(&preview, 0x9E1E0001u); preview.modifierA = MOD_BAD_SECTOR; preview.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&preview, TEST_DRIVE, TEST_SEED, 1); StartCombat(&preview);

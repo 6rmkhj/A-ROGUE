@@ -106,6 +106,9 @@ struct GameState {
     uint8_t tsrInstalled[TSR_COUNT];
     uint8_t keybUsedThisTurn;
     uint8_t tsrReserved[2];
+    // 판독한 적. 처치한 종류만 1이 되고 가이드의 노이즈가 걷힌다.
+    // 런 단위로만 유지된다 (NewRun의 ZeroMemory가 초기화).
+    uint8_t enemyScanned[ENEMY_KIND_COUNT];
     int lastDamage;
     int lastBlock;
     int lastTurnDamageDealt;
@@ -193,6 +196,8 @@ const Face* RolledFace(const GameState* game, int dieIndex);
 const EnemyInfo* GetEnemyInfoOrUnknown(int kind);
 int IsBossKind(int kind);
 int IsValidEnemyKind(int kind);
+// 이번 런에서 처치해 본 적인가. 가이드가 정보를 드러낼지 판정한다.
+int IsEnemyScanned(const GameState* game, int kind);
 
 // ---- 보스 기믹 상태 질의 (UI·휴리스틱 공용) --------------------------------
 int SlotLockedThisTurn(const GameState* game, int slot);

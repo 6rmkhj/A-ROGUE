@@ -112,6 +112,11 @@ int InstalledTsrAt(const GameState* game, int slot) {
     return -1;
 }
 
+int IsEnemyScanned(const GameState* game, int kind) {
+    if (!game || !IsValidEnemyKind(kind)) return 0;
+    return game->enemyScanned[kind] != 0;
+}
+
 int IsModifierActive(const GameState* game, int modifier) {
     return game->modifierA == modifier || game->modifierB == modifier;
 }
@@ -1012,6 +1017,8 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
     if (enemy->hp <= 0) {
         enemy->hp = 0;
         enemy->alive = 0;
+        // 처치한 순간 그 종류가 판독된다. 가이드의 노이즈가 여기서 걷힌다.
+        if (IsValidEnemyKind(enemy->kind)) game->enemyScanned[enemy->kind] = 1;
         PushLog2(game, L"%s 삭제 완료. 피해 %d.", GetEnemyInfoOrUnknown(enemy->kind)->name, damage);
         game->targetEnemy = FirstLivingEnemy(game);
     }

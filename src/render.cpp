@@ -210,6 +210,42 @@ void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level) {
     }
 }
 
+// 코드명을 길이 그대로 노이즈로 바꾼다. 구분 기호(. -)와 공백은 남겨 두어
+// 원래 형태가 어렴풋이 읽히고, 판독되는 순간의 대비가 살아난다.
+void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int step) {
+    if (!out || cap <= 0) return;
+    out[0] = 0;
+    if (!source) return;
+    int n = 0;
+    for (; source[n] && n < cap - 1; ++n) {
+        wchar_t c = source[n];
+        if (c == L' ' || c == L'.' || c == L'-') { out[n] = c; continue; }
+        uint32_t h = Hash3(seed, step, n);
+        out[n] = (h & 7u) == 0 ? L'?' : (h & 7u) == 1 ? L'#' : HEX_DIGIT[(h >> 4) & 15u];
+    }
+    out[n] = 0;
+}
+
+// 사각형을 헥스 덤프로 채운다. 판독 전 설명문 자리를 통째로 덮는 용도다.
+// 한글은 폭이 두 배라 글자 단위로 갈아 끼우면 폭이 무너지므로, 설명문은
+// 바꾸지 않고 이렇게 덮는다.
+void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, int step, int rows) {
+    int width = area.right - area.left;
+    if (width <= 0 || rows <= 0) return;
+    int columns = width / 9;              // Consolas 16px의 ASCII 한 칸이 대략 9px
+    if (columns > 62) columns = 62;
+    if (columns < 4) columns = 4;
+    wchar_t line[64];
+    for (int row = 0; row < rows; ++row) {
+        int top = area.top + row * 19;
+        if (top + 14 > area.bottom) break;
+        for (int i = 0; i < columns; ++i)
+            line[i] = (i % 3 == 2) ? L' ' : HEX_DIGIT[Hash3(seed * 31 + row, step, i) & 15u];
+        line[columns] = 0;
+        TextRect(dc, MakeRect(area.left, top, area.right, top + 18), line, color, gFontSmall, DT_LEFT | DT_SINGLELINE);
+    }
+}
+
 // 한 줄을 왼쪽에서 오른쪽으로 훑으며 level 확률로 조각을 채운다. 채우는 비율이
 // 곧 level이므로 1000에서는 화면에 원래 그림이 한 점도 남지 않는다. 붓은 한 번만
 // 만들어 돌려 쓰고, 건너뛰는 조각은 GDI 호출 자체를 하지 않는다.

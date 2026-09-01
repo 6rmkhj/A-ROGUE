@@ -777,26 +777,53 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
     wsprintfW(b, L"%s%s 전용 로스터", drive->letter, drive->label);
     Text(dc, left, top, b, (COLORREF)drive->color, gFontMedium);
 
+    // 처치한 개체만 정보가 열린다. 아직 만나지 않은 칸은 살아 있는 헥스 노이즈로 덮인다.
+    const int* mobs = DRIVE_MOBS[gGame.selectedDrive];
+    const int* bosses = DRIVE_BOSSES[gGame.selectedDrive];
+    int step = (int)(GetTickCount() / 260u), scanned = 0;
+    for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (IsEnemyScanned(&gGame, mobs[i])) ++scanned;
+    for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (IsEnemyScanned(&gGame, bosses[i])) ++scanned;
+    wsprintfW(b, L"판독 %d / %d  ·  처치한 개체만 열립니다", scanned, DRIVE_MOB_COUNT + DRIVE_BOSS_COUNT);
+    TextRect(dc, MakeRect(middle, top, panel.right - 28, top + 24), b,
+        scanned == DRIVE_MOB_COUNT + DRIVE_BOSS_COUNT ? C_GREEN : C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
     Text(dc, left, top + 40, L"일반 몹 (모든 층, 층마다 강해짐)", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_MOB_COUNT; ++i) {
-        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_MOBS[gGame.selectedDrive][i]);
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(mobs[i]);
         int y = top + 68 + i * 66;
-        Text(dc, left, y, info->code, (COLORREF)info->color, gFontMedium);
-        wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
-        TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
+        if (IsEnemyScanned(&gGame, mobs[i])) {
+            Text(dc, left, y, info->code, (COLORREF)info->color, gFontMedium);
+            wsprintfW(b, L"%s\n체력 %d+ · 피해 %d+", PatternRoleLabel(info->pattern), info->hp, info->damage);
+            TextRect(dc, MakeRect(left, y + 24, middle - 28, y + 66), b, C_DIM, gFontSmall, DT_WORDBREAK);
+        } else {
+            wchar_t garbled[32]; CorruptCode(info->code, garbled, 32, mobs[i], step);
+            Text(dc, left, y, garbled, C_LINE, gFontMedium);
+            TextRect(dc, MakeRect(left, y, middle - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], step, 2);
+        }
     }
     TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
         L"일반전 6회 동안 세 몹이 각각 두 번씩, 시드로 정해진 순서로 등장합니다.", C_DIM, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top + 40, L"층별 보스와 기믹", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) {
-        const EnemyInfo* info = GetEnemyInfoOrUnknown(DRIVE_BOSSES[gGame.selectedDrive][i]);
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(bosses[i]);
         const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[info->gimmick];
         int y = top + 68 + i * 118;
-        wsprintfW(b, L"%d층  %s — %s", i + 1, info->code, gi->name);
-        Text(dc, middle, y, b, (COLORREF)info->color, gFontMedium);
-        wsprintfW(b, L"%s\n대응: %s", gi->rule, gi->counter);
-        TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+        if (IsEnemyScanned(&gGame, bosses[i])) {
+            wsprintfW(b, L"%d층  %s — %s", i + 1, info->code, gi->name);
+            Text(dc, middle, y, b, (COLORREF)info->color, gFontMedium);
+            wsprintfW(b, L"%s\n대응: %s", gi->rule, gi->counter);
+            TextRect(dc, MakeRect(middle, y + 26, panel.right - 28, y + 112), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+        } else {
+            wchar_t garbledCode[32], garbledName[24];
+            CorruptCode(info->code, garbledCode, 32, bosses[i], step);
+            CorruptCode(L"????????", garbledName, 24, bosses[i] + 101, step);
+            wsprintfW(b, L"%d층  %s — %s", i + 1, garbledCode, garbledName);
+            Text(dc, middle, y, b, C_LINE, gFontMedium);
+            TextRect(dc, MakeRect(middle, y, panel.right - 28, y + 22), L"미판독", C_DIM, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawHexBlock(dc, MakeRect(middle, y + 28, panel.right - 28, y + 110), C_LINE, bosses[i], step, 4);
+        }
     }
 }
 

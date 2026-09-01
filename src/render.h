@@ -46,6 +46,13 @@ void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level);
 void DrawScanlines(HDC dc, const RECT& area);
 void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF color, int die, int step, int level);
 
+// 미판독 정보를 가리는 노이즈.
+//   CorruptCode  ASCII 코드명을 길이 그대로 헥스·기호로 갈아 끼운다 (폭이 유지된다).
+//   DrawHexBlock 사각형을 헥스 덤프로 채운다. 한글 설명문을 통째로 덮을 때 쓴다.
+// 둘 다 step이 바뀌면 다시 섞이므로 살아 있는 노이즈처럼 보인다.
+void CorruptCode(const wchar_t* source, wchar_t* out, int cap, int seed, int step);
+void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, int step, int rows);
+
 // 화면 전체를 삼키는 노이즈. level은 0(깨끗)~1000(완전 백색소음)이고
 // 그 값이 그대로 화면을 덮는 비율이 된다 (1000이면 빈틈이 없다).
 void DrawScreenStatic(HDC dc, const RECT& area, int step, int level);
