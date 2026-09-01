@@ -297,10 +297,6 @@ static void DrawSlot(HDC dc, int slot) {
     }
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], SlotAccent(slot), gFontMedium);
-    // 어느 주사위가 들어 있는지. 세 주사위가 같은 값이면 값만으로는 알 수 없다.
-    if (die >= 0 && die < 3)
-        Text(dc, r.left + 14 + TextWidth(dc, SLOT_SHORT_NAMES[slot], gFontMedium), r.top + 9,
-            DIE_BADGE[die], die == gGame.selectedDie ? C_YELLOW : C_TEXT, gFontMedium);
     // 예상 산출량. 0이면 이 슬롯이 이번 턴 아무 일도 하지 않는다는 뜻이라 흐리게 둔다.
     if (gPreview.valid && die >= 0) {
         wchar_t out[24]; wsprintfW(out, L"→ %d", gPreview.slotOutput[slot]);
