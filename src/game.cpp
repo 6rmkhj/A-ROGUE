@@ -45,6 +45,31 @@ static void PushTurnTrace(GameState* game, const wchar_t* text) {
 }
 
 // ---------------------------------------------------------------------------
+// 전투 시각 이벤트. 규칙이 확정한 사건만 기록하고 난수는 절대 소비하지 않는다.
+// 배열이 가득 차면 조용히 버리되 overflow를 세워 회귀 검사가 잡을 수 있게 한다.
+// ---------------------------------------------------------------------------
+
+static void ClearCombatFx(GameState* game) {
+    game->combatFxCount = 0;
+    game->combatFxOverflow = 0;
+    ZeroMemory(game->combatFx, sizeof(game->combatFx));
+}
+
+// traceLine은 이 사건이 적힐 계산 줄 번호다. PushTurnTrace 직전의 turnTraceCount를
+// 그대로 넘기면 된다. 12줄을 넘겨 기록이 잘린 사건은 재생 끝에 몰아서 발동한다.
+static CombatFxEvent* PushCombatFx(GameState* game, int type, int traceLine) {
+    if (game->combatFxCount >= COMBAT_FX_CAP) { game->combatFxOverflow = 1; return 0; }
+    CombatFxEvent* fx = &game->combatFx[game->combatFxCount++];
+    ZeroMemory(fx, sizeof(*fx));
+    fx->type = (uint8_t)type;
+    fx->traceLine = (uint8_t)ClampInt(traceLine, 0, 255);
+    fx->sourceSlot = -1;
+    fx->sourceDie = -1;
+    fx->targetEnemy = -1;
+    return fx;
+}
+
+// ---------------------------------------------------------------------------
 // 안전 조회와 역할 판정. 보스 여부는 enum 범위가 아니라 role 메타데이터다.
 // ---------------------------------------------------------------------------
 
@@ -324,6 +349,13 @@ static void RecordFx(GameState* game, int fx, int a, int b) {
     game->boss.fxB = (int8_t)b;
 }
 
+// 살아 있는 보스의 카드 번호. 연출이 EnemyRect(0)을 하드코딩하지 않게 한다.
+static int BossEnemyIndex(const GameState* game) {
+    for (int i = 0; i < game->enemyCount; ++i)
+        if (game->enemies[i].alive && IsBossKind(game->enemies[i].kind)) return i;
+    return -1;
+}
+
 static void GimmickTurnBegin(GameState* game) {
     BossRuntime* boss = &game->boss;
     ClearGimmickAnnouncements(boss);
@@ -505,6 +537,10 @@ static int RestoreBossHp(GameState* game, EnemyState* enemy, int targetHp, int c
         wsprintfW(buffer, L"[%s] 보스 체력 +%d (%d → %d)", label, heal, hpBefore, enemy->hp);
         PushTurnTrace(game, buffer);
         PushLog(game, buffer);
+        // 되감기 연출은 이 두 값 사이를 오른쪽에서 왼쪽으로 덮어 쓴다.
+        game->boss.fxHpBefore = (int16_t)hpBefore;
+        game->boss.fxHpAfter = (int16_t)enemy->hp;
+        game->boss.fxEnemy = (int8_t)BossEnemyIndex(game);
     }
     return heal;
 }
@@ -1138,6 +1174,8 @@ int StartCombat(GameState* game) {
         return 0;
     }
     if (!game->mobScheduleReady) BuildMobSchedule(game, NextRandom(game));
+    ClearTurnTrace(game);
+    ClearCombatFx(game);
     game->phase = PHASE_COMBAT;
     game->turn = 1;
     game->enemyCount = 0;
@@ -1441,6 +1479,19 @@ struct ResolveContext {
     int slotOutput[SLOT_COUNT];   // 슬롯별 실제 산출량 (KERNEL.PANIC 잠금 판정)
 };
 
+// 한 방의 무게를 숫자 없이 읽히게 하는 판정. 피해량을 그대로 쓰지 않고
+// 처치·절대량·최대 체력 비율 셋 중 하나만 걸려도 큰 타격으로 본다.
+static uint8_t HitFxFlags(const GameState* game, int enemyIndex, int hpDamage, int attempted) {
+    if (enemyIndex < 0 || enemyIndex >= game->enemyCount) return CFXF_NONE;
+    const EnemyState* enemy = &game->enemies[enemyIndex];
+    uint8_t flags = CFXF_NONE;
+    if (!enemy->alive) flags |= CFXF_KILL;
+    if (hpDamage <= 0 && attempted > 0) flags |= CFXF_BLOCKED;
+    if ((flags & CFXF_KILL) || hpDamage >= 10 || (enemy->maxHp > 0 && hpDamage * 5 >= enemy->maxHp))
+        flags |= CFXF_BIG_HIT;
+    return flags;
+}
+
 static void ResolveAmplify(GameState* game, ResolveContext* ctx, int wasted) {
     wchar_t trace[96];
     int ampKind = FACE_EMPTY;
@@ -1448,10 +1499,21 @@ static void ResolveAmplify(GameState* game, ResolveContext* ctx, int wasted) {
     int ampBonus = ampPower / 2;
     if (ampKind == FACE_BOOST) ampBonus = ampPower;
     if (ampKind == FACE_WILD) ampBonus += 2;
+    int ampDie = DieForSlot(game, SLOT_AMPLIFY);
     if (wasted) {
         // 역전 턴: 공격·방어가 이미 해결된 뒤라 보너스가 소실된다.
         if (ampPower > 0) wsprintfW(trace, L"[증폭] 역전으로 해결이 끝난 뒤 도착 → 보너스 %d 소실", ampBonus);
         else lstrcpyW(trace, L"[증폭] 비어 있음 → 보너스 없음");
+        if (ampPower > 0) {
+            CombatFxEvent* fx = PushCombatFx(game, CFX_AMPLIFY, game->turnTraceCount);
+            if (fx) {
+                fx->sourceSlot = SLOT_AMPLIFY;
+                fx->sourceDie = (int8_t)ampDie;
+                fx->flags = CFXF_WASTED;
+                fx->value = 0;
+                fx->beforeValue = (int16_t)ampBonus;   // 도착하지 못한 양
+            }
+        }
         PushTurnTrace(game, trace);
         ctx->slotOutput[SLOT_AMPLIFY] = 0;
         return;
@@ -1463,6 +1525,14 @@ static void ResolveAmplify(GameState* game, ResolveContext* ctx, int wasted) {
     else if (ampKind == FACE_BOOST) wsprintfW(trace, L"[증폭] 증폭 면 %d × 100%% = 공격·방어 +%d", ampPower, ampBonus);
     else if (ampKind == FACE_WILD) wsprintfW(trace, L"[증폭] 와일드 %d ÷ 2 + 특수 2 = 공격·방어 +%d", ampPower, ampBonus);
     else wsprintfW(trace, L"[증폭] 출력 %d ÷ 2 = 공격·방어 +%d", ampPower, ampBonus);
+    if (ampPower > 0) {
+        CombatFxEvent* fx = PushCombatFx(game, CFX_AMPLIFY, game->turnTraceCount);
+        if (fx) {
+            fx->sourceSlot = SLOT_AMPLIFY;
+            fx->sourceDie = (int8_t)ampDie;
+            fx->value = (int16_t)ampBonus;
+        }
+    }
     PushTurnTrace(game, trace);
 }
 
@@ -1489,6 +1559,15 @@ static void ResolveAttack(GameState* game, ResolveContext* ctx) {
         wsprintfW(trace, L"[공격/%s] 기본 %d + 증폭 %d + 특수 %d + 체크섬 %d = %d 피해",
             FACE_INFO[attackKind].shortName, attackPower, ampBonus, attackSpecial, checksumBonus, attackDamage);
     } else lstrcpyW(trace, L"[공격] 공격 슬롯이 비어 있음 → 피해 0");
+    if (attackPower > 0) {
+        CombatFxEvent* fx = PushCombatFx(game, CFX_ATTACK_LAUNCH, game->turnTraceCount);
+        if (fx) {
+            fx->sourceSlot = SLOT_ATTACK;
+            fx->sourceDie = (int8_t)DieForSlot(game, SLOT_ATTACK);
+            fx->targetEnemy = (int8_t)target;
+            fx->value = (int16_t)attackDamage;
+        }
+    }
     PushTurnTrace(game, trace);
     if (target >= 0 && attackKind == FACE_FIRE && game->enemies[target].alive) game->enemies[target].burn = 2;
     int actualHeal = 0;
@@ -1509,6 +1588,18 @@ static void ResolveAttack(GameState* game, ResolveContext* ctx) {
         targetBlockBefore < attackDamage ? targetBlockBefore : attackDamage,
         targetHpBefore - targetHpAfter, targetHpBefore, targetHpAfter);
     else lstrcpyW(trace, L"[적중] 적용할 공격 피해 없음");
+    if (attackPower > 0 && target >= 0) {
+        CombatFxEvent* fx = PushCombatFx(game, CFX_ENEMY_HIT, game->turnTraceCount);
+        if (fx) {
+            fx->sourceSlot = SLOT_ATTACK;
+            fx->sourceDie = (int8_t)DieForSlot(game, SLOT_ATTACK);
+            fx->targetEnemy = (int8_t)target;
+            fx->flags = HitFxFlags(game, target, dealt, attackDamage);
+            fx->value = (int16_t)dealt;
+            fx->beforeValue = (int16_t)targetHpBefore;
+            fx->afterValue = (int16_t)targetHpAfter;
+        }
+    }
     PushTurnTrace(game, trace);
     game->lastDamage = attackDamage;
     ctx->slotOutput[SLOT_ATTACK] = attackDamage;
@@ -1529,6 +1620,16 @@ static void ResolveDefend(GameState* game, ResolveContext* ctx) {
     else if (defendKind == FACE_SHIELD) wsprintfW(trace, L"[방어] (기본 %d + 증폭 %d) × 방벽 2 = 방어도 +%d", defendPower, ampBonus, block);
     else if (defendKind == FACE_WILD) wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d + 특수 3 = 방어도 +%d", defendPower, ampBonus, block);
     else wsprintfW(trace, L"[방어] 기본 %d + 증폭 %d = 방어도 +%d", defendPower, ampBonus, block);
+    if (block > 0) {
+        CombatFxEvent* fx = PushCombatFx(game, CFX_DEFEND, game->turnTraceCount);
+        if (fx) {
+            fx->sourceSlot = SLOT_DEFEND;
+            fx->sourceDie = (int8_t)DieForSlot(game, SLOT_DEFEND);
+            fx->value = (int16_t)block;
+            fx->beforeValue = (int16_t)(game->playerBlock - block);
+            fx->afterValue = (int16_t)game->playerBlock;
+        }
+    }
     PushTurnTrace(game, trace);
 }
 
@@ -1554,6 +1655,18 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
         if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, repeat, absorbed, hpBefore - hpAfter);
         else if (chainKind == FACE_WILD) wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
         else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
+        if (chainTarget >= 0) {
+            CombatFxEvent* fx = PushCombatFx(game, CFX_CHAIN, game->turnTraceCount);
+            if (fx) {
+                fx->sourceSlot = SLOT_CHAIN;
+                fx->sourceDie = (int8_t)DieForSlot(game, SLOT_CHAIN);
+                fx->targetEnemy = (int8_t)chainTarget;
+                fx->flags = HitFxFlags(game, chainTarget, hpBefore - hpAfter, repeat);
+                fx->value = (int16_t)(hpBefore - hpAfter);
+                fx->beforeValue = (int16_t)hpBefore;
+                fx->afterValue = (int16_t)hpAfter;
+            }
+        }
         PushTurnTrace(game, trace);
     } else if (game->lastBlock > 0) {
         int repeat = (game->lastBlock * (chainPower + 4)) / 13;
@@ -1562,6 +1675,17 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
         ctx->slotOutput[SLOT_CHAIN] = repeat;
         if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d", game->lastBlock, repeat);
         else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d", game->lastBlock, chainPower, repeat);
+        if (repeat > 0) {
+            CombatFxEvent* fx = PushCombatFx(game, CFX_CHAIN, game->turnTraceCount);
+            if (fx) {
+                fx->sourceSlot = SLOT_CHAIN;
+                fx->sourceDie = (int8_t)DieForSlot(game, SLOT_CHAIN);
+                fx->flags = CFXF_DEFEND_CHAIN;
+                fx->value = (int16_t)repeat;
+                fx->beforeValue = (int16_t)(game->playerBlock - repeat);
+                fx->afterValue = (int16_t)game->playerBlock;
+            }
+        }
         PushTurnTrace(game, trace);
     } else PushTurnTrace(game, L"[연쇄] 반복할 공격·방어가 없어 발동하지 않음");
 }
@@ -1603,6 +1727,14 @@ static void ResolveEnemies(GameState* game) {
             DamageEnemy(game, i, 3);
             wchar_t burnTrace[96]; wsprintfW(burnTrace, L"[화상] %s 체력 -%d (%d → %d)",
                 info->code, hpBefore - enemy->hp, hpBefore, enemy->hp);
+            CombatFxEvent* burnFx = PushCombatFx(game, CFX_BURN, game->turnTraceCount);
+            if (burnFx) {
+                burnFx->targetEnemy = (int8_t)i;
+                burnFx->flags = HitFxFlags(game, i, hpBefore - enemy->hp, 3);
+                burnFx->value = (int16_t)(hpBefore - enemy->hp);
+                burnFx->beforeValue = (int16_t)hpBefore;
+                burnFx->afterValue = (int16_t)enemy->hp;
+            }
             PushTurnTrace(game, burnTrace);
             if (!enemy->alive) continue;
         }
@@ -1630,11 +1762,19 @@ static void ResolveEnemies(GameState* game) {
                 game->playerBlock -= absorbed;
                 damage -= absorbed;
             }
+            int playerHpBeforeStrike = game->playerHp;
             game->playerHp -= damage;
             // 계산 재생이 이 줄에 닿는 순간 적이 달려들도록, 곧 기록될 줄 번호까지 남긴다.
-            game->lastTurnEnemyStruck[i] = 1;
-            game->lastTurnEnemyStrikeDamage[i] = damage;
-            game->lastTurnEnemyStrikeTrace[i] = game->turnTraceCount;
+            CombatFxEvent* strikeFx = PushCombatFx(game, CFX_ENEMY_STRIKE, game->turnTraceCount);
+            if (strikeFx) {
+                strikeFx->targetEnemy = (int8_t)i;
+                strikeFx->value = (int16_t)damage;
+                strikeFx->beforeValue = (int16_t)playerHpBeforeStrike;
+                strikeFx->afterValue = (int16_t)game->playerHp;
+                if (damage <= 0) strikeFx->flags |= CFXF_BLOCKED;
+                if (enemy->intent == INTENT_CORRUPT) strikeFx->flags |= CFXF_CORRUPT;
+                if (empowered) strikeFx->flags |= CFXF_EMPOWERED;
+            }
             if (enemy->intent == INTENT_CORRUPT && damage > 0) PushLog(game, L"오염 공격은 방어도를 절반만 인정합니다.");
             if (empowered && enemy->intent == INTENT_CORRUPT) wsprintfW(trace, L"[적 행동] %s 강화 오염 %d - 방어 절반 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
             else if (empowered) wsprintfW(trace, L"[적 행동] %s 강화 공격 %d - 방어도 %d = 내 체력 -%d", info->code, enemy->intentValue, absorbed, damage);
@@ -1766,12 +1906,8 @@ void EndTurn(GameState* game) {
         return;
     }
     ClearTurnTrace(game);
+    ClearCombatFx(game);
     RecordFx(game, GIMMICK_NONE, -1, -1);
-    for (int i = 0; i < 3; ++i) {
-        game->lastTurnEnemyStruck[i] = 0;
-        game->lastTurnEnemyStrikeDamage[i] = 0;
-        game->lastTurnEnemyStrikeTrace[i] = -1;
-    }
     // 읽기 오류의 재굴림은 오프라인 출력 0보다 먼저 처리된다.
     for (int d = 0; d < 3; ++d) {
         if (game->dice[d].unstable) {
