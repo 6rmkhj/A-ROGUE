@@ -342,6 +342,27 @@ static void BeginDescent(int toFloor) {
     SetTimer(gWindow, 6, 16, 0);   // 5번은 오디오 펌프(AUDIO_TIMER_ID)가 쓴다
 }
 
+// ---- 디렉터리 진입 연출 ----------------------------------------------------
+// 선택은 이미 game.cpp에서 확정됐고 전투도 시작된 뒤다. 여기서는 고른 경로가
+// 타이핑되는 짧은 오버레이만 얹는다.
+int gDirEnterActive, gDirEnterKind;
+DWORD gDirEnterStart;
+
+static void FinishDirectoryEnter() {
+    if (!gDirEnterActive) return;
+    gDirEnterActive = 0;
+    KillTimer(gWindow, 8);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static void BeginDirectoryEnter(int kind) {
+    gDirEnterKind = kind;
+    gDirEnterStart = GetTickCount();
+    gDirEnterActive = 1;
+    PlaySfx(SFX_READ_START);
+    SetTimer(gWindow, 8, 16, 0);
+}
+
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
 static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
 int DieSettled(int die) { return !gReadActive || ReadElapsed() >= DieReadEnd(die); }
@@ -432,7 +453,8 @@ static int gIdleActive;
 void SyncIdleAnimation() {
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
     // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
-    int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT || AmbientNoiseLevel() > 0)
+    int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT
+        || gGame.phase == PHASE_DIRECTORY || AmbientNoiseLevel() > 0)
         && !gGuideOpen && !gSettingsOpen && !gDeckOpen) || GuideNoiseActive();
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
@@ -441,6 +463,7 @@ void SyncIdleAnimation() {
 
 static void BeginNewRun() {
     FinishDeath();
+    FinishDirectoryEnter();
     gStrikeFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
     NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE);
@@ -487,10 +510,23 @@ static void ClickCombat(int x, int y) {
     }
 }
 
+// 디렉터리 카드를 고른다. 실패(잘못된 index)면 아무 일도 일어나지 않는다.
+static void TakeDirectory(int index) {
+    if (index < 0 || index >= DirectoryChoiceCount(&gGame)) return;
+    int kind = gGame.directory.choices[index].kind;
+    SelectDirectoryChoice(&gGame, index);
+    if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind); }
+}
+
+static void ClickDirectory(int x, int y) {
+    for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i)
+        if (Inside(DirectoryChoiceRect(i), x, y)) { TakeDirectory(i); return; }
+}
+
 static void ClickDriveSelect(int x, int y) {
     for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
-        if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
+        if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
         return;
     }
 }
@@ -548,6 +584,10 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
         return -1;
     }
+    if (gGame.phase == PHASE_DIRECTORY) {
+        for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i) if (Inside(DirectoryChoiceRect(i), x, y)) return 80 + i;
+        return -1;
+    }
     if (gGame.phase == PHASE_COMBAT) {
         for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) return 100 + i;
         for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) return 200 + i;
@@ -576,6 +616,7 @@ static void HandleClick(int x, int y) {
     if (gDeathActive) return;
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gDescentActive) { FinishDescent(); return; }
+    if (gDirEnterActive) { FinishDirectoryEnter(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (gDeckOpen) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
@@ -605,6 +646,7 @@ static void HandleClick(int x, int y) {
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_DRIVE_SELECT) ClickDriveSelect(x, y);
+    else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
@@ -617,6 +659,7 @@ static void HandleKey(WPARAM key) {
     if (gDeathActive) return;
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
+    if (gDirEnterActive) { FinishDirectoryEnter(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
@@ -635,8 +678,12 @@ static void HandleKey(WPARAM key) {
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {
             SelectDrive(&gGame, (int)(key - '1'));
-            if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
+            if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
         }
+    }
+    else if (gGame.phase == PHASE_DIRECTORY) {
+        // Esc는 선택지를 닫거나 다시 뽑지 않는다.
+        if (key >= '1' && key <= '0' + DIRECTORY_CHOICE_COUNT) TakeDirectory((int)(key - '1'));
     }
     else if (gGame.phase == PHASE_COMBAT) {
         if (key == 'R') BeginRead();
@@ -702,11 +749,15 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if ((int)(GetTickCount() - gDeathStart) >= DEATH_STATIC_MS) FinishDeath();
             else InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == 8u) {
+            if ((int)(GetTickCount() - gDirEnterStart) >= DIR_ENTER_MS) FinishDirectoryEnter();
+            else InvalidateRect(window, 0, FALSE);
+        }
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
-        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 6); KillTimer(window, 7);
+        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4); KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8);
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }

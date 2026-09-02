@@ -84,10 +84,12 @@ static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserve
     GameState game; NewRun(&game, seed);
     game.modifierA = modifierA; game.modifierB = modifierB;
     ConfigureDriveForTest(&game, drive, seed, preserveModifiers);
-    game.floor = 0; game.encounter = 0; StartCombat(&game);
+    game.floor = 0; game.encounter = 0; BeginDirectorySelection(&game);
     game.playerMaxHp = 999; game.playerHp = 999; int guard = 0;
     while (game.phase != PHASE_VICTORY && guard++ < 500) {
-        if (game.phase == PHASE_COMBAT) {
+        if (game.phase == PHASE_DIRECTORY) {
+            SelectDirectoryChoice(&game, 0);
+        } else if (game.phase == PHASE_COMBAT) {
             game.playerHp = 999;
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive) { game.enemies[i].hp = 1; game.enemies[i].block = 0; }
             AssignDieToSlot(&game, 0, SLOT_ATTACK); AssignDieToSlot(&game, 1, SLOT_AMPLIFY); AssignDieToSlot(&game, 2, SLOT_DEFEND); EndTurn(&game);
@@ -668,8 +670,366 @@ static int CheckNoStateLeak() {
     for (int d = 0; d < 3; ++d) if (g.dice[d].offline) return Fail("offline dice must not leak out of combat");
     if (CountQuarantined(&g) != 0) return Fail("quarantines must not leak out of combat");
     InstallTsr(&g, 0);
-    if (g.phase != PHASE_COMBAT || g.floor != 1) return Fail("the run must continue to floor 2");
+    if (g.phase != PHASE_DIRECTORY || g.floor != 1) return Fail("the run must continue to floor 2");
+    SelectDirectoryChoice(&g, 0);
+    if (g.phase != PHASE_COMBAT) return Fail("the new floor's directory must start the next combat");
     if (g.boss.gimmick != GIMMICK_NONE) return Fail("a normal combat must not inherit a boss gimmick");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// 디렉터리 경로 선택
+// ---------------------------------------------------------------------------
+
+static int FirstUsableFaceIndex(const GameState* game) {
+    for (int d = 0; d < 3; ++d) {
+        for (int f = 0; f < 6; ++f) if (FacePower(&game->dice[d].faces[f]) >= 1) return d * 6 + f;
+    }
+    return -1;
+}
+
+// 선택 화면에서 원하는 노드를 강제로 고른다 (생성 확률과 무관하게 효과만 검증).
+static int ForceDirectoryNode(GameState* game, int kind) {
+    if (game->phase != PHASE_DIRECTORY) return 0;
+    game->directory.choices[0].kind = (uint8_t)kind;
+    game->directory.choices[0].payload = 0;
+    if (kind == DIR_NODE_CORRUPTED) {
+        int face = FirstUsableFaceIndex(game);
+        if (face < 0) return 0;
+        game->directory.choices[0].payload = (uint8_t)face;
+    }
+    SelectDirectoryChoice(game, 0);
+    return game->phase == PHASE_COMBAT;
+}
+
+// 전투는 즉시 이기고 보상은 건너뛰며 다음 디렉터리까지 진행한다.
+static int AutoAdvanceToDirectory(GameState* game, int guardLimit) {
+    int guard = 0;
+    while (game->phase != PHASE_DIRECTORY && guard++ < guardLimit) {
+        if (game->phase == PHASE_COMBAT) {
+            game->playerMaxHp = 999; game->playerHp = 999;
+            for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) { game->enemies[i].hp = 1; game->enemies[i].block = 0; }
+            AssignDieToSlot(game, 0, SLOT_ATTACK); EndTurn(game);
+        } else if (game->phase == PHASE_REWARD) {
+            SkipReward(game);
+        } else if (game->phase == PHASE_PRUNE) {
+            while (UsedBytes(game) > EffectiveCapacity(game)) {
+                int index = MostExpensiveFace(game); if (index < 0) return 0; PruneFace(game, index / 6, index % 6);
+            }
+            ConfirmPrune(game);
+        } else return 0;
+    }
+    return game->phase == PHASE_DIRECTORY;
+}
+
+// 생성 불변식: 중복 없음, 둘 다 고위험 없음, 같은 축 두 개 없음, 층·연속 제한 준수
+static int CheckDirectoryGeneration() {
+    for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
+        for (unsigned int seed = 1; seed <= 40; ++seed) {
+            GameState g; NewRun(&g, 0xD1A00000u + seed * 131u + (unsigned int)drive);
+            g.driveChoices[0] = drive;
+            SelectDrive(&g, 0);
+            if (g.phase != PHASE_DIRECTORY) return Fail("mounting a volume must open the directory choice");
+            for (int step = 0; step < 6; ++step) {
+                if (g.phase != PHASE_DIRECTORY) break;
+                if (DirectoryChoiceCount(&g) != DIRECTORY_CHOICE_COUNT) return Fail("the directory must always offer two cards");
+                int a = g.directory.choices[0].kind, b = g.directory.choices[1].kind;
+                const DirectoryNodeInfo* ia = DirectoryNodeInfoOrNull(a);
+                const DirectoryNodeInfo* ib = DirectoryNodeInfoOrNull(b);
+                if (!ia || !ib) return Fail("directory cards must carry a valid node kind");
+                if (!ia->enabled || !ib->enabled) return Fail("disabled nodes must never be offered");
+                if (a == b) return Fail("the two directory cards must differ");
+                int highA = ia->risk == DIR_RISK_HIGH || ia->risk == DIR_RISK_UNKNOWN;
+                int highB = ib->risk == DIR_RISK_HIGH || ib->risk == DIR_RISK_UNKNOWN;
+                if (highA && highB) return Fail("two high risk directories must never be offered together");
+                if (ia->category == ib->category && !highA && !highB) return Fail("two safe nodes on the same axis must not pair up");
+                if (DIRECTORY_DRIVE_WEIGHT[drive][a] == 0 || DIRECTORY_DRIVE_WEIGHT[drive][b] == 0)
+                    return Fail("a node with zero weight must not appear on this drive");
+                if ((a == DIR_NODE_CORRUPTED || b == DIR_NODE_CORRUPTED) && g.floor < 1)
+                    return Fail("corrupted must not appear on the first floor");
+                if (g.directory.previousKind != DIR_NODE_NONE
+                    && (a == g.directory.previousKind || b == g.directory.previousKind))
+                    return Fail("the node picked last time must not be offered again");
+                if (g.directory.floorCounts[a] >= ia->maxPerFloor || g.directory.floorCounts[b] >= ib->maxPerFloor)
+                    return Fail("a node past its per-floor limit must not be offered");
+                SelectDirectoryChoice(&g, 0);
+                if (g.phase != PHASE_COMBAT) return Fail("choosing a directory card must start the combat");
+                if (!AutoAdvanceToDirectory(&g, 60)) break;
+            }
+            for (int f = 0; f < 3; ++f) {
+                int first = g.directory.history[f][0], second = g.directory.history[f][1];
+                if (first != DIR_NODE_NONE && first == second) return Fail("a node must not be chosen twice in a row");
+            }
+        }
+    }
+    return 0;
+}
+
+// 별도 난수열: 조회·잘못된 입력은 상태를 바꾸지 않고, 같은 seed는 같은 카드를 낸다.
+static int CheckDirectoryRng() {
+    GameState g; NewRun(&g, 0xD1B00001u); g.driveChoices[0] = 0;
+    uint32_t combatRngBefore = g.rng;
+    SelectDrive(&g, 0);
+    if (g.rng == combatRngBefore) return Fail("mounting must still consume the schedule seed");
+    if (g.directory.rng == 0) return Fail("the directory rng must be seeded");
+
+    GameState snapshot = g;
+    wchar_t path[96];
+    // 리페인트가 부르는 조회 함수들은 상태를 한 바이트도 바꾸지 않아야 한다.
+    for (int i = 0; i < 8; ++i) {
+        FormatCurrentDirectory(&g, path, 96);
+        DirectoryChoiceCount(&g);
+        DirectoryIntelActive(&g);
+        ScheduledMobKind(&g);
+        FloorBossKind(&g);
+        for (int k = 0; k < DIR_NODE_COUNT; ++k) DirectoryNodeAllowed(&g, k);
+    }
+    if (memcmp(&snapshot, &g, sizeof(GameState)) != 0) return Fail("reading the directory screen must not change the state");
+    // 잘못된 index는 무시된다 (오클릭으로 선택지가 다시 뽑히면 안 된다).
+    SelectDirectoryChoice(&g, -1);
+    SelectDirectoryChoice(&g, DIRECTORY_CHOICE_COUNT);
+    SelectDirectoryChoice(&g, 99);
+    if (memcmp(&snapshot, &g, sizeof(GameState)) != 0) return Fail("an invalid directory index must not change the state");
+    // 잘못된 phase에서도 마찬가지다.
+    GameState wrongPhase; NewRun(&wrongPhase, 0xD1B00002u);
+    GameState wrongPhaseCopy = wrongPhase;
+    SelectDirectoryChoice(&wrongPhase, 0);
+    if (memcmp(&wrongPhaseCopy, &wrongPhase, sizeof(GameState)) != 0) return Fail("selecting a directory outside its phase must be ignored");
+
+    // 생성 자체는 전투 난수열을 소비하지 않는다.
+    GameState quiet; NewRun(&quiet, 0xD1B00004u); quiet.driveChoices[0] = 0; SelectDrive(&quiet, 0);
+    uint32_t rngBeforeGeneration = quiet.rng;
+    uint32_t dirRngBefore = quiet.directory.rng;
+    quiet.phase = PHASE_DIRECTORY;
+    BeginDirectorySelection(&quiet);
+    if (quiet.rng != rngBeforeGeneration) return Fail("generating directory cards must not consume the combat rng");
+    if (quiet.directory.rng == dirRngBefore) return Fail("generating directory cards must consume the directory rng");
+
+    // 같은 seed·드라이브면 같은 선택지가 재현된다.
+    GameState a1, a2;
+    NewRun(&a1, 0xD1B00003u); a1.driveChoices[0] = 3; SelectDrive(&a1, 0);
+    NewRun(&a2, 0xD1B00003u); a2.driveChoices[0] = 3; SelectDrive(&a2, 0);
+    for (int step = 0; step < 4; ++step) {
+        if (a1.phase != PHASE_DIRECTORY || a2.phase != PHASE_DIRECTORY) break;
+        if (memcmp(a1.directory.choices, a2.directory.choices, sizeof(a1.directory.choices)) != 0)
+            return Fail("the same seed and drive must reproduce the same directory cards");
+        SelectDirectoryChoice(&a1, 0); SelectDirectoryChoice(&a2, 0);
+        if (!AutoAdvanceToDirectory(&a1, 60) || !AutoAdvanceToDirectory(&a2, 60)) break;
+    }
+    return 0;
+}
+
+// 진행: 드라이브 → 디렉터리 → 일반전 → 보상 → 디렉터리 → 일반전 → 보상 → 보스 → 전리품 → 다음 층
+static int CheckDirectoryProgression() {
+    GameState g; NewRun(&g, 0xD1C00001u); g.driveChoices[0] = 0;
+    SelectDrive(&g, 0);
+    if (g.phase != PHASE_DIRECTORY || g.encounter != 0) return Fail("the first directory must sit before encounter 0");
+    if (!ForceDirectoryNode(&g, DIR_NODE_PROCESS)) return Fail("choosing a directory must start the scheduled combat");
+    if (g.encounter != 0) return Fail("the first directory must not skip an encounter");
+    g.playerMaxHp = 999; g.playerHp = 999;
+    for (int i = 0; i < g.enemyCount; ++i) { g.enemies[i].hp = 1; g.enemies[i].block = 0; }
+    AssignDieToSlot(&g, 0, SLOT_ATTACK); EndTurn(&g);
+    if (g.phase != PHASE_REWARD || g.rewardIsTsr) return Fail("a mob kill must offer a face reward");
+    SkipReward(&g);
+    if (g.phase != PHASE_DIRECTORY || g.encounter != 1) return Fail("the second directory must sit before encounter 1");
+    if (!ForceDirectoryNode(&g, DIR_NODE_PROCESS)) return Fail("the second directory must start encounter 1");
+    for (int i = 0; i < g.enemyCount; ++i) { g.enemies[i].hp = 1; g.enemies[i].block = 0; }
+    AssignDieToSlot(&g, 0, SLOT_ATTACK); EndTurn(&g);
+    SkipReward(&g);
+    if (g.phase != PHASE_COMBAT || g.encounter != 2) return Fail("the boss must follow the second reward with no choice screen");
+    if (g.directory.activeKind != DIR_NODE_NONE) return Fail("no directory effect may carry into the boss fight");
+    for (int i = 0; i < g.enemyCount; ++i) { g.enemies[i].hp = 1; g.enemies[i].block = 0; }
+    AssignDieToSlot(&g, 0, SLOT_ATTACK); EndTurn(&g);
+    if (g.phase != PHASE_REWARD || !g.rewardIsTsr) return Fail("the boss kill must offer resident loot");
+    SkipReward(&g);
+    if (g.phase != PHASE_DIRECTORY || g.floor != 1 || g.encounter != 0) return Fail("the next floor must open with a directory choice");
+    if (g.directory.intelThisFloor) return Fail("intel must not carry across floors");
+
+    // 최종 보스는 디렉터리도 보상도 거치지 않고 승리로 간다.
+    GameState last; NewRun(&last, 0xD1C00002u); last.modifierA = MOD_BAD_SECTOR; last.modifierB = MOD_CHECKSUM;
+    ConfigureDriveForTest(&last, TEST_DRIVE, TEST_SEED, 1);
+    last.floor = 2; last.encounter = 2; last.playerMaxHp = 999; last.playerHp = 999;
+    StartCombat(&last);
+    last.enemies[0].hp = 1; last.enemies[0].block = 0;
+    AssignDieToSlot(&last, 0, SLOT_ATTACK); EndTurn(&last);
+    if (last.phase != PHASE_VICTORY) return Fail("the final boss must go straight to victory");
+    return 0;
+}
+
+// 노드별 효과
+static int CheckDirectoryNodes() {
+    // TEMP: 회복 상한, 보상 후보 2개, 그리고 다음 전투에서의 복귀
+    GameState temp; NewRun(&temp, 0xD1D00001u); temp.driveChoices[0] = 0; SelectDrive(&temp, 0);
+    temp.playerHp = temp.playerMaxHp - 2;
+    if (!ForceDirectoryNode(&temp, DIR_NODE_TEMP)) return Fail("temp must start the combat");
+    if (temp.playerHp != temp.playerMaxHp) return Fail("temp must never overheal");
+    temp.playerMaxHp = 999; temp.playerHp = 999;
+    for (int i = 0; i < temp.enemyCount; ++i) { temp.enemies[i].hp = 1; temp.enemies[i].block = 0; }
+    AssignDieToSlot(&temp, 0, SLOT_ATTACK); EndTurn(&temp);
+    if (temp.phase != PHASE_REWARD) return Fail("temp combat must end in a reward");
+    if (temp.rewardChoiceCount != 2) return Fail("temp must cut the face reward down to two candidates");
+    if (temp.rewardTier != 0) return Fail("temp must keep the standard reward tier");
+    SelectReward(&temp, 2);
+    if (temp.selectedReward != -1) return Fail("the removed third candidate must not be selectable");
+    SelectReward(&temp, 1);
+    if (temp.selectedReward != 1) return Fail("the remaining candidates must stay selectable");
+    SkipReward(&temp);
+    if (temp.phase != PHASE_DIRECTORY) return Fail("temp must return to the next directory");
+    if (!ForceDirectoryNode(&temp, DIR_NODE_PROCESS)) return Fail("process must follow temp");
+    for (int i = 0; i < temp.enemyCount; ++i) { temp.enemies[i].hp = 1; temp.enemies[i].block = 0; }
+    AssignDieToSlot(&temp, 0, SLOT_ATTACK); EndTurn(&temp);
+    if (temp.rewardChoiceCount != 3) return Fail("the reward candidate count must reset after temp");
+
+    GameState full; NewRun(&full, 0xD1D00002u); full.driveChoices[0] = 0; SelectDrive(&full, 0);
+    full.playerHp = full.playerMaxHp;
+    if (DirectoryNodeAllowed(&full, DIR_NODE_TEMP)) return Fail("temp must not be offered at full health");
+
+    // CACHE: 임시 한도 +20B, 층 이동 시 해제, 그 결과 초과하면 정리 화면
+    GameState cache; NewRun(&cache, 0xD1D00003u); cache.driveChoices[0] = 0; SelectDrive(&cache, 0);
+    int capacityBefore = EffectiveCapacity(&cache);
+    if (!ForceDirectoryNode(&cache, DIR_NODE_CACHE)) return Fail("cache must start the combat");
+    if (EffectiveCapacity(&cache) != capacityBefore + DIR_CACHE_BYTES) return Fail("cache must lift the floor capacity");
+    if (cache.enemies[0].block != DIR_CACHE_BLOCK) return Fail("cache must hand the enemy starting block");
+    cache.playerMaxHp = 999; cache.playerHp = 999;
+    for (int i = 0; i < cache.enemyCount; ++i) { cache.enemies[i].hp = 1; cache.enemies[i].block = 0; }
+    AssignDieToSlot(&cache, 0, SLOT_ATTACK); EndTurn(&cache);
+    SkipReward(&cache);
+    if (EffectiveCapacity(&cache) != capacityBefore + DIR_CACHE_BYTES) return Fail("cache must survive until the floor ends");
+    // 1층 한도(+20B) 안에는 들어가지만 2층 한도는 넘는 덱을 만든다.
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
+        cache.dice[d].faces[f].kind = FACE_NUMBER; cache.dice[d].faces[f].value = 14; cache.dice[d].faces[f].damaged = 0;
+    }
+    if (UsedBytes(&cache) > EffectiveCapacity(&cache)) return Fail("the cache test deck must fit inside the lifted limit");
+    cache.encounter = 2; cache.phase = PHASE_REWARD;
+    SkipReward(&cache);
+    if (cache.directory.floorCapacityBonus != 0) return Fail("the cache bonus must be released before the next floor check");
+    if (cache.phase != PHASE_PRUNE) return Fail("losing the cache bonus over the limit must force a prune");
+    if (cache.pendingContinuation != CONTINUE_DIRECTORY) return Fail("a floor-entry prune must return to the directory");
+    while (UsedBytes(&cache) > EffectiveCapacity(&cache)) {
+        int index = MostExpensiveFace(&cache); if (index < 0) return Fail("unable to prune the cache test deck");
+        PruneFace(&cache, index / 6, index % 6);
+    }
+    ConfirmPrune(&cache);
+    if (cache.phase != PHASE_DIRECTORY || cache.floor != 1) return Fail("confirming that prune must open the new floor's directory");
+
+    // LOGS: 판독 기록은 건드리지 않고 임시 정보만 연다
+    GameState logs; NewRun(&logs, 0xD1D00004u); logs.driveChoices[0] = 3; SelectDrive(&logs, 0);
+    uint8_t scannedBefore[ENEMY_KIND_COUNT];
+    memcpy(scannedBefore, logs.enemyScanned, sizeof(scannedBefore));
+    if (!ForceDirectoryNode(&logs, DIR_NODE_LOGS)) return Fail("logs must start the combat");
+    if (memcmp(scannedBefore, logs.enemyScanned, sizeof(scannedBefore)) != 0) return Fail("logs must never change the scan record");
+    if (!DirectoryIntelActive(&logs)) return Fail("logs must open this floor's intel");
+    if (logs.enemies[0].block != DIR_LOGS_BLOCK) return Fail("logs must hand the enemy starting block");
+    logs.playerMaxHp = 999; logs.playerHp = 999;
+    for (int i = 0; i < logs.enemyCount; ++i) { logs.enemies[i].hp = 1; logs.enemies[i].block = 0; }
+    AssignDieToSlot(&logs, 0, SLOT_ATTACK); EndTurn(&logs);
+    SkipReward(&logs);
+    if (logs.phase != PHASE_DIRECTORY) return Fail("logs must return to the next directory");
+    if (DirectoryNodeAllowed(&logs, DIR_NODE_LOGS)) return Fail("logs must not be offered twice on one floor");
+
+    // INFECTED: 적 최대 체력 +20%와 강화 보상
+    GameState plain; NewRun(&plain, 0xD1D00005u); plain.driveChoices[0] = 0; SelectDrive(&plain, 0);
+    if (!ForceDirectoryNode(&plain, DIR_NODE_PROCESS)) return Fail("the control run must start combat");
+    int plainHp = plain.enemies[0].maxHp;
+    GameState infected; NewRun(&infected, 0xD1D00005u); infected.driveChoices[0] = 0; SelectDrive(&infected, 0);
+    if (!ForceDirectoryNode(&infected, DIR_NODE_INFECTED)) return Fail("infected must start combat");
+    if (infected.enemies[0].maxHp != plainHp * DIR_INFECTED_HP_PERCENT / 100)
+        return Fail("infected must raise the enemy max hp by the fixed percent");
+    if (infected.enemies[0].hp != infected.enemies[0].maxHp) return Fail("infected must fill the raised hp");
+    infected.playerMaxHp = 999; infected.playerHp = 999;
+    for (int i = 0; i < infected.enemyCount; ++i) { infected.enemies[i].hp = 1; infected.enemies[i].block = 0; }
+    AssignDieToSlot(&infected, 0, SLOT_ATTACK); EndTurn(&infected);
+    if (infected.rewardTier != 1) return Fail("infected must produce a tuned reward");
+    if (infected.rewardChoiceCount != 3) return Fail("a tuned reward must still offer three candidates");
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < i; ++j)
+        if (infected.rewardKinds[i] == infected.rewardKinds[j]) return Fail("a tuned reward must not repeat a face kind");
+    for (int i = 0; i < 3; ++i)
+        if (infected.rewardKinds[i] == FACE_NUMBER && infected.rewardValues[i] < 8)
+            return Fail("a tuned number face must roll from the raised range");
+
+    // CORRUPTED: 대상 면은 비용을 유지하고 출력만 0, 전투가 끝나면 풀린다
+    GameState corrupted; NewRun(&corrupted, 0xD1D00006u); corrupted.driveChoices[0] = 5; SelectDrive(&corrupted, 0);
+    corrupted.floor = 1;
+    int target = FirstUsableFaceIndex(&corrupted);
+    if (target < 0) return Fail("the corrupted test needs a usable face");
+    int costBefore = FaceCost(&corrupted.dice[target / 6].faces[target % 6]);
+    int usableBefore = UsableFaceCount(&corrupted);
+    if (!ForceDirectoryNode(&corrupted, DIR_NODE_CORRUPTED)) return Fail("corrupted must start the combat");
+    const Face* hit = &corrupted.dice[target / 6].faces[target % 6];
+    if (hit->quarantined == QUAR_NONE) return Fail("corrupted must quarantine its announced face");
+    if (FacePower(hit) != 0) return Fail("a quarantined face must produce nothing");
+    if (FaceCost(hit) != costBefore) return Fail("a quarantined face must still cost its bytes");
+    if (UsableFaceCount(&corrupted) != usableBefore - 1) return Fail("corrupted must remove exactly one usable face");
+    corrupted.playerMaxHp = 999; corrupted.playerHp = 999;
+    for (int i = 0; i < corrupted.enemyCount; ++i) { corrupted.enemies[i].hp = 1; corrupted.enemies[i].block = 0; }
+    AssignDieToSlot(&corrupted, 0, SLOT_ATTACK); EndTurn(&corrupted);
+    if (corrupted.dice[target / 6].faces[target % 6].quarantined != QUAR_NONE)
+        return Fail("winning must release the directory quarantine");
+    if (corrupted.rewardTier != 1) return Fail("corrupted must produce a tuned reward");
+
+    // 사망해도 격리가 남지 않는다
+    GameState doomed; NewRun(&doomed, 0xD1D00007u); doomed.driveChoices[0] = 5; SelectDrive(&doomed, 0);
+    doomed.floor = 1;
+    if (!ForceDirectoryNode(&doomed, DIR_NODE_CORRUPTED)) return Fail("the death test must enter the corrupted combat");
+    doomed.playerHp = 1;
+    doomed.enemies[0].hp = 999; doomed.enemies[0].maxHp = 999;
+    doomed.enemies[0].intent = INTENT_HEAVY; doomed.enemies[0].intentValue = 500;
+    AssignDieToSlot(&doomed, 0, SLOT_ATTACK); EndTurn(&doomed);
+    if (doomed.phase != PHASE_GAMEOVER) return Fail("the death test must reach game over");
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f)
+        if (doomed.dice[d].faces[f].quarantined != QUAR_NONE) return Fail("dying must release the directory quarantine too");
+    // 새 런은 경로 상태를 물려받지 않는다.
+    NewRun(&doomed, 0xD1D00008u);
+    if (doomed.directory.activeKind != DIR_NODE_NONE || doomed.directory.previousKind != DIR_NODE_NONE
+        || doomed.directory.intelThisFloor || doomed.directory.floorCapacityBonus != 0)
+        return Fail("a new run must not inherit any directory state");
+    for (int f = 0; f < 3; ++f) for (int i = 0; i < DIRECTORY_PER_FLOOR; ++i)
+        if (doomed.directory.history[f][i] != DIR_NODE_NONE) return Fail("a new run must clear the directory history");
+
+    // 면을 전부 지운 채로는 디렉터리로 진행할 수 없다.
+    GameState wiped; NewRun(&wiped, 0xD1D0000Au); wiped.driveChoices[0] = 0; SelectDrive(&wiped, 0);
+    wiped.phase = PHASE_PRUNE; wiped.pendingContinuation = CONTINUE_DIRECTORY;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) PruneFace(&wiped, d, f);
+    ConfirmPrune(&wiped);
+    if (wiped.phase != PHASE_PRUNE) return Fail("an empty deck must not be allowed to continue");
+    wiped.dice[0].faces[0].kind = FACE_NUMBER; wiped.dice[0].faces[0].value = 4;
+    ConfirmPrune(&wiped);
+    if (wiped.phase != PHASE_DIRECTORY) return Fail("one restored face must let the prune resume the directory");
+
+    // CORRUPTED는 출력 가능한 면이 모자라면 아예 등장하지 않는다.
+    GameState bare; NewRun(&bare, 0xD1D00009u); bare.driveChoices[0] = 5; SelectDrive(&bare, 0);
+    bare.floor = 1;
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
+        bare.dice[d].faces[f].kind = FACE_EMPTY; bare.dice[d].faces[f].value = 0;
+    }
+    bare.dice[0].faces[0].kind = FACE_NUMBER; bare.dice[0].faces[0].value = 4;
+    if (DirectoryNodeAllowed(&bare, DIR_NODE_CORRUPTED)) return Fail("corrupted must not be offered with too few usable faces");
+    return 0;
+}
+
+// 경로 문자열은 저장되지 않고 층 경로 + 방문 노드로 조합된다.
+static int CheckDirectoryPath() {
+    for (int k = DIR_NODE_PROCESS; k < DIR_NODE_COUNT; ++k)
+        if (wcslen(DIRECTORY_NODE_INFO[k].segment) > 11) return Fail("a directory segment must stay within 11 characters");
+
+    GameState g; NewRun(&g, 0xD1E00001u); g.driveChoices[0] = 0; SelectDrive(&g, 0);
+    wchar_t path[96];
+    FormatCurrentDirectory(&g, path, 96);
+    if (wcscmp(path, DRIVE_INFO[0].paths[0]) != 0) return Fail("an unvisited floor must show only its own path");
+    if (!ForceDirectoryNode(&g, DIR_NODE_TEMP)) return Fail("the path test must enter a combat");
+    FormatCurrentDirectory(&g, path, 96);
+    if (wcscmp(path, L"C:\\TEMP") != 0) return Fail("the chosen segment must append to the floor path");
+    g.playerMaxHp = 999; g.playerHp = 999;
+    for (int i = 0; i < g.enemyCount; ++i) { g.enemies[i].hp = 1; g.enemies[i].block = 0; }
+    AssignDieToSlot(&g, 0, SLOT_ATTACK); EndTurn(&g);
+    SkipReward(&g);
+    if (!ForceDirectoryNode(&g, DIR_NODE_INFECTED)) return Fail("the path test must enter the second combat");
+    FormatCurrentDirectory(&g, path, 96);
+    if (wcscmp(path, L"C:\\TEMP\\INFECTED") != 0) return Fail("both visited segments must appear in order");
+    // 고정 버퍼 밖으로 넘치지 않는다.
+    wchar_t tiny[6];
+    FormatCurrentDirectory(&g, tiny, 6);
+    if (wcslen(tiny) >= 6) return Fail("path formatting must respect the buffer cap");
     return 0;
 }
 
@@ -684,6 +1044,11 @@ int main() {
     if (CheckPressureGimmicks()) return 1;
     if (CheckQuarantineGimmicks()) return 1;
     if (CheckNoStateLeak()) return 1;
+    if (CheckDirectoryGeneration()) return 1;
+    if (CheckDirectoryRng()) return 1;
+    if (CheckDirectoryProgression()) return 1;
+    if (CheckDirectoryNodes()) return 1;
+    if (CheckDirectoryPath()) return 1;
 
     GameState base; NewRun(&base, 0x12345678u);
     if (DeckBytes(&base) != 63) return Fail("starting deck must be 63 bytes");
@@ -695,7 +1060,7 @@ int main() {
     if (base.modifierA != DRIVE_INFO[base.selectedDrive].modifierA
         || base.modifierB != DRIVE_INFO[base.selectedDrive].modifierB) return Fail("selecting a drive must apply its modifiers");
     if (base.modifierA == base.modifierB) return Fail("modifiers must be unique");
-    if (base.phase != PHASE_COMBAT) return Fail("selecting a drive must start combat");
+    if (base.phase != PHASE_DIRECTORY) return Fail("selecting a drive must open the directory choice");
     if (!base.mobScheduleReady) return Fail("selecting a drive must build the mob schedule");
     Face damaged = {FACE_FIRE, 8, 1, 0};
     if (FaceCost(&damaged) != 24 || FacePower(&damaged) != 0) return Fail("damaged faces retain cost and lose power");
@@ -874,7 +1239,7 @@ int main() {
     if (repair.playerHp != 12 + repairHeal) return Fail("sector repair must restore hp");
     if (repair.sectorsRepaired != 1) return Fail("sector repair must be counted");
     if (repair.facesInstalled != 0) return Fail("sector repair must not install a face");
-    if (repair.phase != PHASE_COMBAT || repair.encounter != 1) return Fail("sector repair must advance the run");
+    if (repair.phase != PHASE_DIRECTORY || repair.encounter != 1) return Fail("sector repair must advance the run");
 
     GameState repairCap; NewRun(&repairCap, 0x5EC70002u); repairCap.driveChoices[0] = 0; SelectDrive(&repairCap, 0);
     repairCap.phase = PHASE_REWARD; repairCap.floor = 2; repairCap.playerHp = repairCap.playerMaxHp - 2;
@@ -905,8 +1270,9 @@ int main() {
     while (DeckBytes(&firstFloorCap) > EffectiveCapacity(&firstFloorCap)) {
         int index = MostExpensiveFace(&firstFloorCap); if (index < 0) return Fail("unable to prune floor 1 test deck"); PruneFace(&firstFloorCap, index / 6, index % 6);
     }
+    if (firstFloorCap.pendingContinuation != CONTINUE_AFTER_REWARD) return Fail("a reward-time prune must resume the reward flow");
     ConfirmPrune(&firstFloorCap);
-    if (firstFloorCap.phase != PHASE_COMBAT || firstFloorCap.floor != 0 || firstFloorCap.encounter != 1) return Fail("floor 1 prune must resume at the next encounter");
+    if (firstFloorCap.phase != PHASE_DIRECTORY || firstFloorCap.floor != 0 || firstFloorCap.encounter != 1) return Fail("floor 1 prune must resume at the next encounter");
 
     GameState tsr; NewRun(&tsr, 0x75720001u); tsr.modifierA = MOD_BAD_SECTOR; tsr.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&tsr, TEST_DRIVE, TEST_SEED, 1);
@@ -924,7 +1290,7 @@ int main() {
     InstallTsr(&tsr, 1);
     if (!IsTsrInstalled(&tsr, lootKind) || tsr.tsrsInstalled != 1) return Fail("installing loot must register the program");
     if (UsedBytes(&tsr) != usedBeforeLoot + TSR_INFO[lootKind].cost) return Fail("resident programs must consume capacity");
-    if (tsr.floor != 1 || tsr.phase != PHASE_COMBAT) return Fail("boss loot must advance to the next floor");
+    if (tsr.floor != 1 || tsr.phase != PHASE_DIRECTORY) return Fail("boss loot must advance to the next floor");
 
     GameState himem; NewRun(&himem, 0x75720002u); himem.modifierA = MOD_BAD_SECTOR; himem.modifierB = MOD_CHECKSUM;
     himem.tsrInstalled[TSR_HIMEM] = 1;
@@ -1007,5 +1373,5 @@ int main() {
         if (result != 0) { printf("FAIL: drive %d seed %d result %d\n", drive, seed, result); return 1; }
         ++runs;
     }
-    printf("PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, %d complete runs\n", runs); return 0;
+    printf("PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, directory routing, %d complete runs\n", runs); return 0;
 }

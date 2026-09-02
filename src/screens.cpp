@@ -85,8 +85,9 @@ static void DrawHeader(HDC dc, int width) {
     if (gGame.phase != PHASE_TITLE && gGame.phase != PHASE_DRIVE_SELECT) {
         wchar_t b[128];
         if (gGame.selectedDrive >= 0) {
-            int floorIndex = gGame.floor > 2 ? 2 : gGame.floor;
-            wsprintfW(b, L"%s  ·  %d층/3  ·  %d구역/3  ·  %d턴", DRIVE_INFO[gGame.selectedDrive].paths[floorIndex], gGame.floor + 1, gGame.encounter + 1, gGame.turn);
+            wchar_t here[80];
+            FormatCurrentDirectory(&gGame, here, 80);
+            wsprintfW(b, L"%s  ·  %d층/3  ·  %d구역/3  ·  %d턴", here, gGame.floor + 1, gGame.encounter + 1, gGame.turn);
             Text(dc, 230, 18, b, C_TEXT, gFontSmall);
             const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
             if (difficulty) {
@@ -513,6 +514,196 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 8, r.bottom - 34, r.right - 8, r.bottom - 10), hover ? L"클릭하여 마운트" : L"클릭 또는 숫자 키", hover ? (COLORREF)drive->color : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"카드마다 서로 다른 난이도가 배정됩니다 · 난이도는 오염(관통) 피해 배율이며, 방어도는 관통을 절반만 막습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// ---------------------------------------------------------------------------
+// 디렉터리 선택 화면
+//
+// 카드 두 장에 노드명·위험도·정확한 수치·비용·보상 tier를 그대로 적는다.
+// 숨기는 것은 아직 판독하지 않은 적 코드뿐이고, 그것도 LOGS가 열어 준다.
+// 여기서는 게임 상태를 절대 바꾸지 않는다 (리페인트로 선택지가 다시 뽑히면 안 된다).
+// ---------------------------------------------------------------------------
+
+RECT DirectoryChoiceRect(int i) { int left = 120 + i * 460; return MakeRect(left, 150, left + 420, 566); }
+
+static void AppendPathSegment(wchar_t* out, const wchar_t* segment) {
+    int length = lstrlenW(out);
+    if (length > 0 && out[length - 1] != L'\\') lstrcatW(out, L"\\");
+    lstrcatW(out, segment);
+}
+
+// 적 코드를 공개해도 되는가. 판독했거나 이번 층 LOGS가 켜져 있으면 공개다.
+static int DirectoryCodeVisible(int kind) {
+    return IsEnemyScanned(&gGame, kind) || DirectoryIntelActive(&gGame);
+}
+
+// 미판독 코드는 폭을 유지한 채 헥스·기호로 갈려 보인다.
+static void DirectoryCodeText(int kind, wchar_t* out, int cap) {
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(kind);
+    if (DirectoryCodeVisible(kind)) { lstrcpynW(out, info->code, cap); return; }
+    CorruptCode(info->code, out, cap, kind * 13 + 7, GetTickCount());
+}
+
+// 노드마다 지금 상태에 맞춘 구체적인 수치 한 줄.
+static void DirectoryDetailText(const GameState* game, int kind, uint8_t payload, wchar_t* out, int cap) {
+    out[0] = 0;
+    int floor = game->floor > 2 ? 2 : game->floor;
+    switch (kind) {
+    case DIR_NODE_TEMP: {
+        int missing = game->playerMaxHp - game->playerHp;
+        int gain = missing < DIR_TEMP_HEAL ? missing : DIR_TEMP_HEAL;
+        wsprintfW(out, L"체력 %d → %d / %d", game->playerHp, game->playerHp + gain, game->playerMaxHp);
+        break;
+    }
+    case DIR_NODE_CACHE: {
+        int now = EffectiveCapacity(game);
+        // 층이 끝나면 보너스가 사라지고 다음 층 한도로 조여든다.
+        int nextFloor = floor < 2 ? floor + 1 : 2;
+        int nextLimit = now - FLOOR_CAPACITY[floor] + FLOOR_CAPACITY[nextFloor];
+        wsprintfW(out, L"한도 %dB → %dB · 층 종료 후 %dB", now, now + DIR_CACHE_BYTES, nextLimit);
+        break;
+    }
+    case DIR_NODE_LOGS:
+        wsprintfW(out, L"%d층 남은 프로세스와 보스 코드 공개", floor + 1);
+        break;
+    case DIR_NODE_INFECTED: {
+        int kindNext = ScheduledMobKind(game);
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(kindNext);
+        if (kindNext >= 0 && DirectoryCodeVisible(kindNext)) {
+            int hp = info->hp + info->hpGrowth * floor;
+            wsprintfW(out, L"적 체력 %d → %d", hp, hp * DIR_INFECTED_HP_PERCENT / 100);
+        } else lstrcpynW(out, L"판독하면 정확한 체력이 표시됩니다", cap);
+        break;
+    }
+    case DIR_NODE_CORRUPTED: {
+        if (payload < 18) {
+            const Face* face = &game->dice[payload / 6].faces[payload % 6];
+            wchar_t value[24]; FormatFace(face, value);
+            wsprintfW(out, L"격리 대상  주사위 %d · %d면 (%s)", payload / 6 + 1, payload % 6 + 1, value);
+        } else lstrcpynW(out, L"격리할 면이 없어 그대로 교전합니다", cap);
+        break;
+    }
+    default: {
+        int kindNext = ScheduledMobKind(game);
+        if (kindNext >= 0 && DirectoryCodeVisible(kindNext)) lstrcpynW(out, L"현행 수치 그대로 교전합니다", cap);
+        else lstrcpynW(out, L"기록에 없는 프로세스입니다", cap);
+        break;
+    }
+    }
+}
+
+static void DrawDirectoryCard(HDC dc, int index) {
+    RECT r = DirectoryChoiceRect(index);
+    const DirectoryChoice* choice = &gGame.directory.choices[index];
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(choice->kind);
+    int hover = Inside(r, gMouse.x, gMouse.y);
+    COLORREF accent = info ? (COLORREF)info->color : C_LINE;
+    Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? accent : C_LINE);
+    if (!info) return;
+
+    wchar_t b[192];
+    wsprintfW(b, L"[%d]", index + 1);
+    Text(dc, r.left + 16, r.top + 12, b, C_DIM, gFontSmall);
+    wsprintfW(b, L"<%s>", info->segment);
+    TextRect(dc, MakeRect(r.left + 16, r.top + 32, r.right - 16, r.top + 76), b, accent, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    COLORREF riskColor = info->risk == DIR_RISK_LOW ? C_GREEN : info->risk == DIR_RISK_MEDIUM ? C_YELLOW : C_RED;
+    wsprintfW(b, L"RISK %s · 위험 %s", DIRECTORY_RISK_NAMES[info->risk], DIRECTORY_RISK_LABELS[info->risk]);
+    Text(dc, r.left + 16, r.top + 82, b, riskColor, gFontSmall);
+    wsprintfW(b, L"분류 %s", DIRECTORY_CATEGORY_NAMES[info->category]);
+    TextRect(dc, MakeRect(r.left + 200, r.top + 82, r.right - 16, r.top + 104), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    Fill(dc, MakeRect(r.left + 14, r.top + 110, r.right - 14, r.top + 111), C_LINE);
+
+    Text(dc, r.left + 16, r.top + 120, L"효과", C_GREEN, gFontSmall);
+    TextRect(dc, MakeRect(r.left + 16, r.top + 142, r.right - 16, r.top + 184), info->effect, C_TEXT, gFontSmall, DT_WORDBREAK);
+    DirectoryDetailText(&gGame, choice->kind, choice->payload, b, 192);
+    TextRect(dc, MakeRect(r.left + 16, r.top + 186, r.right - 16, r.top + 226), b, accent, gFontSmall, DT_WORDBREAK);
+
+    Text(dc, r.left + 16, r.top + 232, L"비용", C_RED, gFontSmall);
+    TextRect(dc, MakeRect(r.left + 16, r.top + 254, r.right - 16, r.top + 296), info->cost, C_DIM, gFontSmall, DT_WORDBREAK);
+    Fill(dc, MakeRect(r.left + 14, r.top + 302, r.right - 14, r.top + 303), C_LINE);
+
+    int next = ScheduledMobKind(&gGame);
+    Text(dc, r.left + 16, r.top + 312, L"TARGET", C_BLUE, gFontSmall);
+    if (next >= 0) {
+        wchar_t code[32]; DirectoryCodeText(next, code, 32);
+        COLORREF codeColor = DirectoryCodeVisible(next) ? (COLORREF)GetEnemyInfoOrUnknown(next)->color : C_DIM;
+        TextRect(dc, MakeRect(r.left + 108, r.top + 312, r.right - 16, r.top + 334), code, codeColor, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        if (!DirectoryCodeVisible(next))
+            TextRect(dc, MakeRect(r.left + 16, r.top + 336, r.right - 16, r.top + 358), L"UNREAD PROCESS · 처치하거나 LOGS로 열립니다", C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    }
+    Text(dc, r.left + 16, r.top + 360, L"REWARD", C_BLUE, gFontSmall);
+    wsprintfW(b, L"%s · 면 후보 %d개", info->rewardTier ? L"강화 TUNED" : L"표준 STANDARD", info->rewardChoices);
+    TextRect(dc, MakeRect(r.left + 108, r.top + 360, r.right - 16, r.top + 382), b,
+        info->rewardTier ? C_YELLOW : C_TEXT, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+
+    TextRect(dc, MakeRect(r.left + 12, r.bottom - 32, r.right - 12, r.bottom - 10),
+        hover ? L"클릭하여 진입" : L"클릭 또는 숫자 키", hover ? accent : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+static void DrawDirectorySelect(HDC dc, int width, int height) {
+    const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
+    wchar_t b[160];
+    TextRect(dc, MakeRect(0, 78, width, 102), L"전투 대기  →  [현재: 하위 디렉터리 선택]  →  일반전  →  보상", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    wsprintfW(b, L"다음 프로세스의 조건을 고르십시오  ·  이번 층 %d / %d 번째 선택", gGame.encounter + 1, DIRECTORY_PER_FLOOR);
+    TextRect(dc, MakeRect(0, 98, width, 126), b, C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
+    if (difficulty) {
+        wsprintfW(b, L"VOLUME %s%s  ·  난이도 %s  ·  %s", drive->letter, drive->label, difficulty->name, difficulty->brief);
+        TextRect(dc, MakeRect(0, 124, width, 146), b, (COLORREF)difficulty->color, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    }
+
+    for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i) DrawDirectoryCard(dc, i);
+
+    wchar_t here[96];
+    FormatCurrentDirectory(&gGame, here, 96);
+    Text(dc, 120, 584, L"CURRENT", C_GREEN, gFontSmall);
+    Text(dc, 120, 606, here, C_TEXT, gFontMedium);
+    Text(dc, 120, 642, L"LOCKED DESTINATION", C_RED, gFontSmall);
+    wchar_t destination[128];
+    lstrcpynW(destination, drive->paths[gGame.floor > 2 ? 2 : gGame.floor], 128);
+    int boss = FloorBossKind(&gGame);
+    if (boss >= 0 && DirectoryCodeVisible(boss)) AppendPathSegment(destination, GetEnemyInfoOrUnknown(boss)->code);
+    else AppendPathSegment(destination, L"<BOSS>");
+    Text(dc, 120, 664, destination, C_DIM, gFontMedium);
+
+    TextRect(dc, MakeRect(0, height - 52, width, height - 28),
+        L"[1] / [2] 또는 디렉터리를 클릭하십시오  ·  선택지는 다시 뽑히지 않습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 디렉터리 진입 연출. 값이 전부 경과 시간의 함수라 리페인트와 겹쳐도 안전하다.
+static void DrawDirectoryEnter(HDC dc, int width, int height) {
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(gDirEnterKind);
+    if (!info) return;
+    int elapsed = (int)(GetTickCount() - gDirEnterStart);
+    if (elapsed < 0) elapsed = 0; if (elapsed > DIR_ENTER_MS) elapsed = DIR_ENTER_MS;
+    Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
+    RECT panel = MakeRect(220, 250, width - 220, height - 250);
+    Panel(dc, panel, C_PANEL, (COLORREF)info->color);
+    Text(dc, panel.left + 24, panel.top + 18, L"디렉터리 진입", C_GREEN, gFontMedium);
+
+    wchar_t here[96];
+    FormatCurrentDirectory(&gGame, here, 96);
+    int length = lstrlenW(here);
+    int typed = elapsed * length / (DIR_ENTER_MS * 3 / 5);
+    if (typed > length) typed = length;
+    wchar_t typedText[104] = L"> ";
+    lstrcpynW(typedText + 2, here, typed + 1);
+    if (typed < length && ((elapsed / 200) & 1)) lstrcatW(typedText, L"_");
+    TextRect(dc, MakeRect(panel.left + 24, panel.top + 52, panel.right - 24, panel.top + 100),
+        typedText, (COLORREF)info->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT band = MakeRect(panel.left + 24, panel.top + 106, panel.right - 24, panel.top + 146);
+    Panel(dc, band, RGB(8, 13, 19), C_LINE);
+    RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
+    DrawSectorStatic(dc, inner, gDirEnterKind + 3, elapsed / NOISE_CHURN_MS, 200 + 700 - elapsed * 700 / DIR_ENTER_MS);
+    DrawScanlines(dc, inner);
+
+    wchar_t b[160];
+    wsprintfW(b, L"%s  ·  %s", info->effect, info->cost);
+    TextRect(dc, MakeRect(panel.left + 24, panel.top + 156, panel.right - 24, panel.bottom - 44), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+    TextRect(dc, MakeRect(panel.left + 24, panel.bottom - 38, panel.right - 24, panel.bottom - 16),
+        L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 // 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
@@ -1326,11 +1517,13 @@ void PaintGame(HWND window) {
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
     if (gTurnTraceActive || gDeathActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_DIRECTORY) DrawDirectorySelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gDirEnterActive) DrawDirectoryEnter(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gCombatClearActive) DrawCombatClear(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDeckOpen) DrawDeck(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);

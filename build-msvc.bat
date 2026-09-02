@@ -32,6 +32,11 @@ if errorlevel 1 (popd & exit /b 1)
 for %%A in (AROGUE.exe) do set "EXESIZE=%%~zA"
 set /a PERCENT=EXESIZE*100/1474560
 echo [4/4] AROGUE.exe: %EXESIZE% bytes ^(%PERCENT%%% of 1,474,560 bytes^)
+if %EXESIZE% GTR 1474560 (
+    echo [ERROR] AROGUE.exe exceeds the 1,474,560 byte floppy limit.
+    popd
+    exit /b 1
+)
 popd
 exit /b 0
 

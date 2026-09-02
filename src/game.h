@@ -6,6 +6,7 @@
 enum GamePhase {
     PHASE_TITLE = 0,
     PHASE_DRIVE_SELECT,
+    PHASE_DIRECTORY,
     PHASE_COMBAT,
     PHASE_REWARD,
     PHASE_PRUNE,
@@ -17,6 +18,40 @@ enum GamePhase {
 #define QUAR_NONE 0
 #define QUAR_COMBAT 255   // 전투가 끝날 때까지 격리 (SAMPLE-13)
 // 1..254 = 남은 턴 수. 보스 턴 종료마다 1씩 줄고 0이 되면 해제 (SANDBOX.BREACH)
+
+// 정리(PHASE_PRUNE)가 끝난 뒤 어디로 돌아갈지. 예전에는 boolean 하나였지만
+// 디렉터리 선택이 생기면서 복귀 지점이 셋으로 늘었다.
+enum PendingContinuation {
+    CONTINUE_NONE = 0,
+    CONTINUE_AFTER_REWARD,   // 보상 처리 흐름을 다시 탄다
+    CONTINUE_DIRECTORY,      // 새 층의 디렉터리 선택으로 간다
+    CONTINUE_COMBAT          // 예정된 전투를 바로 시작한다 (레거시 경로)
+};
+
+// 제시된 디렉터리 카드 하나. payload는 노드마다 뜻이 다르다.
+//   CORRUPTED : 격리할 면 (die * 6 + face)
+//   그 외     : 사용하지 않음
+struct DirectoryChoice {
+    uint8_t kind;        // DirectoryNodeKind
+    uint8_t payload;
+    uint8_t revealed;    // LOGS로 숨은 정보가 공개된 상태인가
+    uint8_t reserved;
+};
+
+// 경로 선택 런타임. 경로 문자열은 저장하지 않고 kind만 남긴다.
+struct DirectoryRuntime {
+    uint32_t rng;                          // 주사위·보상과 분리된 전용 난수열
+    DirectoryChoice choices[DIRECTORY_CHOICE_COUNT];
+    uint8_t history[3][DIRECTORY_PER_FLOOR];  // 층별 방문 노드 (경로 문자열 조합용)
+    uint8_t floorCounts[DIR_NODE_COUNT];   // 이번 층 등장 수 (층당 제한 검사)
+    uint8_t choiceCount;
+    uint8_t previousKind;                  // 직전에 고른 노드 (연속 선택 금지)
+    uint8_t activeKind;                    // 이번 전투에 걸린 노드
+    uint8_t activePayload;
+    uint8_t intelThisFloor;                // LOGS로 이번 층 정보가 열렸는가
+    uint8_t pad[3];
+    int floorCapacityBonus;                // CACHE의 임시 한도 (층 이동 시 해제)
+};
 
 struct Face {
     uint8_t kind;
@@ -133,7 +168,10 @@ struct GameState {
     int facesInstalled;
     int sectorsRepaired;
     int tsrsInstalled;
-    int pruneAdvancePending;
+    int pendingContinuation;      // PendingContinuation — 정리 후 복귀 지점
+    DirectoryRuntime directory;
+    int rewardChoiceCount;        // 이번 면 보상의 후보 수 (TEMP면 2)
+    int rewardTier;               // 0 = 표준, 1 = 강화
     wchar_t logs[5][96];
 };
 
@@ -155,6 +193,22 @@ void PreviewTurn(const GameState* game, TurnPreview* out);
 void InitTitle(GameState* game);
 void NewRun(GameState* game, uint32_t seed);
 void SelectDrive(GameState* game, int choiceIndex);
+// 다음 일반전 앞의 디렉터리 2택을 생성하고 PHASE_DIRECTORY로 들어간다.
+void BeginDirectorySelection(GameState* game);
+// 유효하지 않은 index/phase면 상태를 전혀 바꾸지 않는다 (repaint·Esc 재생성 금지).
+void SelectDirectoryChoice(GameState* game, int index);
+int DirectoryChoiceCount(const GameState* game);
+const DirectoryNodeInfo* DirectoryNodeInfoOrNull(int kind);
+// 노드가 지금 등장할 수 있는가. 플레이어 상태는 유효성만 결정하고 확률은 보정하지 않는다.
+int DirectoryNodeAllowed(const GameState* game, int kind);
+// 이번 층에서 지금까지 지나온 경로. "C:\WINDOWS\TEMP\INFECTED" 형태로 조합한다.
+void FormatCurrentDirectory(const GameState* game, wchar_t* out, int cap);
+// 다음 일반전에 나올 몹 (보스 구역이면 -1).
+int ScheduledMobKind(const GameState* game);
+// 이번 층 보스 종류.
+int FloorBossKind(const GameState* game);
+// 카드의 적 코드를 공개해도 되는가 (판독 완료 또는 LOGS 활성).
+int DirectoryIntelActive(const GameState* game);
 // 실패(유효하지 않은 드라이브) 시 적을 만들지 않고 드라이브 선택으로 복귀하며 0을 반환.
 int StartCombat(GameState* game);
 // 잠긴 슬롯 등으로 배치가 거부되면 0을 반환한다 (효과음 분기용).
