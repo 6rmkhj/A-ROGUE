@@ -315,6 +315,13 @@ static int ReverseFiresOn(int gimmick, int turn) {
 }
 
 // 턴 시작: 이번 턴 잠금·오프라인·역전을 확정하고 다음 턴을 예고한다.
+// 연출 기록. 규칙 판정에는 절대 참여하지 않고 화면이 읽기만 한다.
+static void RecordFx(GameState* game, int fx, int a, int b) {
+    game->boss.firedFx = (uint8_t)fx;
+    game->boss.fxA = (int8_t)a;
+    game->boss.fxB = (int8_t)b;
+}
+
 static void GimmickTurnBegin(GameState* game) {
     BossRuntime* boss = &game->boss;
     ClearGimmickAnnouncements(boss);
@@ -323,33 +330,50 @@ static void GimmickTurnBegin(GameState* game) {
     wchar_t buffer[96];
     switch (boss->gimmick) {
     case GIMMICK_ACCESS_DENIED:
-        if (turn >= 2 && turn % 2 == 0) boss->lockedSlot[AccessDeniedSlot(turn)] = 1;
+        if (turn >= 2 && turn % 2 == 0) {
+            boss->lockedSlot[AccessDeniedSlot(turn)] = 1;
+            RecordFx(game, GIMMICK_ACCESS_DENIED, AccessDeniedSlot(turn), -1);
+        }
         if (turn + 1 >= 2 && (turn + 1) % 2 == 0) boss->nextLockedSlot[AccessDeniedSlot(turn + 1)] = 1;
         break;
     case GIMMICK_KERNEL_PANIC:
         // 직전 턴 최고 출력 슬롯이 잠긴다. 다음 턴 대상은 이번 턴 플레이에 달려
         // 있으므로 예고는 규칙 문구로 대신한다.
-        if (turn >= 2 && boss->bestSlotLastTurn >= 0 && boss->bestSlotLastTurn < SLOT_COUNT)
+        if (turn >= 2 && boss->bestSlotLastTurn >= 0 && boss->bestSlotLastTurn < SLOT_COUNT) {
             boss->lockedSlot[boss->bestSlotLastTurn] = 1;
+            RecordFx(game, GIMMICK_KERNEL_PANIC, boss->bestSlotLastTurn, -1);
+        }
         break;
     case GIMMICK_BLUE_SCREEN:
-        if (turn >= 3 && turn % 3 == 0) { boss->lockedSlot[SLOT_AMPLIFY] = 1; boss->lockedSlot[SLOT_CHAIN] = 1; }
+        if (turn >= 3 && turn % 3 == 0) {
+            boss->lockedSlot[SLOT_AMPLIFY] = 1; boss->lockedSlot[SLOT_CHAIN] = 1;
+            RecordFx(game, GIMMICK_BLUE_SCREEN, SLOT_AMPLIFY, SLOT_CHAIN);
+        }
         if ((turn + 1) >= 3 && (turn + 1) % 3 == 0) { boss->nextLockedSlot[SLOT_AMPLIFY] = 1; boss->nextLockedSlot[SLOT_CHAIN] = 1; }
         break;
     case GIMMICK_AUTOPLAY:
     case GIMMICK_UNSAFE_EJECT:
     case GIMMICK_NO_MEDIA:
-        if (OfflineFiresOn(boss->gimmick, turn)) boss->offlineDie = (int8_t)OfflineTargetDie(boss->gimmick, turn);
+        if (OfflineFiresOn(boss->gimmick, turn)) {
+            boss->offlineDie = (int8_t)OfflineTargetDie(boss->gimmick, turn);
+            RecordFx(game, boss->gimmick, boss->offlineDie, 0);
+        } else if (boss->gimmick == GIMMICK_NO_MEDIA) {
+            // 발동하지 않는 인식 턴. 벌이 아니라 기다리던 턴이므로 연출도 반대다.
+            RecordFx(game, GIMMICK_NO_MEDIA, -1, 1);
+        }
         if (OfflineFiresOn(boss->gimmick, turn + 1)) boss->nextOfflineDie = (int8_t)OfflineTargetDie(boss->gimmick, turn + 1);
         break;
     case GIMMICK_PROXY:
     case GIMMICK_ROUTING_LOOP:
         boss->reversed = (uint8_t)ReverseFiresOn(boss->gimmick, turn);
         boss->nextReversed = (uint8_t)ReverseFiresOn(boss->gimmick, turn + 1);
+        if (boss->reversed) RecordFx(game, boss->gimmick, -1, -1);
         break;
     case GIMMICK_TIMEOUT:
         if (boss->countdown <= 0) boss->reversed = 1;
         boss->nextReversed = (boss->countdown == 1);
+        // 카운트다운은 매턴 보여 준다. 0이 되는 턴만 정지 연출로 커진다.
+        RecordFx(game, GIMMICK_TIMEOUT, boss->countdown, boss->reversed ? 1 : 0);
         break;
     default: break;   // D:\ 복원, R:\ 압력, X:\ 격리는 턴말 훅에서 진행
     }
@@ -444,6 +468,7 @@ static void FireQuarantine(GameState* game, int permanent, int mode) {
         }
     }
     Face* face = &game->dice[boss->nextTargetDie].faces[boss->nextTargetFace];
+    RecordFx(game, boss->gimmick, boss->nextTargetDie, boss->nextTargetFace);
     wchar_t buffer[96];
     if (permanent) {
         face->kind = FACE_EMPTY;
@@ -507,7 +532,10 @@ static void GimmickTurnEnd(GameState* game) {
     case GIMMICK_RESTORE_POINT:
         if (turn % gi->p1 == 0) {
             if (boss->restoresUsed < 2 && boss->windowDamage < gi->p2) {
-                if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"복원 지점") > 0) ++boss->restoresUsed;
+                if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"복원 지점") > 0) {
+                    ++boss->restoresUsed;
+                    RecordFx(game, GIMMICK_RESTORE_POINT, -1, -1);
+                }
             }
             boss->checkpointHp = enemy->hp;
             boss->windowDamage = 0;
@@ -518,13 +546,18 @@ static void GimmickTurnEnd(GameState* game) {
         if (boss->damageThisTurn < gi->p2 && boss->restoredTotal < totalCap) {
             int cap = gi->p3;
             if (cap > totalCap - boss->restoredTotal) cap = totalCap - boss->restoredTotal;
-            boss->restoredTotal += RestoreBossHp(game, enemy, enemy->maxHp, cap, L"테이프 루프");
+            int healed = RestoreBossHp(game, enemy, enemy->maxHp, cap, L"테이프 루프");
+            boss->restoredTotal += healed;
+            if (healed > 0) RecordFx(game, GIMMICK_TAPE_LOOP, -1, -1);
         }
         break;
     }
     case GIMMICK_MASTER_BACKUP:
         if (boss->restoresUsed == 0 && enemy->hp * 100 < enemy->maxHp * gi->p1) {
-            if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"마스터 백업") > 0) boss->restoresUsed = 1;
+            if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"마스터 백업") > 0) {
+                boss->restoresUsed = 1;
+                RecordFx(game, GIMMICK_MASTER_BACKUP, -1, -1);
+            }
         }
         break;
     case GIMMICK_TIMEOUT:
@@ -558,6 +591,7 @@ static void GimmickTurnEnd(GameState* game) {
             if (boss->gauge >= boss->gaugeMax) {
                 boss->gauge = boss->gaugeMax;
                 boss->empowered = 1;
+                RecordFx(game, boss->gimmick, -1, -1);
                 PushLog(game, L"경고: 압력 한계. 다음 턴 강화 공격이 발동합니다!");
             }
         }
@@ -1385,6 +1419,7 @@ void EndTurn(GameState* game) {
         return;
     }
     ClearTurnTrace(game);
+    RecordFx(game, GIMMICK_NONE, -1, -1);
     for (int i = 0; i < 3; ++i) {
         game->lastTurnEnemyStruck[i] = 0;
         game->lastTurnEnemyStrikeDamage[i] = 0;

@@ -64,6 +64,16 @@ int GuideNoiseActive();
 // 계산 재생에서 지금까지 드러난 줄 수 (0 = 아직 없음)
 int TurnTraceShown();
 
+// ---- 기믹 발동 연출 --------------------------------------------------------
+// 계산 재생이 끝나 새 턴 화면이 드러나는 순간 시작된다. 규칙은 이미 game.cpp에서
+// 확정된 뒤이므로 여기서는 보여 주는 방식만 정한다.
+int GimmickFxKind();        // 재생 중인 기믹 (GIMMICK_NONE = 없음)
+int GimmickFxElapsed();     // 시작으로부터 경과 ms
+int GimmickFxA();           // 대상 1 (슬롯·주사위·면 또는 수치)
+int GimmickFxB();           // 대상 2
+int GimmickFxDuration(int kind, int b);   // 그 기믹 연출의 총 길이 ms
+void DrawGimmickFx(HDC dc);
+
 // 적의 타격: 계산 재생이 그 적의 [적 행동] 줄에 닿는 순간 발동한다.
 void SyncEnemyStrikes();
 int EnemyStrikeDrop(int index);     // 플레이어 쪽(아래)으로 파고드는 픽셀

@@ -877,6 +877,289 @@ static void DrawGuide(HDC dc, int width, int height) {
     TextRect(dc, next, L"다음 페이지 ▶", gGuidePage < 1 ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+// ---------------------------------------------------------------------------
+// 기믹 발동 연출 18종. 규칙은 이미 game.cpp에서 확정된 뒤이고, 여기서는 그때
+// 남겨 둔 기록(firedFx / fxA / fxB)을 읽어 보여 주기만 한다. 판정에 관여하지
+// 않으므로 스모크·밸런스의 결정론은 그대로다.
+// ---------------------------------------------------------------------------
+
+int GimmickFxDuration(int kind, int b) {
+    switch (kind) {
+    case GIMMICK_ACCESS_DENIED:  return 520;
+    case GIMMICK_KERNEL_PANIC:   return 680;
+    case GIMMICK_BLUE_SCREEN:    return 1100;
+    case GIMMICK_RESTORE_POINT:  return 780;
+    case GIMMICK_TAPE_LOOP:      return 380;
+    case GIMMICK_MASTER_BACKUP:  return 1150;
+    case GIMMICK_AUTOPLAY:       return 600;
+    case GIMMICK_UNSAFE_EJECT:   return 720;
+    case GIMMICK_NO_MEDIA:       return 520;
+    case GIMMICK_PROXY:          return 700;
+    case GIMMICK_ROUTING_LOOP:   return 820;
+    case GIMMICK_TIMEOUT:        return b ? 900 : 460;
+    case GIMMICK_LEAK:           return 620;
+    case GIMMICK_HEAP_OVERFLOW:  return 700;
+    case GIMMICK_OUT_OF_MEMORY:  return 880;
+    case GIMMICK_SAMPLE13:       return 700;
+    case GIMMICK_SANDBOX_BREACH: return 760;
+    case GIMMICK_ZERO_DAY:       return 1050;
+    default: return 0;
+    }
+}
+
+// 계열 색은 그 보스의 드라이브 색을 그대로 쓴다. 별도 표를 두지 않는다.
+static COLORREF FxColor() {
+    for (int i = 0; i < gGame.enemyCount; ++i)
+        if (IsBossKind(gGame.enemies[i].kind)) return (COLORREF)GetEnemyInfoOrUnknown(gGame.enemies[i].kind)->color;
+    return C_RED;
+}
+
+// 18종이 공유하는 배너. 내려꽂혔다 걷힌다.
+static void DrawFxBanner(HDC dc, int kind, int t, int dur, COLORREF fam) {
+    const int full = 88, inMs = 110, outMs = 200;
+    int h = full;
+    if (t < inMs) h = full * t / inMs;
+    else if (t > dur - outMs) h = full * (dur - t) / outMs;
+    if (h <= 4) return;
+    int top = 300 - h / 2;
+    RECT band = MakeRect(0, top, BASE_WIDTH, top + h);
+    Fill(dc, band, RGB(6, 8, 12));
+    Fill(dc, MakeRect(0, band.top, BASE_WIDTH, band.top + 2), fam);
+    Fill(dc, MakeRect(0, band.bottom - 2, BASE_WIDTH, band.bottom), fam);
+    if (h < 60) return;
+    const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[kind];
+    TextRect(dc, MakeRect(0, band.top + 8, BASE_WIDTH, band.top + 54), gi->stamp, fam, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, band.top + 58, BASE_WIDTH, band.top + 82), gi->name, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 슬롯 네 칸이 자리를 바꾸는 이동. PROXY와 ROUTING.LOOP가 궤적만 달리해 공유한다.
+static void DrawSlotSwap(HDC dc, int p, COLORREF fam, int arc) {
+    for (int s = 0; s < SLOT_COUNT; ++s) Fill(dc, SlotRect(s), C_BG);
+    for (int s = 0; s < SLOT_COUNT; ++s) {
+        RECT from = SlotRect(s), to = SlotRect(SLOT_COUNT - 1 - s);
+        int ease = p < 600 ? p * 1000 / 600 : 1000;
+        int x = from.left + (to.left - from.left) * ease / 1000;
+        int lift = arc ? 46 * (ease < 500 ? ease : 1000 - ease) / 500 : 0;
+        RECT moved = MakeRect(x, from.top - lift, x + (from.right - from.left), from.bottom - lift);
+        Panel(dc, moved, C_PANEL, fam);
+        TextRect(dc, moved, SLOT_SHORT_NAMES[s], fam, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+void DrawGimmickFx(HDC dc) {
+    int kind = GimmickFxKind();
+    if (kind <= GIMMICK_NONE || kind >= GIMMICK_COUNT) return;
+    if (gGame.phase != PHASE_COMBAT) return;
+    int a = GimmickFxA(), b = GimmickFxB();
+    int t = GimmickFxElapsed(), dur = GimmickFxDuration(kind, b);
+    if (dur <= 0) return;
+    if (t > dur) t = dur;
+    int p = t * 1000 / dur;              // 진행도 0~1000
+    COLORREF fam = FxColor();
+    RECT screen = MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT);
+    int takeover = 0;                    // 1 = 화면을 통째로 쓰므로 배너를 생략한다
+
+    switch (kind) {
+
+    // ---- C:\ 잠금 : 닫힌다 -------------------------------------------------
+    case GIMMICK_ACCESS_DENIED: {
+        if (a < 0 || a >= SLOT_COUNT) break;
+        RECT r = SlotRect(a);
+        int height = r.bottom - r.top;
+        int close = p < 420 ? height * p / 420 : height;
+        Fill(dc, MakeRect(r.left, r.top, r.right, r.top + close), RGB(48, 12, 14));
+        Fill(dc, MakeRect(r.left, r.top + close - 3, r.right, r.top + close), C_RED);
+        if (p >= 420) TextRect(dc, r, L"DENIED", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
+    case GIMMICK_KERNEL_PANIC: {
+        if (a < 0 || a >= SLOT_COUNT) break;
+        RECT r = SlotRect(a);
+        int ox = (r.left + r.right) / 2, oy = (r.top + r.bottom) / 2;
+        int reach = 140 + 760 * p / 1000;
+        for (int i = 0; i < 10; ++i) {
+            uint32_t h = Hash3(a, i, 7);
+            int dx = (int)(h % 201u) - 100, dy = (int)((h >> 9) % 201u) - 100;
+            if (dx == 0 && dy == 0) dx = 80;
+            for (int s = 1; s <= 16; ++s) {
+                int len = reach * s / 16;
+                int x = ox + dx * len / 150, y = oy + dy * len / 150;
+                if (x < 0 || x >= BASE_WIDTH || y < 68 || y >= BASE_HEIGHT) break;
+                Fill(dc, MakeRect(x, y, x + 3, y + 2), (s & 1) ? C_RED : RGB(122, 30, 34));
+            }
+        }
+        Fill(dc, MakeRect(r.left, r.top, r.right, r.bottom), RGB(40, 10, 12));
+        TextRect(dc, r, L"PANIC", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
+    case GIMMICK_BLUE_SCREEN: {
+        if (p > 880) break;
+        Fill(dc, screen, RGB(0, 26, 132));
+        TextRect(dc, MakeRect(0, 200, BASE_WIDTH, 250), L"A:\\ROGUE", RGB(0, 26, 132), gFontMedium, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(BASE_WIDTH / 2 - 130, 196, BASE_WIDTH / 2 + 130, 234), L" A:\\ROGUE ", RGB(0, 26, 132), gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Fill(dc, MakeRect(BASE_WIDTH / 2 - 90, 200, BASE_WIDTH / 2 + 90, 230), RGB(198, 208, 245));
+        TextRect(dc, MakeRect(BASE_WIDTH / 2 - 90, 200, BASE_WIDTH / 2 + 90, 230), L"A:\\ROGUE", RGB(0, 26, 132), gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(0, 268, BASE_WIDTH, 320), L"FATAL EXCEPTION 0E", RGB(232, 238, 255), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(160, 340, BASE_WIDTH - 160, 460),
+            L"증폭·연쇄 슬롯이 정지되었습니다.\n이번 턴에는 공격과 방어만 남습니다.",
+            RGB(200, 212, 248), gFontMedium, DT_CENTER | DT_WORDBREAK);
+        if ((t / 380) % 2 == 0)
+            TextRect(dc, MakeRect(0, 500, BASE_WIDTH, 530), L"계속하려면 아무 키나 누르십시오 _", RGB(170, 186, 236), gFontSmall, DT_CENTER | DT_SINGLELINE);
+        takeover = 1;
+        break;
+    }
+
+    // ---- D:\ 복원 : 시간이 역행한다 ---------------------------------------
+    case GIMMICK_RESTORE_POINT: {
+        RECT r = EnemyRect(0);
+        RECT bar = MakeRect(r.left + 12, r.top + 208, r.right - 12, r.top + 220);
+        Fill(dc, MakeRect(bar.left, bar.top, bar.left + (bar.right - bar.left) * p / 1000, bar.bottom),
+             MixColor(fam, RGB(255, 255, 255), 45));
+        RECT art = MakeRect(r.left + 12, r.top + 8, r.right - 12, r.top + 132);
+        int off = (t / 18) % 14;
+        for (int y = art.top + off; y < art.bottom; y += 14) Fill(dc, MakeRect(art.left, y, art.right, y + 2), MixColor(C_BG, fam, 55));
+        break;
+    }
+    case GIMMICK_TAPE_LOOP: {
+        RECT r = EnemyRect(0);
+        int off = 8 - 8 * p / 1000;
+        RECT ghost = MakeRect(r.left + 12 - off, r.top + 8, r.right - 12 - off, r.top + 132);
+        for (int y = ghost.top; y < ghost.bottom; y += 3) Fill(dc, MakeRect(ghost.left, y, ghost.right, y + 1), MixColor(C_BG, fam, 28));
+        break;
+    }
+    case GIMMICK_MASTER_BACKUP: {
+        int bands = 16, h = (BASE_HEIGHT - 68) / bands;
+        int amp = p < 480 ? 46 * p / 480 : 46 * (1000 - p) / 520;
+        if (amp > 0) for (int i = 0; i < bands; ++i) {
+            int y = 68 + i * h;
+            int dx = (int)(Hash3(i, t / 55, 11) % (uint32_t)(amp * 2 + 1)) - amp;
+            if (dx != 0) BitBlt(dc, dx, y, BASE_WIDTH, h, dc, 0, y, SRCCOPY);
+        }
+        break;
+    }
+
+    // ---- E:\ 오프라인 : 연결이 끊긴다 -------------------------------------
+    case GIMMICK_AUTOPLAY: {
+        if (a < 0 || a >= 3) break;
+        RECT r = DieRect(a);
+        DrawSectorStatic(dc, r, a, NoiseFrameStep(), 900);
+        DrawScanlines(dc, r);
+        TextRect(dc, r, L"NO SIGNAL", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
+    case GIMMICK_UNSAFE_EJECT: {
+        if (a < 0 || a >= 3) break;
+        RECT r = DieRect(a);
+        int drop = 58 * p / 1000;
+        Fill(dc, r, C_BG);
+        RECT moved = MakeRect(r.left, r.top + drop, r.right, r.bottom + drop);
+        if (moved.bottom > BASE_HEIGHT) moved.bottom = BASE_HEIGHT;
+        Panel(dc, moved, RGB(26, 12, 12), C_RED);
+        DrawSectorStatic(dc, moved, a, NoiseFrameStep(), 640);
+        TextRect(dc, moved, L"EJECTED", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
+    case GIMMICK_NO_MEDIA: {
+        if (b == 1) {
+            // 인식 턴. 이 기믹에서 유일하게 좋은 소식이므로 연출도 반대다.
+            for (int d = 0; d < 3; ++d) Outline(dc, DieRect(d), MixColor(C_BG, C_GREEN, 100 - p / 12), 3);
+            TextRect(dc, MakeRect(0, 292, BASE_WIDTH, 344), L"MEDIA DETECTED", C_GREEN, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            takeover = 1;
+            break;
+        }
+        if (a < 0 || a >= 3) break;
+        RECT r = DieRect(a);
+        DrawSectorStatic(dc, r, a, NoiseFrameStep(), 820);
+        TextRect(dc, r, L"NO MEDIA", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
+
+    // ---- N:\ 경로 : 순서가 뒤집힌다 ---------------------------------------
+    case GIMMICK_PROXY:
+        DrawSlotSwap(dc, p, fam, 0);
+        break;
+    case GIMMICK_ROUTING_LOOP:
+        DrawSlotSwap(dc, p, fam, 1);
+        for (int i = 0; i < 4; ++i) {
+            int ang = (t / 3 + i * 90) % 360;
+            int x = BASE_WIDTH / 2 + (int)(420.0 * (ang < 180 ? (ang - 90) : (270 - ang)) / 90.0);
+            int y = 300 + (ang < 90 || ang > 270 ? -150 : 150);
+            if (x > 8 && x < BASE_WIDTH - 8) Fill(dc, MakeRect(x - 6, y - 3, x + 6, y + 3), fam);
+        }
+        break;
+    case GIMMICK_TIMEOUT: {
+        wchar_t num[16]; wsprintfW(num, L"%d", a < 0 ? 0 : a);
+        COLORREF col = b ? C_RED : (a <= 1 ? C_YELLOW : fam);
+        int fade = p < 700 ? 1000 : 1000 - (p - 700) * 1000 / 300;
+        if (fade > 300)
+            TextRect(dc, MakeRect(0, 236, BASE_WIDTH, 356), num, MixColor(C_BG, col, fade / 10), gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (b && p > 240 && p < 620) DrawScanlines(dc, screen);   // 정지 프레임
+        if (!b) takeover = 1;   // 평시에는 숫자만 띄우고 배너를 아낀다
+        break;
+    }
+
+    // ---- R:\ 압력 : 차오르다 터진다 ---------------------------------------
+    case GIMMICK_LEAK:
+        DrawEdgeGlow(dc, screen, fam, p < 400 ? 1000 * p / 400 : 1000 * (1000 - p) / 600, 16);
+        break;
+    case GIMMICK_HEAP_OVERFLOW: {
+        DrawEdgeGlow(dc, screen, fam, p < 400 ? 1000 * p / 400 : 1000 * (1000 - p) / 600, 22);
+        RECT slot0 = SlotRect(0);
+        int y = (slot0.top + slot0.bottom) / 2;
+        int x = BASE_WIDTH * p / 1000;
+        Fill(dc, MakeRect(0, y - 2, x, y + 2), C_RED);            // 방어선을 뚫고 지나간다
+        if (x > 12) Fill(dc, MakeRect(x - 12, y - 6, x, y + 6), MixColor(C_RED, RGB(255, 255, 255), 40));
+        break;
+    }
+    case GIMMICK_OUT_OF_MEMORY: {
+        int dark = p < 700 ? 100 * p / 700 : 100 * (1000 - p) / 300;
+        int step = dark <= 4 ? 0 : (dark >= 96 ? 1 : 9 - dark * 8 / 100);
+        if (step > 0) for (int y = 68; y < BASE_HEIGHT; y += step) Fill(dc, MakeRect(0, y, BASE_WIDTH, y + 1), RGB(4, 5, 8));
+        DrawEdgeGlow(dc, screen, fam, dark * 10, 18);
+        break;
+    }
+
+    // ---- X:\ 격리 : 데이터가 잠식된다 -------------------------------------
+    case GIMMICK_SAMPLE13:
+    case GIMMICK_SANDBOX_BREACH: {
+        if (a < 0 || a >= 3) break;
+        RECT r = DieRect(a);
+        int height = r.bottom - r.top - 8;
+        int cover = height * (p < 620 ? p : 620) / 620;
+        RECT area = MakeRect(r.left + 4, r.top + 4, r.right - 4, r.top + 4 + cover);
+        Fill(dc, area, RGB(12, 6, 8));
+        DrawHexBlock(dc, area, fam, a * 31 + kind, GetTickCount(), 6);
+        if (p > 480) {
+            wchar_t tag[40];
+            if (kind == GIMMICK_SANDBOX_BREACH) wsprintfW(tag, L"면 %d 격리 · 2턴", b + 1);
+            else wsprintfW(tag, L"면 %d 격리", b + 1);
+            TextRect(dc, MakeRect(r.left, r.bottom - 26, r.right, r.bottom - 6), tag, fam, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        }
+        break;
+    }
+    case GIMMICK_ZERO_DAY: {
+        if (p < 540) {
+            if (a >= 0 && a < 3) {
+                RECT r = DieRect(a);
+                Fill(dc, MakeRect(r.left + 4, r.top + 4, r.right - 4, r.bottom - 4), RGB(14, 6, 8));
+                DrawHexBlock(dc, MakeRect(r.left + 6, r.top + 8, r.right - 6, r.bottom - 8), C_RED, a, GetTickCount(), 6);
+            }
+        } else if (p < 610) {
+            Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), RGB(255, 255, 255));
+            takeover = 1;
+        } else if (a >= 0 && a < 3) {
+            RECT r = DieRect(a);
+            Panel(dc, r, RGB(10, 10, 12), C_RED);
+            TextRect(dc, r, L"EMPTY 0B", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        break;
+    }
+    default: break;
+    }
+
+    if (!takeover) DrawFxBanner(dc, kind, t, dur, fam);
+}
+
 void PaintGame(HWND window) {
     SyncLastGasp();
     SyncIdleAnimation();
@@ -900,6 +1183,9 @@ void PaintGame(HWND window) {
     else if (gDeckOpen) DrawDeck(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
+
+    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive)
+        DrawGimmickFx(canvas);
 
     // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
     // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.
