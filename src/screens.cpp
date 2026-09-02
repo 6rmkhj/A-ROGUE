@@ -883,27 +883,42 @@ static void DrawGuide(HDC dc, int width, int height) {
 // 않으므로 스모크·밸런스의 결정론은 그대로다.
 // ---------------------------------------------------------------------------
 
+// 총 길이. 뒤쪽 대부분은 배너가 떠 있는 여운이다.
 int GimmickFxDuration(int kind, int b) {
     switch (kind) {
-    case GIMMICK_ACCESS_DENIED:  return 520;
-    case GIMMICK_KERNEL_PANIC:   return 680;
-    case GIMMICK_BLUE_SCREEN:    return 1100;
-    case GIMMICK_RESTORE_POINT:  return 780;
-    case GIMMICK_TAPE_LOOP:      return 380;
-    case GIMMICK_MASTER_BACKUP:  return 1150;
-    case GIMMICK_AUTOPLAY:       return 600;
-    case GIMMICK_UNSAFE_EJECT:   return 720;
-    case GIMMICK_NO_MEDIA:       return 520;
-    case GIMMICK_PROXY:          return 700;
-    case GIMMICK_ROUTING_LOOP:   return 820;
-    case GIMMICK_TIMEOUT:        return b ? 900 : 460;
-    case GIMMICK_LEAK:           return 620;
-    case GIMMICK_HEAP_OVERFLOW:  return 700;
-    case GIMMICK_OUT_OF_MEMORY:  return 880;
-    case GIMMICK_SAMPLE13:       return 700;
-    case GIMMICK_SANDBOX_BREACH: return 760;
-    case GIMMICK_ZERO_DAY:       return 1050;
+    case GIMMICK_ACCESS_DENIED:  return 1250;
+    case GIMMICK_KERNEL_PANIC:   return 1450;
+    case GIMMICK_BLUE_SCREEN:    return 2400;
+    case GIMMICK_RESTORE_POINT:  return 1500;
+    case GIMMICK_TAPE_LOOP:      return 760;    // 매턴 나올 수 있어 가장 짧다
+    case GIMMICK_MASTER_BACKUP:  return 2500;   // 런에 한 번뿐이라 가장 길다
+    case GIMMICK_AUTOPLAY:       return 1250;
+    case GIMMICK_UNSAFE_EJECT:   return 1400;
+    case GIMMICK_NO_MEDIA:       return 950;    // 매턴 발동이라 절제한다
+    case GIMMICK_PROXY:          return 1400;
+    case GIMMICK_ROUTING_LOOP:   return 1550;
+    case GIMMICK_TIMEOUT:        return b ? 1900 : 780;
+    case GIMMICK_LEAK:           return 1350;
+    case GIMMICK_HEAP_OVERFLOW:  return 1450;
+    case GIMMICK_OUT_OF_MEMORY:  return 1900;
+    case GIMMICK_SAMPLE13:       return 1450;
+    case GIMMICK_SANDBOX_BREACH: return 1500;
+    case GIMMICK_ZERO_DAY:       return 2600;   // 되돌릴 수 없는 유일한 기믹
     default: return 0;
+    }
+}
+
+// 동작 자체에 쓰는 시간. 총 길이를 늘려도 셔터가 닫히고 슬롯이 자리를 바꾸는
+// 속도는 그대로여야 한다. 나머지 시간은 배너가 떠 있는 여운으로 남는다.
+static int GimmickFxAction(int kind) {
+    switch (kind) {
+    case GIMMICK_BLUE_SCREEN:    return 1900;
+    case GIMMICK_MASTER_BACKUP:  return 1000;
+    case GIMMICK_ZERO_DAY:       return 1150;
+    case GIMMICK_OUT_OF_MEMORY:  return 1250;
+    case GIMMICK_TAPE_LOOP:      return 340;
+    case GIMMICK_TIMEOUT:        return 460;
+    default: return 580;
     }
 }
 
@@ -1052,7 +1067,10 @@ void DrawGimmickFx(HDC dc) {
     int t = GimmickFxElapsed(), dur = GimmickFxDuration(kind, b);
     if (dur <= 0) return;
     if (t > dur) t = dur;
-    int p = t * 1000 / dur;              // 진행도 0~1000
+    int p = t * 1000 / dur;              // 전체 진행도 0~1000 (여운 포함)
+    int actionMs = GimmickFxAction(kind);
+    if (actionMs > dur) actionMs = dur;
+    int act = t < actionMs ? t * 1000 / actionMs : 1000;   // 동작 진행도, 먼저 끝난다
     COLORREF fam = FxColor();
     RECT screen = MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT);
     int takeover = 0;                    // 1 = 화면을 통째로 쓰므로 배너를 생략한다
@@ -1071,11 +1089,11 @@ void DrawGimmickFx(HDC dc) {
         if (a < 0 || a >= SLOT_COUNT) break;
         RECT r = SlotRect(a);
         int height = r.bottom - r.top;
-        int close = p < 420 ? height * p / 420 : height;
+        int close = act < 420 ? height * act / 420 : height;
         Fill(dc, MakeRect(r.left, r.top, r.right, r.top + close), RGB(48, 12, 14));
         Fill(dc, MakeRect(r.left, r.top + close - 3, r.right, r.top + close), C_RED);
-        if (p >= 420) {
-            int land = t - dur * 420 / 1000;
+        if (act >= 420) {
+            int land = t - actionMs * 420 / 1000;
             if (land < 90) Fill(dc, r, MixColor(RGB(48, 12, 14), RGB(255, 210, 210), 60 - land * 60 / 90));
             TextRect(dc, r, L"DENIED", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             Outline(dc, r, C_RED, 3);
@@ -1087,7 +1105,7 @@ void DrawGimmickFx(HDC dc) {
         if (a < 0 || a >= SLOT_COUNT) break;
         RECT r = SlotRect(a);
         int ox = (r.left + r.right) / 2, oy = (r.top + r.bottom) / 2;
-        int reach = 140 + 760 * p / 1000;
+        int reach = 140 + 760 * act / 1000;
         for (int i = 0; i < 10; ++i) {
             uint32_t h = Hash3(a, i, 7);
             int dx = (int)(h % 201u) - 100, dy = (int)((h >> 9) % 201u) - 100;
@@ -1107,7 +1125,7 @@ void DrawGimmickFx(HDC dc) {
         break;
     }
     case GIMMICK_BLUE_SCREEN: {
-        if (p > 880) break;
+        if (t > dur - 260) break;
         Fill(dc, screen, RGB(0, 26, 132));
         TextRect(dc, MakeRect(0, 200, BASE_WIDTH, 250), L"A:\\ROGUE", RGB(0, 26, 132), gFontMedium, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(BASE_WIDTH / 2 - 130, 196, BASE_WIDTH / 2 + 130, 234), L" A:\\ROGUE ", RGB(0, 26, 132), gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1132,7 +1150,7 @@ void DrawGimmickFx(HDC dc) {
     case GIMMICK_RESTORE_POINT: {
         RECT r = EnemyRect(0);
         RECT bar = MakeRect(r.left + 12, r.top + 208, r.right - 12, r.top + 220);
-        Fill(dc, MakeRect(bar.left, bar.top, bar.left + (bar.right - bar.left) * p / 1000, bar.bottom),
+        Fill(dc, MakeRect(bar.left, bar.top, bar.left + (bar.right - bar.left) * act / 1000, bar.bottom),
              MixColor(fam, RGB(255, 255, 255), 45));
         RECT art = MakeRect(r.left + 12, r.top + 8, r.right - 12, r.top + 132);
         int off = (t / 18) % 14;
@@ -1141,14 +1159,14 @@ void DrawGimmickFx(HDC dc) {
     }
     case GIMMICK_TAPE_LOOP: {
         RECT r = EnemyRect(0);
-        int off = 8 - 8 * p / 1000;
+        int off = 8 - 8 * act / 1000;
         RECT ghost = MakeRect(r.left + 12 - off, r.top + 8, r.right - 12 - off, r.top + 132);
         for (int y = ghost.top; y < ghost.bottom; y += 3) Fill(dc, MakeRect(ghost.left, y, ghost.right, y + 1), MixColor(C_BG, fam, 28));
         break;
     }
     case GIMMICK_MASTER_BACKUP: {
         int bands = 16, h = (BASE_HEIGHT - 68) / bands;
-        int amp = p < 480 ? 46 * p / 480 : 46 * (1000 - p) / 520;
+        int amp = act < 480 ? 46 * act / 480 : 46 * (1000 - act) / 520;
         if (amp > 0) for (int i = 0; i < bands; ++i) {
             int y = 68 + i * h;
             int dx = (int)(Hash3(i, t / 55, 11) % (uint32_t)(amp * 2 + 1)) - amp;
@@ -1169,7 +1187,7 @@ void DrawGimmickFx(HDC dc) {
     case GIMMICK_UNSAFE_EJECT: {
         if (a < 0 || a >= 3) break;
         RECT r = DieRect(a);
-        int drop = 58 * p / 1000;
+        int drop = 58 * act / 1000;
         Fill(dc, r, C_BG);
         RECT moved = MakeRect(r.left, r.top + drop, r.right, r.bottom + drop);
         if (moved.bottom > BASE_HEIGHT) moved.bottom = BASE_HEIGHT;
@@ -1182,7 +1200,7 @@ void DrawGimmickFx(HDC dc) {
     case GIMMICK_NO_MEDIA: {
         if (b == 1) {
             // 인식 턴. 이 기믹에서 유일하게 좋은 소식이므로 연출도 반대다.
-            for (int d = 0; d < 3; ++d) Outline(dc, DieRect(d), MixColor(C_BG, C_GREEN, 100 - p / 12), 3);
+            for (int d = 0; d < 3; ++d) Outline(dc, DieRect(d), MixColor(C_BG, C_GREEN, 100 - act / 12), 3);
             TextRect(dc, MakeRect(0, 292, BASE_WIDTH, 344), L"MEDIA DETECTED", C_GREEN, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             takeover = 1;
             break;
@@ -1196,10 +1214,10 @@ void DrawGimmickFx(HDC dc) {
 
     // ---- N:\ 경로 : 순서가 뒤집힌다 ---------------------------------------
     case GIMMICK_PROXY:
-        DrawSlotSwap(dc, p, fam, 0);
+        if (act < 1000) DrawSlotSwap(dc, act, fam, 0);
         break;
     case GIMMICK_ROUTING_LOOP:
-        DrawSlotSwap(dc, p, fam, 1);
+        if (act < 1000) DrawSlotSwap(dc, act, fam, 1);
         for (int i = 0; i < 4; ++i) {
             int ang = (t / 3 + i * 90) % 360;
             int x = BASE_WIDTH / 2 + (int)(420.0 * (ang < 180 ? (ang - 90) : (270 - ang)) / 90.0);
@@ -1226,7 +1244,7 @@ void DrawGimmickFx(HDC dc) {
         DrawEdgeGlow(dc, screen, fam, p < 400 ? 1000 * p / 400 : 1000 * (1000 - p) / 600, 22);
         RECT slot0 = SlotRect(0);
         int y = (slot0.top + slot0.bottom) / 2;
-        int x = BASE_WIDTH * p / 1000;
+        int x = BASE_WIDTH * act / 1000;
         Fill(dc, MakeRect(0, y - 2, x, y + 2), C_RED);            // 방어선을 뚫고 지나간다
         if (x > 12) Fill(dc, MakeRect(x - 12, y - 6, x, y + 6), MixColor(C_RED, RGB(255, 255, 255), 40));
         DrawFxShards(dc, x, y, t, 300, 14, kind * 3, C_RED);
@@ -1246,11 +1264,11 @@ void DrawGimmickFx(HDC dc) {
         if (a < 0 || a >= 3) break;
         RECT r = DieRect(a);
         int height = r.bottom - r.top - 8;
-        int cover = height * (p < 620 ? p : 620) / 620;
+        int cover = height * (act < 620 ? act : 620) / 620;
         RECT area = MakeRect(r.left + 4, r.top + 4, r.right - 4, r.top + 4 + cover);
         Fill(dc, area, RGB(12, 6, 8));
         DrawHexBlock(dc, area, fam, a * 31 + kind, GetTickCount(), 6);
-        if (p > 480) {
+        if (act > 480) {
             wchar_t tag[40];
             if (kind == GIMMICK_SANDBOX_BREACH) wsprintfW(tag, L"면 %d 격리 · 2턴", b + 1);
             else wsprintfW(tag, L"면 %d 격리", b + 1);
@@ -1260,15 +1278,15 @@ void DrawGimmickFx(HDC dc) {
         break;
     }
     case GIMMICK_ZERO_DAY: {
-        if (p < 540) {
+        if (act < 540) {
             if (a >= 0 && a < 3) {
                 RECT r = DieRect(a);
                 Fill(dc, MakeRect(r.left + 4, r.top + 4, r.right - 4, r.bottom - 4), RGB(14, 6, 8));
                 DrawHexBlock(dc, MakeRect(r.left + 6, r.top + 8, r.right - 6, r.bottom - 8), C_RED, a, GetTickCount(), 6);
             }
-        } else if (p < 660) {
+        } else if (act < 660) {
             // 세 번 튀는 화이트아웃. 되돌릴 수 없는 유일한 기믹이라 가장 세다.
-            int burst = (t - dur * 540 / 1000);
+            int burst = (t - actionMs * 540 / 1000);
             Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), (burst / 26) % 2 == 0 ? RGB(255, 255, 255) : RGB(255, 214, 214));
             takeover = 1;
         } else if (a >= 0 && a < 3) {
@@ -1276,7 +1294,7 @@ void DrawGimmickFx(HDC dc) {
             Panel(dc, r, RGB(10, 10, 12), C_RED);
             Outline(dc, r, C_RED, 3);
             TextRect(dc, r, L"EMPTY 0B", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            int after = t - dur * 660 / 1000;
+            int after = t - actionMs * 660 / 1000;
             DrawFxShards(dc, (r.left + r.right) / 2, (r.top + r.bottom) / 2, after, 420, 34, 77, C_RED);
             DrawFxWave(dc, (r.top + r.bottom) / 2, after, 380, C_RED);
         }
