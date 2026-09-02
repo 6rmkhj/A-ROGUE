@@ -50,6 +50,7 @@ extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 
 extern int gReadActive, gRolled;
 // 전투 종료·턴 계산·볼륨 진입 연출
 extern int gCombatClearActive, gClearedFloor, gClearedEncounter;
+extern DWORD gCombatClearStart;
 extern int gTurnTraceActive;
 extern DWORD gTurnTraceStart;
 extern int gDescentActive, gDescentToFloor;

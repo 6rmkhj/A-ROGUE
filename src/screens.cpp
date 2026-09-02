@@ -1012,22 +1012,49 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
     int elapsed = (int)(GetTickCount() - gDirEnterStart);
     if (elapsed < 0) elapsed = 0; if (elapsed > DIR_ENTER_MS) elapsed = DIR_ENTER_MS;
     Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
-    RECT panel = MakeRect(220, 250, width - 220, height - 250);
+    RECT panel = MakeRect(200, 206, width - 200, height - 206);
     Panel(dc, panel, C_PANEL, (COLORREF)info->color);
-    Text(dc, panel.left + 24, panel.top + 18, L"디렉터리 진입", C_GREEN, gFontMedium);
+    Text(dc, panel.left + 24, panel.top + 16, L"디렉터리 진입", C_GREEN, gFontMedium);
+
+    // 어느 갈래를 골랐는지 먼저 보여 준다. 고르지 않은 쪽은 어두워지고,
+    // 작은 패킷이 고른 경로로 건너간 뒤에야 경로가 타이핑되기 시작한다.
+    #define DIR_BRANCH_MS 320
+    wchar_t base[96];
+    FormatCurrentDirectory(&gGame, base, 96);
+    Text(dc, panel.left + 24, panel.top + 48, base, C_DIM, gFontSmall);
+    int count = gGame.directory.choiceCount;
+    if (count > DIRECTORY_CHOICE_COUNT) count = DIRECTORY_CHOICE_COUNT;
+    int rowTop = panel.top + 72;
+    for (int i = 0; i < count; ++i) {
+        int kind = gGame.directory.choices[i].kind;
+        const DirectoryNodeInfo* branch = DirectoryNodeInfoOrNull(kind);
+        if (!branch) continue;
+        int chosen = kind == gDirEnterKind;
+        RECT row = MakeRect(panel.left + 44, rowTop + i * 30, panel.left + 300, rowTop + i * 30 + 26);
+        COLORREF tone = chosen ? (COLORREF)branch->color : RGB(52, 62, 70);
+        Text(dc, panel.left + 24, row.top + 4, i + 1 == count ? L"└" : L"├", tone, gFontSmall);
+        TextRect(dc, row, branch->name, tone, gFontSmall, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (!chosen) continue;
+        Outline(dc, MakeRect(row.left - 6, row.top - 2, row.right, row.bottom + 2), tone, 1);
+        // 패킷이 고른 갈래로 건너간다
+        int travel = elapsed < DIR_BRANCH_MS ? elapsed * 1000 / DIR_BRANCH_MS : 1000;
+        int x = row.right + 20 + (panel.right - 60 - row.right - 20) * travel / 1000;
+        Fill(dc, MakeRect(x - 6, (row.top + row.bottom) / 2 - 3, x + 6, (row.top + row.bottom) / 2 + 3), tone);
+    }
 
     wchar_t here[96];
-    FormatCurrentDirectory(&gGame, here, 96);
+    lstrcpynW(here, base, 96);
     int length = lstrlenW(here);
-    int typed = elapsed * length / (DIR_ENTER_MS * 3 / 5);
+    int typing = elapsed - DIR_BRANCH_MS;
+    int typed = typing <= 0 ? 0 : typing * length / (DIR_ENTER_MS * 2 / 5);
     if (typed > length) typed = length;
     wchar_t typedText[104] = L"> ";
     lstrcpynW(typedText + 2, here, typed + 1);
     if (typed < length && ((elapsed / 200) & 1)) lstrcatW(typedText, L"_");
-    TextRect(dc, MakeRect(panel.left + 24, panel.top + 52, panel.right - 24, panel.top + 100),
+    TextRect(dc, MakeRect(panel.left + 24, panel.top + 142, panel.right - 24, panel.top + 190),
         typedText, (COLORREF)info->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    RECT band = MakeRect(panel.left + 24, panel.top + 106, panel.right - 24, panel.top + 146);
+    RECT band = MakeRect(panel.left + 24, panel.top + 196, panel.right - 24, panel.top + 236);
     Panel(dc, band, RGB(8, 13, 19), C_LINE);
     RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
     DrawSectorStatic(dc, inner, gDirEnterKind + 3, elapsed / NOISE_CHURN_MS, 200 + 700 - elapsed * 700 / DIR_ENTER_MS);
@@ -1035,7 +1062,7 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
 
     wchar_t b[160];
     wsprintfW(b, L"%s  ·  %s", info->effect, info->cost);
-    TextRect(dc, MakeRect(panel.left + 24, panel.top + 156, panel.right - 24, panel.bottom - 44), b, C_TEXT, gFontSmall, DT_WORDBREAK);
+    TextRect(dc, MakeRect(panel.left + 24, panel.top + 246, panel.right - 24, panel.bottom - 44), b, C_TEXT, gFontSmall, DT_WORDBREAK);
     TextRect(dc, MakeRect(panel.left + 24, panel.bottom - 38, panel.right - 24, panel.bottom - 16),
         L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
@@ -1076,6 +1103,21 @@ static void DrawDescent(HDC dc, int width, int height) {
     DrawSectorHex(dc, inner, gGame.selectedDrive + 5, elapsed / NOISE_CHURN_MS, 300 + noiseLevel);
     DrawScanlines(dc, inner);
 
+    // 디스크 트랙과 탐색 헤드. 세 구간으로 나뉘어 오디오의 seek 신호와 같은
+    // 시점에 자리를 옮기므로, 소리가 날 때마다 헤드가 다음 트랙에 안착한다.
+    RECT track = MakeRect(panel.left + 26, panel.top + 276, panel.right - 26, panel.top + 284);
+    Fill(dc, track, RGB(8, 12, 17));
+    for (int x = track.left; x < track.right; x += 9)
+        Fill(dc, MakeRect(x, track.top, x + 1, track.bottom), RGB(30, 42, 52));
+    int seekPhase = elapsed * 3 / DESCENT_MS;
+    if (seekPhase > 2) seekPhase = 2;
+    int within = elapsed * 3 - seekPhase * DESCENT_MS;
+    int trackSpan = track.right - track.left;
+    int from = trackSpan * seekPhase / 3, to = trackSpan * (seekPhase + 1) / 3;
+    int headX = track.left + from + (to - from) * within / DESCENT_MS;
+    Fill(dc, MakeRect(track.left, track.top + 3, headX, track.top + 5), MixColor(C_BG, (COLORREF)drive->color, 62));
+    Fill(dc, MakeRect(headX - 2, track.top - 6, headX + 2, track.bottom + 6), (COLORREF)drive->color);
+
     RECT barRect = MakeRect(panel.left + 26, panel.top + 288, panel.right - 26, panel.top + 306);
     Bar(dc, barRect, elapsed, DESCENT_MS, (COLORREF)drive->color);
     wsprintfW(b, L"%d%%", elapsed * 100 / DESCENT_MS);
@@ -1097,7 +1139,30 @@ static void DrawDescent(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// 전투 종료는 곧장 결과 패널로 넘어가지 않는다. 마지막 전투판과 적의 붕괴를
+// 먼저 보여 주고, 종료 도장을 찍고, 전장이 어두워진 뒤에야 결과가 올라온다.
+// 화면 선택은 PaintGame이 맡는다 (재생 중에는 보상 화면 대신 전투판을 그린다).
 static void DrawCombatClear(HDC dc, int width, int height) {
+    int elapsed = (int)(GetTickCount() - gCombatClearStart);
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > COMBAT_CLEAR_MS) elapsed = COMBAT_CLEAR_MS;
+    if (elapsed < 250) return;                     // 0~250ms: 전투판을 그대로 둔다
+    if (elapsed < 400) {                           // 250~400ms: 종료 도장
+        int fallen = 0;
+        for (int i = 0; i < gGame.enemyCount; ++i) if (!gGame.enemies[i].alive) fallen = i;
+        RECT card = EnemyRect(fallen);
+        RECT stamp = MakeRect(card.left - 14, card.top + 148, card.right + 14, card.top + 192);
+        Fill(dc, stamp, RGB(10, 10, 12));
+        Outline(dc, stamp, C_RED, 2);
+        TextRect(dc, stamp, L"PROCESS TERMINATED", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    // 400~650ms: 전장이 가로줄부터 잠겨 든다
+    int dim = elapsed < 650 ? (elapsed - 400) * 100 / 250 : 100;
+    int step = dim >= 98 ? 1 : dim <= 4 ? 0 : 9 - dim * 8 / 100;
+    if (step > 0) for (int y = 68; y < height; y += step) Fill(dc, MakeRect(0, y, width, y + 1), RGB(6, 9, 13));
+    if (elapsed < 650) return;
+
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(190, 184, width - 190, height - 176); Panel(dc, panel, C_PANEL, C_GREEN);
     wchar_t cleared[96]; wsprintfW(cleared, L"%d층 · %d구역  —  적 삭제 완료", gClearedFloor + 1, gClearedEncounter + 1);
@@ -2005,7 +2070,7 @@ void PaintGame(HWND window) {
     HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, BASE_WIDTH, BASE_HEIGHT); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
-    if (gTurnTraceActive || gDeathActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    if (gTurnTraceActive || gDeathActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_DIRECTORY) DrawDirectorySelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);

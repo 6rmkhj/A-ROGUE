@@ -38,7 +38,7 @@ int gReadActive, gReadLanded, gRolled;
 static int gRollFloor = -1, gRollEncounter = -1, gRollTurn = -1;
 
 int gCombatClearActive;
-static DWORD gCombatClearStart;
+DWORD gCombatClearStart;
 int gClearedFloor, gClearedEncounter;
 int gTurnTraceActive, gTurnTracePendingClear;
 static int gTurnTracePendingDeath;
