@@ -914,22 +914,120 @@ static COLORREF FxColor() {
     return C_RED;
 }
 
+// 충격 프레임. 시작 직후 화면을 계열 색으로 때리고 가로줄 밀도를 낮추며 흩어진다.
+// 알파 없이 줄 간격만으로 밝기를 내므로 GDI만으로 충분히 빠르다.
+static void DrawFxImpact(HDC dc, const RECT& area, int t, int life, COLORREF fam) {
+    if (t < 0 || t >= life || life <= 0) return;
+    int power = 1000 - t * 1000 / life;
+    int step = power >= 860 ? 1 : power >= 640 ? 2 : power >= 420 ? 3 : power >= 220 ? 5 : 9;
+    COLORREF hot = MixColor(fam, RGB(255, 255, 255), power / 14);
+    for (int y = area.top; y < area.bottom; y += step) Fill(dc, MakeRect(area.left, y, area.right, y + 1), hot);
+}
+
+// 화면을 가로 띠로 잘라 좌우로 어긋나게 복사한다. 이미 그려진 프레임을 비트는 것이라
+// 무엇 위에 얹든 "신호가 흔들린다"로 읽힌다.
+static void DrawFxTear(HDC dc, const RECT& area, int t, int amp, int seed) {
+    if (amp <= 0) return;
+    const int bands = 13;
+    int h = (area.bottom - area.top) / bands;
+    if (h <= 0) return;
+    for (int i = 0; i < bands; ++i) {
+        int y = area.top + i * h;
+        int dx = (int)(Hash3(seed, i, t / 45) % (uint32_t)(amp * 2 + 1)) - amp;
+        if (dx != 0) BitBlt(dc, dx, y, BASE_WIDTH, h, dc, 0, y, SRCCOPY);
+    }
+}
+
+// 중심선에서 위아래로 퍼지는 충격파.
+static void DrawFxWave(HDC dc, int cy, int t, int life, COLORREF fam) {
+    if (t < 0 || t >= life || life <= 0) return;
+    int p = t * 1000 / life;
+    int reach = (BASE_HEIGHT / 2 + 60) * p / 1000;
+    int fade = 100 - p / 10;
+    if (fade <= 2) return;
+    for (int i = 0; i < 3; ++i) {
+        int off = reach - i * 7;
+        if (off <= 0) continue;
+        COLORREF c = MixColor(C_BG, fam, fade - i * 22 > 0 ? fade - i * 22 : 0);
+        int top = cy - off, bot = cy + off;
+        if (top >= 68) Fill(dc, MakeRect(0, top, BASE_WIDTH, top + 2), c);
+        if (bot < BASE_HEIGHT) Fill(dc, MakeRect(0, bot - 2, BASE_WIDTH, bot), c);
+    }
+}
+
+// 중심에서 튀어 나가며 꺼지는 파편. 씨앗이 같으면 궤적도 같다.
+static void DrawFxShards(HDC dc, int cx, int cy, int t, int life, int count, int seed, COLORREF fam) {
+    if (t < 0 || t >= life || life <= 0) return;
+    int p = t * 1000 / life;
+    int fade = 100 - p / 10;
+    if (fade <= 2) return;
+    COLORREF c = MixColor(C_BG, fam, fade);
+    COLORREF hot = MixColor(c, RGB(255, 255, 255), 50);
+    for (int i = 0; i < count; ++i) {
+        uint32_t h = Hash3(seed, i, 31);
+        int dx = (int)(h % 401u) - 200, dy = (int)((h >> 10) % 401u) - 200;
+        int speed = 80 + (int)((h >> 21) % 110u);
+        int x = cx + dx * p * speed / 200000;
+        int y = cy + dy * p * speed / 200000 + p * p / 9000;   // 살짝 아래로 처진다
+        if (x < 0 || x >= BASE_WIDTH || y < 68 || y >= BASE_HEIGHT) continue;
+        int w = 3 + (int)((h >> 5) % 6u), hh = 2 + (int)((h >> 8) % 3u);
+        Fill(dc, MakeRect(x, y, x + w, y + hh), (i & 3) == 0 ? hot : c);
+    }
+}
+
 // 18종이 공유하는 배너. 내려꽂혔다 걷힌다.
 static void DrawFxBanner(HDC dc, int kind, int t, int dur, COLORREF fam) {
-    const int full = 88, inMs = 110, outMs = 200;
-    int h = full;
-    if (t < inMs) h = full * t / inMs;
-    else if (t > dur - outMs) h = full * (dur - t) / outMs;
+    const int full = 96, inMs = 170, outMs = 220;
+    int h;
+    if (t < inMs) {
+        // 오버슈트: 목표 높이를 지나쳤다가 되돌아온다. 선형보다 훨씬 세게 꽂힌다.
+        int e = t * 1000 / inMs;
+        int over = e < 680 ? e * 1320 / 680 : 1320 - (e - 680) * 320 / 320;
+        h = full * over / 1000;
+    } else if (t > dur - outMs) h = full * (dur - t) / outMs;
+    else h = full;
     if (h <= 4) return;
     int top = 300 - h / 2;
     RECT band = MakeRect(0, top, BASE_WIDTH, top + h);
-    Fill(dc, band, RGB(6, 8, 12));
-    Fill(dc, MakeRect(0, band.top, BASE_WIDTH, band.top + 2), fam);
-    Fill(dc, MakeRect(0, band.bottom - 2, BASE_WIDTH, band.bottom), fam);
-    if (h < 60) return;
+
+    Fill(dc, band, RGB(5, 7, 11));
+    // 안쪽으로 스며드는 계열색 글로우
+    for (int i = 0; i < 7; ++i) {
+        COLORREF g = MixColor(RGB(5, 7, 11), fam, 46 - i * 6);
+        Fill(dc, MakeRect(0, band.top + 3 + i, BASE_WIDTH, band.top + 4 + i), g);
+        Fill(dc, MakeRect(0, band.bottom - 4 - i, BASE_WIDTH, band.bottom - 3 - i), g);
+    }
+    Fill(dc, MakeRect(0, band.top, BASE_WIDTH, band.top + 3), fam);
+    Fill(dc, MakeRect(0, band.bottom - 3, BASE_WIDTH, band.bottom), fam);
+    for (int y = band.top + 5; y < band.bottom - 5; y += 3) Fill(dc, MakeRect(0, y, BASE_WIDTH, y + 1), RGB(9, 12, 17));
+
+    if (h < 70) return;
     const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[kind];
-    TextRect(dc, MakeRect(0, band.top + 8, BASE_WIDTH, band.top + 54), gi->stamp, fam, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(0, band.top + 58, BASE_WIDTH, band.top + 82), gi->name, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    RECT line = MakeRect(0, band.top + 10, BASE_WIDTH, band.top + 60);
+
+    // 스탬프가 노이즈에서 왼쪽부터 풀려나며 자리를 잡는다.
+    wchar_t shown[48];
+    const int settle = 280;
+    if (t < settle) {
+        wchar_t scrambled[48];
+        CorruptCode(gi->stamp, scrambled, 48, kind * 13 + 7, GetTickCount());
+        int keep = lstrlenW(gi->stamp) * t / settle;
+        int n = 0;
+        for (; gi->stamp[n] && n < 47; ++n) shown[n] = n < keep ? gi->stamp[n] : scrambled[n];
+        shown[n] = 0;
+    } else lstrcpyW(shown, gi->stamp);
+
+    // 색 분리 잔상 — 신호가 아직 정렬되지 않은 느낌
+    int split = t < settle + 140 ? 7 - 7 * t / (settle + 140) : 0;
+    if (split > 0) {
+        TextRect(dc, MakeRect(-split, line.top, BASE_WIDTH - split, line.bottom), shown,
+            MixColor(RGB(5, 7, 11), C_RED, 60), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(split, line.top, BASE_WIDTH + split, line.bottom), shown,
+            MixColor(RGB(5, 7, 11), C_BLUE, 60), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    TextRect(dc, line, shown, fam, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, band.top + 62, BASE_WIDTH, band.top + 90), gi->name,
+        MixColor(RGB(5, 7, 11), fam, 58), gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 // 슬롯 네 칸이 자리를 바꾸는 이동. PROXY와 ROUTING.LOOP가 궤적만 달리해 공유한다.
@@ -958,6 +1056,13 @@ void DrawGimmickFx(HDC dc) {
     COLORREF fam = FxColor();
     RECT screen = MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT);
     int takeover = 0;                    // 1 = 화면을 통째로 쓰므로 배너를 생략한다
+    // 평시 카운트다운만 조용히 지나간다. 나머지 열일곱은 전부 때린다.
+    int punchy = !(kind == GIMMICK_TIMEOUT && !b);
+
+    if (punchy) {
+        DrawFxTear(dc, screen, t, t < 140 ? 26 - 26 * t / 140 : 0, kind);
+        DrawFxImpact(dc, screen, t, 200, fam);
+    }
 
     switch (kind) {
 
@@ -969,7 +1074,13 @@ void DrawGimmickFx(HDC dc) {
         int close = p < 420 ? height * p / 420 : height;
         Fill(dc, MakeRect(r.left, r.top, r.right, r.top + close), RGB(48, 12, 14));
         Fill(dc, MakeRect(r.left, r.top + close - 3, r.right, r.top + close), C_RED);
-        if (p >= 420) TextRect(dc, r, L"DENIED", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (p >= 420) {
+            int land = t - dur * 420 / 1000;
+            if (land < 90) Fill(dc, r, MixColor(RGB(48, 12, 14), RGB(255, 210, 210), 60 - land * 60 / 90));
+            TextRect(dc, r, L"DENIED", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            Outline(dc, r, C_RED, 3);
+            DrawFxShards(dc, (r.left + r.right) / 2, r.top + height, land, 320, 18, a * 7 + 3, C_RED);
+        }
         break;
     }
     case GIMMICK_KERNEL_PANIC: {
@@ -989,7 +1100,10 @@ void DrawGimmickFx(HDC dc) {
             }
         }
         Fill(dc, MakeRect(r.left, r.top, r.right, r.bottom), RGB(40, 10, 12));
+        Outline(dc, r, C_RED, 3);
         TextRect(dc, r, L"PANIC", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawFxShards(dc, ox, oy, t, 460, 30, a * 11 + 5, C_RED);
+        DrawFxWave(dc, oy, t, 360, C_RED);
         break;
     }
     case GIMMICK_BLUE_SCREEN: {
@@ -1005,6 +1119,11 @@ void DrawGimmickFx(HDC dc) {
             RGB(200, 212, 248), gFontMedium, DT_CENTER | DT_WORDBREAK);
         if ((t / 380) % 2 == 0)
             TextRect(dc, MakeRect(0, 500, BASE_WIDTH, 530), L"계속하려면 아무 키나 누르십시오 _", RGB(170, 186, 236), gFontSmall, DT_CENTER | DT_SINGLELINE);
+        // 화면을 훑고 내려가는 주사선과 초반 깜빡임
+        int sweep = 68 + (BASE_HEIGHT - 68) * (t % 520) / 520;
+        Fill(dc, MakeRect(0, sweep, BASE_WIDTH, sweep + 3), RGB(120, 150, 235));
+        Fill(dc, MakeRect(0, sweep + 3, BASE_WIDTH, sweep + 10), RGB(40, 70, 175));
+        if (t < 180 && (t / 45) % 2 == 0) Fill(dc, screen, RGB(210, 222, 255));
         takeover = 1;
         break;
     }
@@ -1057,6 +1176,7 @@ void DrawGimmickFx(HDC dc) {
         Panel(dc, moved, RGB(26, 12, 12), C_RED);
         DrawSectorStatic(dc, moved, a, NoiseFrameStep(), 640);
         TextRect(dc, moved, L"EJECTED", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawFxShards(dc, (r.left + r.right) / 2, r.top + 20, t, 420, 20, a * 5 + 9, fam);
         break;
     }
     case GIMMICK_NO_MEDIA: {
@@ -1109,6 +1229,7 @@ void DrawGimmickFx(HDC dc) {
         int x = BASE_WIDTH * p / 1000;
         Fill(dc, MakeRect(0, y - 2, x, y + 2), C_RED);            // 방어선을 뚫고 지나간다
         if (x > 12) Fill(dc, MakeRect(x - 12, y - 6, x, y + 6), MixColor(C_RED, RGB(255, 255, 255), 40));
+        DrawFxShards(dc, x, y, t, 300, 14, kind * 3, C_RED);
         break;
     }
     case GIMMICK_OUT_OF_MEMORY: {
@@ -1135,6 +1256,7 @@ void DrawGimmickFx(HDC dc) {
             else wsprintfW(tag, L"면 %d 격리", b + 1);
             TextRect(dc, MakeRect(r.left, r.bottom - 26, r.right, r.bottom - 6), tag, fam, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
+        DrawFxShards(dc, (r.left + r.right) / 2, r.top + cover, t, 400, 18, a * 13 + kind, fam);
         break;
     }
     case GIMMICK_ZERO_DAY: {
@@ -1144,19 +1266,31 @@ void DrawGimmickFx(HDC dc) {
                 Fill(dc, MakeRect(r.left + 4, r.top + 4, r.right - 4, r.bottom - 4), RGB(14, 6, 8));
                 DrawHexBlock(dc, MakeRect(r.left + 6, r.top + 8, r.right - 6, r.bottom - 8), C_RED, a, GetTickCount(), 6);
             }
-        } else if (p < 610) {
-            Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), RGB(255, 255, 255));
+        } else if (p < 660) {
+            // 세 번 튀는 화이트아웃. 되돌릴 수 없는 유일한 기믹이라 가장 세다.
+            int burst = (t - dur * 540 / 1000);
+            Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), (burst / 26) % 2 == 0 ? RGB(255, 255, 255) : RGB(255, 214, 214));
             takeover = 1;
         } else if (a >= 0 && a < 3) {
             RECT r = DieRect(a);
             Panel(dc, r, RGB(10, 10, 12), C_RED);
+            Outline(dc, r, C_RED, 3);
             TextRect(dc, r, L"EMPTY 0B", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            int after = t - dur * 660 / 1000;
+            DrawFxShards(dc, (r.left + r.right) / 2, (r.top + r.bottom) / 2, after, 420, 34, 77, C_RED);
+            DrawFxWave(dc, (r.top + r.bottom) / 2, after, 380, C_RED);
         }
         break;
     }
     default: break;
     }
 
+    if (punchy) {
+        DrawFxWave(dc, 300, t, 420, fam);
+        DrawFxShards(dc, BASE_WIDTH / 2, 300, t, 520, 26, kind * 17, fam);
+        int glow = t < 180 ? 1000 * t / 180 : 1000 - (t - 180) * 1000 / (dur - 180 > 60 ? dur - 180 : 60);
+        if (glow > 0) DrawEdgeGlow(dc, screen, fam, glow, 14);
+    }
     if (!takeover) DrawFxBanner(dc, kind, t, dur, fam);
 }
 
