@@ -116,6 +116,55 @@ struct BossRuntime {
 #define TURN_TRACE_CAP 12
 #define TURN_TRACE_SHOWN 8
 
+// ---------------------------------------------------------------------------
+// 전투 시각 이벤트. 계산 문자열을 되짚는 대신, 규칙이 이미 확정한 사건을 그대로
+// 남긴다. 화면은 이 기록을 읽기만 하고 규칙·난수에는 전혀 관여하지 않으므로
+// 스모크·밸런스의 결정론은 변하지 않는다 (기믹 발동 기록과 같은 규약).
+// ---------------------------------------------------------------------------
+enum CombatFxType {
+    CFX_NONE = 0,
+    CFX_AMPLIFY,        // 증폭 슬롯이 보너스를 만들었다 (소실이면 CFXF_WASTED)
+    CFX_ATTACK_LAUNCH,  // 공격 슬롯이 신호를 쏘았다
+    CFX_ENEMY_HIT,      // 그 신호가 적에게 닿았다
+    CFX_DEFEND,         // 방어도를 얻었다
+    CFX_CHAIN,          // 연쇄가 공격이나 방어를 반복했다
+    CFX_BURN,           // 화상 피해
+    CFX_ENEMY_STRIKE    // 적이 나를 때렸다
+};
+
+enum CombatFxFlags {
+    CFXF_NONE         = 0,
+    CFXF_KILL         = 1 << 0,   // 이 사건으로 대상이 삭제됐다
+    CFXF_BIG_HIT      = 1 << 1,   // 큰 타격 (처치 / 10 이상 / 최대 체력 20% 이상)
+    CFXF_BLOCKED      = 1 << 2,   // 방어도가 전부 받아내 체력 피해가 0이었다
+    CFXF_CORRUPT      = 1 << 3,   // 관통 공격 (방어도를 절반만 인정)
+    CFXF_EMPOWERED    = 1 << 4,   // 보스 강화 공격
+    CFXF_DEFEND_CHAIN = 1 << 5,   // 연쇄가 공격이 아니라 방어를 반복했다
+    CFXF_WASTED       = 1 << 6    // 역전으로 증폭 보너스가 도착하지 못했다
+};
+
+// value/beforeValue/afterValue의 뜻은 type마다 다르다.
+//   CFX_AMPLIFY        value = 실제 보너스 (소실이면 0, beforeValue = 잃은 양)
+//   CFX_ATTACK_LAUNCH  value = 발사한 공격 피해
+//   CFX_ENEMY_HIT      value = 실제 체력 피해, before/after = 피격 전후 HP
+//   CFX_DEFEND         value = 얻은 방어도, before/after = 방어도 전후
+//   CFX_CHAIN          공격 반복이면 CFX_ENEMY_HIT과 같고, 방어 반복이면 CFX_DEFEND과 같다
+//   CFX_BURN           value = 실제 체력 피해, before/after = 피격 전후 HP
+//   CFX_ENEMY_STRIKE   value = 내가 잃은 체력, before/after = 내 체력 전후
+struct CombatFxEvent {
+    uint8_t type;         // CombatFxType
+    uint8_t traceLine;    // 이 사건이 적힌 계산 줄 번호 (>= turnTraceCount면 재생 끝에 몰아 발동)
+    int8_t sourceSlot;    // 원인 슬롯 (-1 없음)
+    int8_t sourceDie;     // 그때 그 슬롯에 있던 주사위 (-1 없음). 다음 턴이면 배치가 초기화된다
+    int8_t targetEnemy;   // 대상 적 (-1 없음). CFX_ENEMY_STRIKE는 때린 적
+    uint8_t flags;        // CombatFxFlags
+    int16_t value;
+    int16_t beforeValue;
+    int16_t afterValue;
+};
+
+#define COMBAT_FX_CAP 16
+
 struct GameState {
     GamePhase phase;
     uint32_t rng;
@@ -156,11 +205,11 @@ struct GameState {
     int lastTurnBlockGained;
     int lastTurnSlotOutput[SLOT_COUNT];   // 슬롯별 산출량 (미리보기·UI 표기)
     int lastTurnReversed;         // 직전 해결이 역전 순서였는지 (UI 표기)
-    // 타격 연출용 기록. 규칙에는 전혀 관여하지 않고 화면이 읽기만 하므로
-    // 스모크·밸런스의 결정론은 그대로다.
-    uint8_t lastTurnEnemyStruck[3];      // 이번 실행에서 나를 때린 적 (막혀서 피해 0이어도 1)
-    int lastTurnEnemyStrikeDamage[3];    // 방어도를 뚫고 들어온 피해
-    int lastTurnEnemyStrikeTrace[3];     // 그 행동이 적힌 계산 줄 번호 (-1 = 없음)
+    // 타격 연출용 기록. 규칙에는 전혀 관여하지 않고 화면이 읽기만 한다.
+    CombatFxEvent combatFx[COMBAT_FX_CAP];
+    uint8_t combatFxCount;
+    uint8_t combatFxOverflow;            // 16개를 넘겨 기록이 버려졌으면 1 (회귀 검사용)
+    uint8_t combatFxPad[2];
     int turnTraceCount;
     int turnTraceOverflow;        // 12줄을 넘겨 기록이 버려졌으면 1 (회귀 검사용)
     wchar_t turnTrace[TURN_TRACE_CAP][96];

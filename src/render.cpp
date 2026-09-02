@@ -407,3 +407,132 @@ void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF colo
         RestoreDC(dc, saved);
     }
 }
+
+// ---------------------------------------------------------------------------
+// 전투 연출 프리미티브. 게임 규칙을 모르고 넘겨받은 숫자만 그린다.
+// ---------------------------------------------------------------------------
+
+// 3구간 직각 경로(세로 → 가로 → 세로) 위에서 거리 d에 해당하는 점.
+static POINT PathPointAt(POINT from, POINT to, int midY, int d) {
+    POINT p = from;
+    int a = midY - from.y, b = to.x - from.x, c = to.y - midY;
+    int la = a < 0 ? -a : a, lb = b < 0 ? -b : b, lc = c < 0 ? -c : c;
+    if (d <= la) { p.x = from.x; p.y = from.y + (a < 0 ? -d : d); return p; }
+    d -= la;
+    if (d <= lb) { p.x = from.x + (b < 0 ? -d : d); p.y = midY; return p; }
+    d -= lb;
+    if (d > lc) d = lc;
+    p.x = to.x; p.y = midY + (c < 0 ? -d : d);
+    return p;
+}
+
+void DrawSignalPath(HDC dc, POINT from, POINT to, int midY, int progress, int packets,
+                    COLORREF color, int trail, int branch) {
+    int a = midY - from.y, b = to.x - from.x, c = to.y - midY;
+    int total = (a < 0 ? -a : a) + (b < 0 ? -b : b) + (c < 0 ? -c : c);
+    if (total <= 0 || packets <= 0) return;
+    if (progress < 0) progress = 0;
+    if (progress > 1000) progress = 1000;
+    COLORREF faint = MixColor(C_BG, color, 26);
+    // 지나온 자리만 어둡게 남는다. 아직 지나지 않은 구간은 그리지 않아
+    // 신호가 "이미 도착해 있다"로 잘못 읽히지 않는다.
+    int head = total * progress / 1000;
+    for (int d = 0; d < head; d += 4) {
+        POINT p = PathPointAt(from, to, midY, d);
+        Fill(dc, MakeRect(p.x - 1, p.y - 1, p.x + 1, p.y + 1), faint);
+        if (branch) {
+            Fill(dc, MakeRect(p.x - 1 - branch, p.y - 1, p.x + 1 - branch, p.y + 1), faint);
+            Fill(dc, MakeRect(p.x - 1 + branch, p.y - 1, p.x + 1 + branch, p.y + 1), faint);
+        }
+    }
+    COLORREF hot = MixColor(color, RGB(255, 255, 255), 45);
+    for (int i = 0; i < packets; ++i) {
+        int d = head - i * (trail > 0 ? trail : 10);
+        if (d < 0) continue;
+        POINT p = PathPointAt(from, to, midY, d);
+        COLORREF tone = i == 0 ? hot : MixColor(C_BG, color, 90 - i * 22);
+        if (branch) {
+            Fill(dc, MakeRect(p.x - 3 - branch, p.y - 2, p.x + 3 - branch, p.y + 2), tone);
+            Fill(dc, MakeRect(p.x - 3 + branch, p.y - 2, p.x + 3 + branch, p.y + 2), tone);
+        } else {
+            Fill(dc, MakeRect(p.x - 4, p.y - 3, p.x + 4, p.y + 3), tone);
+        }
+    }
+}
+
+void DrawPixelBurst(HDC dc, int cx, int cy, int t, int life, int count, int seed, COLORREF color) {
+    if (t < 0 || t >= life || life <= 0 || count <= 0) return;
+    int p = t * 1000 / life;
+    int fade = 100 - p / 10;
+    if (fade <= 2) return;
+    COLORREF c = MixColor(C_BG, color, fade);
+    COLORREF hot = MixColor(c, RGB(255, 255, 255), 45);
+    for (int i = 0; i < count; ++i) {
+        uint32_t h = Hash3(seed, i, 23);
+        int dx = (int)(h % 201u) - 100, dy = (int)((h >> 9) % 161u) - 110;
+        int speed = 40 + (int)((h >> 19) % 60u);
+        int x = cx + dx * p * speed / 260000;
+        int y = cy + dy * p * speed / 260000 + p * p / 14000;   // 중력에 처진다
+        if (x < 0 || x >= BASE_WIDTH || y < 68 || y >= BASE_HEIGHT) continue;
+        int w = 2 + (int)((h >> 5) % 3u);
+        Fill(dc, MakeRect(x, y, x + w, y + w), (i & 3) == 0 ? hot : c);
+    }
+}
+
+void DrawBandGlitch(HDC dc, const RECT& area, int t, int amp, int seed, int bands) {
+    if (amp <= 0 || bands <= 0) return;
+    int h = (area.bottom - area.top) / bands;
+    if (h <= 0) return;
+    int w = area.right - area.left;
+    for (int i = 0; i < bands; ++i) {
+        int y = area.top + i * h;
+        int dx = (int)(Hash3(seed, i, t / 25) % (uint32_t)(amp * 2 + 1)) - amp;
+        if (dx != 0) BitBlt(dc, area.left + dx, y, w, h, dc, area.left, y, SRCCOPY);
+    }
+}
+
+void DrawPulseFrame(HDC dc, const RECT& area, int expand, int layers, COLORREF color) {
+    if (layers <= 0) return;
+    for (int i = 0; i < layers; ++i) {
+        RECT r = area;
+        InflateRect(&r, expand * (i + 1), expand * (i + 1));
+        int level = 90 - i * 90 / (layers + 1);
+        if (level <= 3) continue;
+        Outline(dc, r, MixColor(C_BG, color, level), 1);
+    }
+}
+
+void DrawGhostBar(HDC dc, const RECT& area, int value, int ghost, int maximum,
+                  COLORREF color, COLORREF ghostColor) {
+    Fill(dc, area, RGB(39, 48, 57));
+    int width = area.right - area.left;
+    if (maximum > 0) {
+        if (ghost > value) {
+            RECT part = area;
+            part.right = area.left + width * (ghost > maximum ? maximum : ghost) / maximum;
+            Fill(dc, part, ghostColor);
+        }
+        if (value > 0) {
+            RECT part = area;
+            part.right = area.left + width * (value > maximum ? maximum : value) / maximum;
+            Fill(dc, part, color);
+            // 줄어드는 경계에 밝은 머리를 세워 어디까지 깎였는지 눈에 박히게 한다.
+            if (ghost > value) Fill(dc, MakeRect(part.right - 1, part.top, part.right + 1, part.bottom),
+                MixColor(color, RGB(255, 255, 255), 60));
+        }
+    }
+    Outline(dc, area, C_LINE, 1);
+}
+
+void DrawPacketGrid(HDC dc, const RECT& area, int filled, int total, COLORREF color, COLORREF dim) {
+    if (total <= 0) return;
+    if (total > 12) total = 12;
+    int width = area.right - area.left;
+    int cell = width / total;
+    if (cell < 3) return;
+    for (int i = 0; i < total; ++i) {
+        RECT r = MakeRect(area.left + i * cell + 1, area.top, area.left + (i + 1) * cell - 2, area.bottom);
+        if (i < filled) Fill(dc, r, color);
+        else Outline(dc, r, dim, 1);
+    }
+}

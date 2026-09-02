@@ -29,6 +29,15 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define DEATH_CREEP_MS 1400    // 체력 0에서 노이즈가 화면을 다 갉아먹기까지
 #define DEATH_STATIC_MS 2500   // 그 뒤 재시작 화면이 나오기까지
 
+// ---- 연출 강도 -------------------------------------------------------------
+// 줄어드는 것은 흔들림·파편·전역 글리치 같은 장식뿐이다. 슬롯 잠금과 다음 잠금
+// 대상, 오프라인 주사위, 격리·삭제 대상 면, 해결 순서와 역전 예고, 압력 게이지,
+// HP 잔상과 실제 피해 숫자는 어떤 모드에서도 숨기지 않는다.
+enum FxLevel { FX_FULL = 0, FX_REDUCED, FX_OFF, FX_LEVEL_COUNT };
+extern int gFxLevel;
+int FxScale(int amount);   // 장식 강도를 현재 모드로 줄인다 (REDUCED 50%, OFF 0)
+int FxDecorOn();           // 움직이는 장식을 그려도 되는가
+
 // ---- 공유 상태 (main.cpp가 소유한다) --------------------------------------
 extern GameState gGame;
 extern HWND gWindow;
@@ -57,8 +66,6 @@ int DieNoise(int die);
 int DieSettled(int die);
 int DieSettleFlash(int die);
 int NoiseStep(int die);
-void SyncEnemyDamage();
-int EnemyHitFlash(int index);
 int EnemyBob(int index);
 void SyncIdleAnimation();
 // 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
@@ -78,8 +85,14 @@ int GimmickFxB();           // 대상 2
 int GimmickFxDuration(int kind, int b);   // 그 기믹 연출의 총 길이 ms
 void DrawGimmickFx(HDC dc);
 
-// 적의 타격: 계산 재생이 그 적의 [적 행동] 줄에 닿는 순간 발동한다.
-void SyncEnemyStrikes();
+// ---- 전투 시각 이벤트 재생 -------------------------------------------------
+// game.cpp가 남긴 CombatFxEvent를 계산 줄 번호에 맞춰 되짚는다.
+//   eventStart = gTurnTraceStart + traceLine × TURN_TRACE_STEP_MS
+// 화면은 CombatFxElapsed만 읽어 모든 위치·강도를 경과 시간의 순수 함수로 낸다.
+int CombatFxPlaying();          // 지금 이벤트가 흐르고 있는가
+int CombatFxElapsed(int index); // 그 이벤트 시작 이후 ms (아직 안 왔으면 -1)
+// 소리와 적의 달려들기를 그 사건의 줄에 맞춰 한 번씩 발동한다.
+void SyncCombatFx();
 int EnemyStrikeDrop(int index);     // 플레이어 쪽(아래)으로 파고드는 픽셀
 int EnemyStrikeShift(int index);    // 달려들 때의 좌우 흔들림
 int EnemyStrikePop(int index);      // 피해 숫자 표시 강도 1000 → 0
@@ -113,6 +126,7 @@ RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
 RECT FullscreenToggleRect();
 RECT RestartButtonRect();
+RECT FxLevelRect(int index);
 RECT StartButtonRect(int width, int height);
 RECT DriveCardRect(int i);
 RECT DirectoryChoiceRect(int i);
@@ -125,6 +139,8 @@ RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
 RECT KeybButtonRect();
+RECT TurnTraceTickerRect();
+RECT TurnTracePanelRect();
 RECT PruneTsrRect(int i);
 
 int DieForSlotUI(int slot);

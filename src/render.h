@@ -71,3 +71,24 @@ void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness
 void DrawCreepStatic(HDC dc, const RECT& area, int step, int eaten);
 // 가장자리에서 안쪽으로 옅어지는 경고 테두리. 피격·위독 상태를 알린다.
 void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness);
+
+// ---- 전투 연출 프리미티브 --------------------------------------------------
+// 전부 게임 상태를 모르고 넘겨받은 숫자만 그린다. 위치·강도는 호출자가 경과
+// 시간의 순수 함수로 계산해 넘긴다 (프레임마다 누적하는 상태가 없어야 한다).
+
+// 직각 회로 신호. from에서 midY까지 세로로, 거기서 가로로, 다시 to까지 세로로
+// 꺾어 가는 경로 위를 packets개의 짧은 사각형이 흘러간다. progress 0~1000,
+// trail은 꼬리 간격(px), branch > 0이면 두 갈래로 갈라져 나란히 간다.
+void DrawSignalPath(HDC dc, POINT from, POINT to, int midY, int progress, int packets,
+                    COLORREF color, int trail, int branch);
+// 중심에서 흩어지는 작은 사각형 파편. 씨앗이 같으면 궤적도 같다.
+void DrawPixelBurst(HDC dc, int cx, int cy, int t, int life, int count, int seed, COLORREF color);
+// 사각형 안쪽만 가로 띠로 잘라 좌우로 어긋나게 복사한다 (초상화 밴드 글리치).
+void DrawBandGlitch(HDC dc, const RECT& area, int t, int amp, int seed, int bands);
+// 테두리가 바깥으로 겹겹이 퍼져 나가는 펄스. layers겹이 expand px 간격으로 선다.
+void DrawPulseFrame(HDC dc, const RECT& area, int expand, int layers, COLORREF color);
+// 잔상이 남는 게이지. ghost가 value보다 크면 그 차이가 예전 값의 잔상으로 남는다.
+void DrawGhostBar(HDC dc, const RECT& area, int value, int ghost, int maximum,
+                  COLORREF color, COLORREF ghostColor);
+// [■][■][ ][ ] 형태의 칸 게이지. 압력·오염처럼 눈금이 중요한 값에 쓴다.
+void DrawPacketGrid(HDC dc, const RECT& area, int filled, int total, COLORREF color, COLORREF dim);

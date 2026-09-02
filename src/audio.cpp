@@ -48,7 +48,8 @@ static const SfxSpec SFX[SFX_COUNT] = {
     {{240,   0,   0}, {200,  0,  0}, -120, WAVE_NOISE, 50,  1, 34,  88,  88,  46,   4},  // FX_OFFLINE    접촉이 끊긴다
     {{420, 300, 420}, { 50, 50, 50},    0, WAVE_PULSE, 25,  1, 44,  74,   6,   0,   1},  // FX_ROUTE      경로가 바뀐다
     {{ 90,  70,   0}, {180,200,  0},  -30, WAVE_TRI,   50,  4, 30,  96,  34,  40,   1},  // FX_PRESSURE   압력이 한계에 닿는다
-    {{700,   0,   0}, { 70,  0,  0}, -300, WAVE_NOISE, 50,  1, 30,  86,  60, 120,   2}   // FX_QUARANTINE 봉인된다
+    {{700,   0,   0}, { 70,  0,  0}, -300, WAVE_NOISE, 50,  1, 30,  86,  60, 120,   2},  // FX_QUARANTINE 봉인된다
+    {{330,   0,   0}, { 66,  0,  0}, -190, WAVE_NOISE, 50,  1, 46,  82,  62,  74,   1}   // HIT_IMPACT    내 공격이 꽂힌다
 };
 
 static uint32_t gNoiseSeed = 0x13579BDFu;
