@@ -92,6 +92,8 @@ void DrawGimmickFx(HDC dc);
 // 화면은 CombatFxElapsed만 읽어 모든 위치·강도를 경과 시간의 순수 함수로 낸다.
 int CombatFxPlaying();          // 지금 이벤트가 흐르고 있는가
 int CombatFxElapsed(int index); // 그 이벤트 시작 이후 ms (아직 안 왔으면 -1)
+// 재생 중 화면에 보일 내 체력. 아직 닿지 않은 타격의 결과를 미리 보여 주지 않는다.
+int PlayerDisplayHp();
 // 소리와 적의 달려들기를 그 사건의 줄에 맞춰 한 번씩 발동한다.
 void SyncCombatFx();
 int EnemyStrikeDrop(int index);     // 플레이어 쪽(아래)으로 파고드는 픽셀
