@@ -349,6 +349,13 @@ static void RecordFx(GameState* game, int fx, int a, int b) {
     game->boss.fxB = (int8_t)b;
 }
 
+// 살아 있는 보스의 카드 번호. 연출이 EnemyRect(0)을 하드코딩하지 않게 한다.
+static int BossEnemyIndex(const GameState* game) {
+    for (int i = 0; i < game->enemyCount; ++i)
+        if (game->enemies[i].alive && IsBossKind(game->enemies[i].kind)) return i;
+    return -1;
+}
+
 static void GimmickTurnBegin(GameState* game) {
     BossRuntime* boss = &game->boss;
     ClearGimmickAnnouncements(boss);
@@ -530,6 +537,10 @@ static int RestoreBossHp(GameState* game, EnemyState* enemy, int targetHp, int c
         wsprintfW(buffer, L"[%s] 보스 체력 +%d (%d → %d)", label, heal, hpBefore, enemy->hp);
         PushTurnTrace(game, buffer);
         PushLog(game, buffer);
+        // 되감기 연출은 이 두 값 사이를 오른쪽에서 왼쪽으로 덮어 쓴다.
+        game->boss.fxHpBefore = (int16_t)hpBefore;
+        game->boss.fxHpAfter = (int16_t)enemy->hp;
+        game->boss.fxEnemy = (int8_t)BossEnemyIndex(game);
     }
     return heal;
 }

@@ -180,7 +180,7 @@ static int ShakeAmplitude() {
     if (since < 0 || since >= SHAKE_MS) return fx;
     int damage = gPlayerHitDamage > 14 ? 14 : gPlayerHitDamage;
     int peak = 3 + damage / 2;                       // 3 ~ 10픽셀
-    int hit = peak * (SHAKE_MS - since) / SHAKE_MS;
+    int hit = FxScale(peak * (SHAKE_MS - since) / SHAKE_MS);
     return hit > fx ? hit : fx;
 }
 
@@ -331,10 +331,10 @@ static void BeginGimmickFx(int kind, int a, int b) {
     int depth = (kind - 1) % 3;
     PlaySfxPitched(FAMILY_SFX[family], depth == 0 ? 2 : depth == 1 ? 1 : 0);
     gFxShakeAt = gFxStart;
+    // 일반 기믹은 화면을 흔들지 않는다. 매턴 반복되는 사건이 판을 흔들면
+    // 정말 판을 바꾸는 발동과 구별되지 않는다.
     gFxShakePeak = kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
-                || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5;
-    // 타임아웃은 매턴 카운트를 보여 주므로, 0에 닿는 턴이 아니면 흔들지 않는다.
-    if (kind == GIMMICK_TIMEOUT && !b) gFxShakePeak = 0;
+                || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 7 : 0;
     SetTimer(gWindow, 8, 16, 0);
 }
 
@@ -346,10 +346,10 @@ static void FinishGimmickFx() {
 }
 
 static int GimmickShakeAmplitude() {
-    if (!gFxActive) return 0;
+    if (!gFxActive || gFxShakePeak <= 0) return 0;
     int since = (int)(GetTickCount() - gFxShakeAt);
     if (since < 0 || since >= SHAKE_MS) return 0;
-    return gFxShakePeak * (SHAKE_MS - since) / SHAKE_MS;
+    return FxScale(gFxShakePeak * (SHAKE_MS - since) / SHAKE_MS);
 }
 
 static void BeginTurnTrace(int floor, int encounter, int pendingClear) {

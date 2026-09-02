@@ -101,6 +101,9 @@ struct BossRuntime {
     uint8_t firedFx;                     // 이번 실행에서 발동한 기믹 (GIMMICK_NONE = 없음)
     int8_t fxA;                          // 대상 1: 슬롯·주사위·면 인덱스 또는 수치 (-1 없음)
     int8_t fxB;                          // 대상 2: 면 인덱스나 보조 플래그 (-1 없음)
+    int8_t fxEnemy;                      // 대상 적 (-1 없음). 복원 연출이 카드를 찾는 데 쓴다
+    int16_t fxHpBefore;                  // 복원 전 체력 (되감기 잔상의 출발점)
+    int16_t fxHpAfter;                   // 복원 후 체력
     int gauge;                           // 압력·오염 게이지
     int gaugeMax;
     int countdown;                       // N:\ TIMEOUT 카운트다운
