@@ -229,7 +229,8 @@ int AmbientNoiseLevel() {
     int severity = CriticalSeverity();
     if (severity <= 0) return 0;
     int level = 90 + severity * 34 + CriticalPulse() * severity * 2 + LastGaspBoost() * 130 / 1000;
-    return level > 680 ? 680 : level;
+    if (level > 680) level = 680;
+    return FxScale(level);
 }
 
 int AmbientNoiseBand() {
@@ -595,6 +596,7 @@ static int HoverId(int x, int y) {
     if (gSettingsOpen) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
+        for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
         return -1;
@@ -661,6 +663,7 @@ static void HandleClick(int x, int y) {
         gRestartArmed = 0;
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
+        for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) { gFxLevel = i; PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }

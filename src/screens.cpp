@@ -18,6 +18,7 @@ RECT DeckCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129
 RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
+RECT FxLevelRect(int index) { int left = 560 + index * 150; return MakeRect(left, 260, left + 132, 302); }
 
 // 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
 void ApplyFullscreen(int enable) {
@@ -75,6 +76,21 @@ static void DrawSettings(HDC dc, int width, int height) {
     Panel(dc, rs, gRestartArmed ? RGB(80, 30, 30) : hoverRs ? RGB(48, 28, 28) : C_PANEL_2, gRestartArmed ? C_RED : hoverRs ? C_RED : C_LINE);
     TextRect(dc, rs, gRestartArmed ? L"정말 다시 시작?" : L"다시 시작", gRestartArmed ? C_RED : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (gRestartArmed) TextRect(dc, MakeRect(84, 506, 364, 526), L"한 번 더 클릭하면 확정됩니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+
+    // 연출 강도. 줄어드는 것은 장식뿐이고, 판을 읽는 데 필요한 정보는
+    // 어떤 모드에서도 그대로 남는다.
+    Text(dc, 560, 228, L"연출 강도", C_YELLOW, gFontMedium);
+    static const wchar_t* const FX_LEVEL_NAMES[FX_LEVEL_COUNT] = {L"FULL", L"REDUCED", L"OFF"};
+    for (int i = 0; i < FX_LEVEL_COUNT; ++i) {
+        RECT r = FxLevelRect(i); int active = gFxLevel == i; int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2, active ? C_GREEN : hover ? C_BLUE : C_LINE);
+        TextRect(dc, r, FX_LEVEL_NAMES[i], active ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    TextRect(dc, MakeRect(560, 312, panel.right - 30, 400),
+        gFxLevel == FX_OFF ? L"움직이는 장식을 끕니다. 슬롯 잠금·오프라인 주사위·격리 대상 면·해결 순서·압력 게이지·체력 잔상과 피해 숫자는 그대로 보입니다."
+        : gFxLevel == FX_REDUCED ? L"흔들림과 파편을 절반으로 줄이고 전역 글리치를 최소화합니다. 필수 정보는 그대로 보입니다."
+        : L"모든 장식 효과를 사용합니다.",
+        C_DIM, gFontSmall, DT_WORDBREAK);
 
     TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20), L"취소 키로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 }
