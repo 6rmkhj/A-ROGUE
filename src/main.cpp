@@ -51,6 +51,7 @@ static int gTraceFloor, gTraceEncounter;
 // 맞춰 되짚는 방식으로 보여준다. 여기 있는 값은 전부 경과 시간의 함수라
 // 마우스가 움직여 다시 그려져도 연출이 어긋나지 않는다.
 #define TRACE_DEATH_HOLD_MS 900   // 마지막 줄을 읽을 틈을 준 뒤 화면이 무너진다
+#define TRACE_FX_TAIL_MS 520      // 마지막 줄의 타격 연출이 끝날 때까지 더 그린다
 
 static DWORD gEnemyStrikeAt[3];
 static int gEnemyStrikeDamage[3];
@@ -764,7 +765,9 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             int traceElapsed = (int)(GetTickCount() - gTurnTraceStart), reveal = TurnTraceRevealDuration();
             // 죽은 판은 클릭을 기다리지 않는다. 마지막 줄을 읽을 틈만 주고 화면이 무너진다.
             if (gTurnTracePendingDeath) { if (traceElapsed >= reveal + TRACE_DEATH_HOLD_MS) { FinishTurnTrace(); return 0; } }
-            else if (traceElapsed >= reveal) KillTimer(window, 4);
+            // 마지막 줄의 피해 숫자와 파편이 끝나기 전에 타이머를 끄면 연출이
+            // 그 프레임에서 얼어붙는다. 꼬리만큼 더 돌리고 나서 멈춘다.
+            else if (traceElapsed >= reveal + TRACE_FX_TAIL_MS) KillTimer(window, 4);
             InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 6u) {

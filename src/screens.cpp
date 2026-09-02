@@ -1022,6 +1022,8 @@ static void DrawDirectorySelect(HDC dc, int width, int height) {
 }
 
 // 디렉터리 진입 연출. 값이 전부 경과 시간의 함수라 리페인트와 겹쳐도 안전하다.
+#define DIR_BRANCH_MS 320   // 갈래를 보여 주고 나서 경로 타이핑이 시작된다
+
 static void DrawDirectoryEnter(HDC dc, int width, int height) {
     const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(gDirEnterKind);
     if (!info) return;
@@ -1034,7 +1036,6 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
 
     // 어느 갈래를 골랐는지 먼저 보여 준다. 고르지 않은 쪽은 어두워지고,
     // 작은 패킷이 고른 경로로 건너간 뒤에야 경로가 타이핑되기 시작한다.
-    #define DIR_BRANCH_MS 320
     wchar_t base[96];
     FormatCurrentDirectory(&gGame, base, 96);
     Text(dc, panel.left + 24, panel.top + 48, base, C_DIM, gFontSmall);
@@ -1839,7 +1840,7 @@ static void DrawPressureAlloc(HDC dc, int act, COLORREF fam) {
     int boss = BossCardIndex();
     if (boss < 0) return;
     RECT card = EnemyRect(boss);
-    RECT gauge = MakeRect(card.left + 12, card.top + 240, card.right - 12, card.top + 252);
+    RECT gauge = MakeRect(card.left + 12, card.top + 247, card.right - 12, card.top + 259);
     int x = card.left + 20 + (gauge.right - gauge.left) * act / 1000;
     if (x > gauge.right) x = gauge.right;
     Fill(dc, MakeRect(x - 8, gauge.top - 16, x + 8, gauge.top - 6), fam);
@@ -1859,7 +1860,6 @@ static void DrawPressureAlloc(HDC dc, int act, COLORREF fam) {
 static void DrawQuarantineSeal(HDC dc, int die, int face, int act, COLORREF fam, int permanent) {
     if (die < 0 || die >= 3) return;
     RECT r = DieRect(die);
-    RECT cell = FaceStripCell(die, face);
     // 주사위 값 칸을 헥스 덤프가 절반쯤 덮는다
     RECT area = MakeRect(r.left + 6, r.top + 26, r.right - 6, r.top + 26 + 46 * act / 1000);
     if (area.bottom > area.top) {
@@ -1868,6 +1868,7 @@ static void DrawQuarantineSeal(HDC dc, int die, int face, int act, COLORREF fam,
     }
     if (face < 0 || face >= 6) return;
     // 대상 칸으로 봉인이 내려앉는다
+    RECT cell = FaceStripCell(die, face);
     int drop = 20 - 20 * act / 1000;
     RECT sealed = MakeRect(cell.left, cell.top - drop, cell.right, cell.bottom - drop);
     Fill(dc, sealed, permanent ? RGB(10, 10, 12) : RGB(40, 12, 14));
@@ -1997,8 +1998,10 @@ void DrawGimmickFx(HDC dc) {
         RECT card = EnemyRect(boss < 0 ? 0 : boss);
         int fade = act < 700 ? 1000 : 1000 - (act - 700) * 1000 / 300;
         // 카운트다운은 보스 카드 위에서만 센다. 매턴 나오는 숫자가 판을 가리지 않는다.
-        TextRect(dc, MakeRect(card.left, card.top + 96, card.right, card.top + 150), num,
-            MixColor(C_BG, col, fade / 10), gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT box = MakeRect(card.left + 6, card.top + 62, card.right - 6, card.top + 140);
+        Fill(dc, box, RGB(6, 9, 14));
+        Outline(dc, box, MixColor(C_BG, col, fade / 14), 1);
+        TextRect(dc, box, num, MixColor(C_BG, col, fade / 10), gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (b) {
             DrawRoutingBus(dc, ROUTE_ORDER_REVERSED, act, C_RED, 0);
             global = 1;   // 역전이 걸린 턴은 배선 자체가 사건이라 도장을 아낀다
