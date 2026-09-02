@@ -14,6 +14,8 @@ enum SfxId {
     SFX_BOOT, SFX_VICTORY, SFX_GAMEOVER, SFX_PLAYER_HIT, SFX_CRASH,
     // 기믹 발동. 계열마다 하나씩 두고 층별 구분은 PlaySfxPitched로 낸다.
     SFX_FX_LOCK, SFX_FX_RESTORE, SFX_FX_OFFLINE, SFX_FX_ROUTE, SFX_FX_PRESSURE, SFX_FX_QUARANTINE,
+    // 플레이어 공격이 적에게 닿는 순간. 계열 SFX와 달리 매 턴 울리므로 짧고 건조하다.
+    SFX_HIT_IMPACT,
     SFX_COUNT
 };
 

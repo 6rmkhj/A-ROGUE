@@ -77,6 +77,228 @@ static int TraceHealthy(const GameState* game) {
 }
 
 // ---------------------------------------------------------------------------
+// 전투 시각 이벤트 (화면이 읽는 기록. 규칙에는 관여하지 않는다)
+// ---------------------------------------------------------------------------
+
+// 기록 자체의 무결성. 어떤 경로로 턴을 끝내도 항상 성립해야 한다.
+static int CombatFxHealthy(const GameState* game) {
+    if (game->combatFxCount > COMBAT_FX_CAP) return 0;
+    for (int i = 0; i < game->combatFxCount; ++i) {
+        const CombatFxEvent* fx = &game->combatFx[i];
+        if (fx->type == CFX_NONE || fx->type > CFX_ENEMY_STRIKE) return 0;
+        // 12줄을 넘겨 잘린 사건은 turnTraceCount와 같은 줄을 가리킬 수 있다.
+        if (fx->traceLine > TURN_TRACE_CAP) return 0;
+        if (fx->sourceSlot >= SLOT_COUNT || fx->sourceDie >= 3) return 0;
+        if (fx->targetEnemy >= 3) return 0;
+        // 이벤트는 항상 기록 순서대로 재생돼야 한다.
+        if (i > 0 && fx->traceLine < game->combatFx[i - 1].traceLine) return 0;
+    }
+    return 1;
+}
+
+static const CombatFxEvent* FirstFx(const GameState* game, int type) {
+    for (int i = 0; i < game->combatFxCount; ++i) if (game->combatFx[i].type == type) return &game->combatFx[i];
+    return 0;
+}
+
+static int FxIndexOf(const GameState* game, int type) {
+    for (int i = 0; i < game->combatFxCount; ++i) if (game->combatFx[i].type == type) return i;
+    return -1;
+}
+
+// 계산 줄이 정말 그 사건의 줄인지. 문자열을 검색하지 않고 기록만 믿는 대신,
+// 테스트는 반대로 문자열을 읽어 기록이 가리킨 줄이 맞는지 확인한다.
+static int TraceLineHas(const GameState* game, int line, const wchar_t* needle) {
+    if (line < 0 || line >= game->turnTraceCount) return 0;
+    const wchar_t* text = game->turnTrace[line];
+    for (int i = 0; text[i]; ++i) {
+        int j = 0;
+        while (needle[j] && text[i + j] == needle[j]) ++j;
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+static int CheckCombatFxTrace() {
+    // ---- 정상 순서: 증폭 → 공격 → 적중 → 방어 → 연쇄 ----------------------
+    GameState g; SetupBossFight(&g, 0, 0, 0xFC000001u, 5);
+    g.boss.gimmick = GIMMICK_NONE;                 // 기믹 없는 순수한 한 턴
+    g.enemies[0].hp = 999; g.enemies[0].maxHp = 999; g.enemies[0].block = 0;
+    g.enemies[0].intent = INTENT_ATTACK; g.enemies[0].intentValue = 7;
+    g.playerHp = 999; g.playerBlock = 0;
+    AssignDieToSlot(&g, 0, SLOT_ATTACK);
+    AssignDieToSlot(&g, 1, SLOT_AMPLIFY);
+    AssignDieToSlot(&g, 2, SLOT_DEFEND);
+    int hpBefore = g.enemies[0].hp;
+    EndTurn(&g);
+    if (!CombatFxHealthy(&g)) return Fail("combat fx trace must stay within its caps and stay ordered");
+    if (g.combatFxOverflow) return Fail("a plain turn must not overflow the combat fx array");
+    const CombatFxEvent* amp = FirstFx(&g, CFX_AMPLIFY);
+    const CombatFxEvent* launch = FirstFx(&g, CFX_ATTACK_LAUNCH);
+    const CombatFxEvent* hit = FirstFx(&g, CFX_ENEMY_HIT);
+    const CombatFxEvent* block = FirstFx(&g, CFX_DEFEND);
+    const CombatFxEvent* strike = FirstFx(&g, CFX_ENEMY_STRIKE);
+    if (!amp || !launch || !hit || !block || !strike) return Fail("a full turn must record every slot event");
+    if (FxIndexOf(&g, CFX_AMPLIFY) > FxIndexOf(&g, CFX_ATTACK_LAUNCH)
+        || FxIndexOf(&g, CFX_ATTACK_LAUNCH) > FxIndexOf(&g, CFX_ENEMY_HIT)
+        || FxIndexOf(&g, CFX_ENEMY_HIT) > FxIndexOf(&g, CFX_DEFEND))
+        return Fail("normal order must record amplify, attack, hit, defend in that order");
+    if (!TraceLineHas(&g, launch->traceLine, L"[공격")) return Fail("attack launch must point at the attack line");
+    if (!TraceLineHas(&g, hit->traceLine, L"[적중")) return Fail("enemy hit must point at the hit line");
+    if (!TraceLineHas(&g, block->traceLine, L"[방어")) return Fail("defend must point at the defend line");
+    if (!TraceLineHas(&g, amp->traceLine, L"[증폭")) return Fail("amplify must point at the amplify line");
+    if (!TraceLineHas(&g, strike->traceLine, L"[적 행동")) return Fail("enemy strike must point at the enemy line");
+    // 대상과 실제 피해가 상태와 일치해야 한다
+    if (hit->targetEnemy != 0) return Fail("enemy hit must name the target enemy");
+    if (hit->beforeValue != hpBefore || hit->afterValue != g.enemies[0].hp)
+        return Fail("enemy hit must record the hp on both sides of the blow");
+    if (hit->value != hit->beforeValue - hit->afterValue)
+        return Fail("enemy hit value must be the real hp damage");
+    if (hit->sourceSlot != SLOT_ATTACK || hit->sourceDie != 0)
+        return Fail("enemy hit must name the slot and die that caused it");
+    if (block->value <= 0 || block->value != block->afterValue - block->beforeValue)
+        return Fail("defend must record the block it produced and the totals on both sides");
+    if (strike->beforeValue - strike->afterValue != strike->value)
+        return Fail("enemy strike must record the player hp on both sides");
+    if (amp->flags & CFXF_WASTED) return Fail("a normal turn must not mark the amplify as wasted");
+
+    // ---- 역전 순서: 실제 해결 순서대로 기록된다 ---------------------------
+    GameState rev; SetupBossFight(&rev, 3, 0, 0xFC000002u, 5);
+    rev.boss.gimmick = GIMMICK_PROXY;
+    rev.boss.reversed = 1;
+    rev.enemies[0].hp = 999; rev.enemies[0].maxHp = 999; rev.enemies[0].block = 0;
+    rev.enemies[0].intent = INTENT_GUARD; rev.enemies[0].intentValue = 0;
+    rev.playerHp = 999;
+    AssignDieToSlot(&rev, 0, SLOT_ATTACK);
+    AssignDieToSlot(&rev, 1, SLOT_AMPLIFY);
+    EndTurn(&rev);
+    if (!CombatFxHealthy(&rev)) return Fail("reversed turn fx must stay within its caps and stay ordered");
+    const CombatFxEvent* revAmp = FirstFx(&rev, CFX_AMPLIFY);
+    if (!revAmp || !(revAmp->flags & CFXF_WASTED))
+        return Fail("a reversed turn must mark the amplify bonus as lost");
+    if (revAmp->value != 0 || revAmp->beforeValue <= 0)
+        return Fail("a wasted amplify must record zero output and the amount it lost");
+    if (FxIndexOf(&rev, CFX_AMPLIFY) < FxIndexOf(&rev, CFX_ATTACK_LAUNCH))
+        return Fail("a reversed turn must record the amplify after the attack");
+
+    // ---- 처치·방어 흡수·화상 ---------------------------------------------
+    GameState kill; SetupBossFight(&kill, 0, 0, 0xFC000003u, 5);
+    kill.boss.gimmick = GIMMICK_NONE;
+    kill.enemies[0].hp = 1; kill.enemies[0].block = 0;
+    AttackTurn(&kill);
+    const CombatFxEvent* killHit = FirstFx(&kill, CFX_ENEMY_HIT);
+    if (!killHit || !(killHit->flags & CFXF_KILL)) return Fail("a lethal blow must set the kill flag");
+    if (!(killHit->flags & CFXF_BIG_HIT)) return Fail("a kill must always count as a big hit");
+    if (killHit->afterValue != 0) return Fail("a kill must record the target at zero hp");
+
+    GameState blocked; SetupBossFight(&blocked, 0, 0, 0xFC000004u, 5);
+    blocked.boss.gimmick = GIMMICK_NONE;
+    blocked.enemies[0].hp = 999; blocked.enemies[0].maxHp = 999; blocked.enemies[0].block = 999;
+    blocked.enemies[0].intent = INTENT_GUARD; blocked.enemies[0].intentValue = 0;
+    blocked.playerHp = 999;
+    AssignDieToSlot(&blocked, 0, SLOT_ATTACK);
+    EndTurn(&blocked);
+    const CombatFxEvent* soaked = FirstFx(&blocked, CFX_ENEMY_HIT);
+    if (!soaked || !(soaked->flags & CFXF_BLOCKED))
+        return Fail("a fully absorbed blow must set the blocked flag");
+    if (soaked->value != 0 || (soaked->flags & CFXF_BIG_HIT))
+        return Fail("a fully absorbed blow must not read as damage");
+
+    GameState burn; SetupBossFight(&burn, 0, 0, 0xFC000005u, 5);
+    burn.boss.gimmick = GIMMICK_NONE;
+    burn.enemies[0].hp = 999; burn.enemies[0].maxHp = 999; burn.enemies[0].block = 0;
+    burn.enemies[0].burn = 2;
+    burn.enemies[0].intent = INTENT_GUARD; burn.enemies[0].intentValue = 0;
+    burn.playerHp = 999;
+    AssignDieToSlot(&burn, 0, SLOT_DEFEND);
+    EndTurn(&burn);
+    const CombatFxEvent* burned = FirstFx(&burn, CFX_BURN);
+    if (!burned) return Fail("burn damage must be recorded as its own event");
+    if (burned->targetEnemy != 0 || burned->value != burned->beforeValue - burned->afterValue)
+        return Fail("burn must record its target and real hp damage");
+    if (!TraceLineHas(&burn, burned->traceLine, L"[화상")) return Fail("burn must point at the burn line");
+
+    // ---- 관통·강화 플래그 -------------------------------------------------
+    GameState corrupt; SetupBossFight(&corrupt, 4, 2, 0xFC000006u, 5);
+    corrupt.enemies[0].hp = 999; corrupt.enemies[0].maxHp = 999;
+    corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 9;
+    corrupt.boss.empowered = 1;
+    corrupt.playerHp = 999; corrupt.playerBlock = 4;
+    AssignDieToSlot(&corrupt, 0, SLOT_ATTACK);
+    EndTurn(&corrupt);
+    const CombatFxEvent* pierce = FirstFx(&corrupt, CFX_ENEMY_STRIKE);
+    if (!pierce || !(pierce->flags & CFXF_CORRUPT))
+        return Fail("a corrupt strike must set the corrupt flag");
+    if (!(pierce->flags & CFXF_EMPOWERED))
+        return Fail("an empowered boss strike must set the empowered flag");
+
+    // ---- 연쇄: 공격 반복과 방어 반복이 구별된다 ---------------------------
+    GameState chain; SetupBossFight(&chain, 0, 0, 0xFC000007u, 5);
+    chain.boss.gimmick = GIMMICK_NONE;
+    chain.enemies[0].hp = 999; chain.enemies[0].maxHp = 999; chain.enemies[0].block = 0;
+    chain.enemies[0].intent = INTENT_GUARD; chain.enemies[0].intentValue = 0;
+    chain.playerHp = 999;
+    AssignDieToSlot(&chain, 0, SLOT_ATTACK);
+    AssignDieToSlot(&chain, 1, SLOT_CHAIN);
+    EndTurn(&chain);
+    const CombatFxEvent* repeat = FirstFx(&chain, CFX_CHAIN);
+    if (!repeat) return Fail("a chain that repeats an attack must be recorded");
+    if (repeat->flags & CFXF_DEFEND_CHAIN) return Fail("an attack chain must not be flagged as a defend chain");
+    if (repeat->targetEnemy != 0 || repeat->value != repeat->beforeValue - repeat->afterValue)
+        return Fail("an attack chain must record its target and real hp damage");
+    if (!TraceLineHas(&chain, repeat->traceLine, L"[연쇄")) return Fail("chain must point at the chain line");
+
+    GameState chainBlock; SetupBossFight(&chainBlock, 0, 0, 0xFC000008u, 5);
+    chainBlock.boss.gimmick = GIMMICK_NONE;
+    chainBlock.enemies[0].hp = 999; chainBlock.enemies[0].maxHp = 999;
+    chainBlock.enemies[0].intent = INTENT_GUARD; chainBlock.enemies[0].intentValue = 0;
+    chainBlock.playerHp = 999;
+    AssignDieToSlot(&chainBlock, 0, SLOT_DEFEND);
+    AssignDieToSlot(&chainBlock, 1, SLOT_CHAIN);
+    EndTurn(&chainBlock);
+    const CombatFxEvent* defendChain = FirstFx(&chainBlock, CFX_CHAIN);
+    if (!defendChain || !(defendChain->flags & CFXF_DEFEND_CHAIN))
+        return Fail("a chain that repeats a block must be flagged as a defend chain");
+    if (defendChain->targetEnemy != -1)
+        return Fail("a defend chain must not name an enemy target");
+
+    // ---- PreviewTurn은 원본의 기록도 난수도 건드리지 않는다 ---------------
+    GameState preview; SetupBossFight(&preview, 1, 1, 0xFC000009u, 5);
+    preview.enemies[0].hp = 999; preview.enemies[0].maxHp = 999;
+    preview.playerHp = 999;
+    int slot = FirstOpenSlot(&preview);
+    if (slot < 0) return Fail("preview setup needs an open slot");
+    AssignDieToSlot(&preview, 0, slot);
+    GameState snapshot = preview;
+    TurnPreview out;
+    PreviewTurn(&preview, &out);
+    if (preview.rng != snapshot.rng) return Fail("preview must not consume rng");
+    if (preview.combatFxCount != snapshot.combatFxCount || preview.combatFxOverflow != snapshot.combatFxOverflow)
+        return Fail("preview must not add combat fx events to the original");
+    for (int i = 0; i < COMBAT_FX_CAP; ++i) {
+        const CombatFxEvent* a = &preview.combatFx[i];
+        const CombatFxEvent* b = &snapshot.combatFx[i];
+        if (a->type != b->type || a->traceLine != b->traceLine || a->value != b->value
+            || a->flags != b->flags || a->targetEnemy != b->targetEnemy)
+            return Fail("preview must leave the original combat fx events untouched");
+    }
+
+    // ---- 새 턴·새 전투·새 런에서 기록이 남지 않는다 -----------------------
+    GameState fresh; NewRun(&fresh, 0xFC00000Au);
+    if (fresh.combatFxCount != 0 || fresh.combatFxOverflow != 0)
+        return Fail("a new run must start with no combat fx events");
+    GameState carry; SetupBossFight(&carry, 0, 0, 0xFC00000Bu, 5);
+    carry.enemies[0].hp = 1; carry.enemies[0].block = 0;
+    if (!AttackTurn(&carry)) return Fail("carry setup must resolve a turn");
+    if (carry.combatFxCount == 0) return Fail("the winning turn must keep its events for playback");
+    carry.phase = PHASE_DIRECTORY; carry.encounter = 0; carry.floor = 1;
+    if (!StartCombat(&carry)) return Fail("carry setup must start the next combat");
+    if (carry.combatFxCount != 0 || carry.combatFxOverflow != 0)
+        return Fail("a new combat must not inherit the previous combat's events");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // 전체 런 (스폰 로직은 production 경로, 진행 흐름 검증)
 // ---------------------------------------------------------------------------
 
@@ -93,6 +315,7 @@ static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserve
             game.playerHp = 999;
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive) { game.enemies[i].hp = 1; game.enemies[i].block = 0; }
             AssignDieToSlot(&game, 0, SLOT_ATTACK); AssignDieToSlot(&game, 1, SLOT_AMPLIFY); AssignDieToSlot(&game, 2, SLOT_DEFEND); EndTurn(&game);
+            if (!CombatFxHealthy(&game)) return 7;
         } else if (game.phase == PHASE_REWARD) {
             if (game.rewardIsTsr) InstallTsr(&game, 0);
             else { SelectReward(&game, 0); InstallSelectedReward(&game, game.facesInstalled % 3, game.facesInstalled % 6); }
@@ -1043,6 +1266,7 @@ int main() {
     if (CheckRouteGimmicks()) return 1;
     if (CheckPressureGimmicks()) return 1;
     if (CheckQuarantineGimmicks()) return 1;
+    if (CheckCombatFxTrace()) return 1;
     if (CheckNoStateLeak()) return 1;
     if (CheckDirectoryGeneration()) return 1;
     if (CheckDirectoryRng()) return 1;
@@ -1417,5 +1641,5 @@ int main() {
         if (result != 0) { printf("FAIL: drive %d seed %d result %d\n", drive, seed, result); return 1; }
         ++runs;
     }
-    printf("PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, directory routing, %d complete runs\n", runs); return 0;
+    printf("PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, combat fx trace, directory routing, %d complete runs\n", runs); return 0;
 }
