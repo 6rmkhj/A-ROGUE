@@ -125,13 +125,17 @@ int PlayerHitFlash() {
 
 int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
 
+static int GimmickShakeAmplitude();
+
 static int ShakeAmplitude() {
-    if (!gPlayerHitAt) return 0;
+    int fx = GimmickShakeAmplitude();
+    if (!gPlayerHitAt) return fx;
     int since = (int)(GetTickCount() - gPlayerHitAt);
-    if (since < 0 || since >= SHAKE_MS) return 0;
+    if (since < 0 || since >= SHAKE_MS) return fx;
     int damage = gPlayerHitDamage > 14 ? 14 : gPlayerHitDamage;
     int peak = 3 + damage / 2;                       // 3 ~ 10픽셀
-    return peak * (SHAKE_MS - since) / SHAKE_MS;
+    int hit = peak * (SHAKE_MS - since) / SHAKE_MS;
+    return hit > fx ? hit : fx;
 }
 
 int ScreenShakeX() {
@@ -244,6 +248,8 @@ static int TurnTraceRevealDuration() {
     return count * TURN_TRACE_STEP_MS;
 }
 
+static void BeginGimmickFx(int kind, int a, int b);
+
 static void FinishTurnTrace() {
     if (!gTurnTraceActive) return;
     gTurnTraceActive = 0;
@@ -251,7 +257,53 @@ static void FinishTurnTrace() {
     SyncEnemyStrikes();   // 재생을 건너뛰었어도 맞았다는 사실은 화면에 남는다
     if (gTurnTracePendingDeath) { gTurnTracePendingDeath = 0; BeginDeath(); }
     else if (gTurnTracePendingClear) BeginCombatClear(gTraceFloor, gTraceEncounter);
+    // 새 턴 화면이 드러난 지금이 기믹 연출을 보여 줄 자리다.
+    else if (gGame.boss.firedFx != GIMMICK_NONE)
+        BeginGimmickFx(gGame.boss.firedFx, gGame.boss.fxA, gGame.boss.fxB);
     InvalidateRect(gWindow, 0, FALSE);
+}
+
+// ---- 기믹 발동 연출 -------------------------------------------------------
+static int gFxActive, gFxKind, gFxA, gFxB;
+static DWORD gFxStart, gFxShakeAt;
+static int gFxShakePeak;
+
+int GimmickFxKind() { return gFxActive ? gFxKind : 0; }
+int GimmickFxElapsed() { return gFxActive ? (int)(GetTickCount() - gFxStart) : 0; }
+int GimmickFxA() { return gFxA; }
+int GimmickFxB() { return gFxB; }
+
+static void BeginGimmickFx(int kind, int a, int b) {
+    if (kind <= 0 || kind >= GIMMICK_COUNT) return;
+    gFxKind = kind; gFxA = a; gFxB = b;
+    gFxStart = GetTickCount();
+    gFxActive = 1;
+    int family = BOSS_GIMMICK_INFO[kind].family;
+    static const int FAMILY_SFX[] = {SFX_UI_CLICK, SFX_FX_LOCK, SFX_FX_RESTORE, SFX_FX_OFFLINE,
+                                     SFX_FX_ROUTE, SFX_FX_PRESSURE, SFX_FX_QUARANTINE};
+    // 같은 계열 안에서도 층이 깊을수록 낮게 울린다.
+    int depth = (kind - 1) % 3;
+    PlaySfxPitched(FAMILY_SFX[family], depth == 0 ? 2 : depth == 1 ? 1 : 0);
+    gFxShakeAt = gFxStart;
+    gFxShakePeak = kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
+                || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5;
+    // 타임아웃은 매턴 카운트를 보여 주므로, 0에 닿는 턴이 아니면 흔들지 않는다.
+    if (kind == GIMMICK_TIMEOUT && !b) gFxShakePeak = 0;
+    SetTimer(gWindow, 8, 16, 0);
+}
+
+static void FinishGimmickFx() {
+    if (!gFxActive) return;
+    gFxActive = 0;
+    KillTimer(gWindow, 8);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static int GimmickShakeAmplitude() {
+    if (!gFxActive) return 0;
+    int since = (int)(GetTickCount() - gFxShakeAt);
+    if (since < 0 || since >= SHAKE_MS) return 0;
+    return gFxShakePeak * (SHAKE_MS - since) / SHAKE_MS;
 }
 
 static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
@@ -687,6 +739,10 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if (gDescentSeekPhase == 0 && descentElapsed >= DESCENT_MS / 3) { ++gDescentSeekPhase; PlaySfx(SFX_DIE_LOCK); }
             else if (gDescentSeekPhase == 1 && descentElapsed >= DESCENT_MS * 2 / 3) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 4); }
             if (descentElapsed >= DESCENT_MS) FinishDescent();
+            else InvalidateRect(window, 0, FALSE);
+        }
+        else if (wParam == 8u) {
+            if (GimmickFxElapsed() >= GimmickFxDuration(gFxKind, gFxB)) FinishGimmickFx();
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 7u) {

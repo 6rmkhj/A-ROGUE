@@ -96,6 +96,11 @@ struct BossRuntime {
     int8_t nextTargetDie;                // 격리·삭제 예고 대상 (-1 없음)
     int8_t nextTargetFace;
     uint8_t nextTargetPermanent;         // 1 = ZERO.DAY 영구 삭제 예고
+    // 발동 연출 기록. 규칙에는 전혀 관여하지 않고 화면이 읽기만 하므로
+    // 스모크·밸런스의 결정론은 그대로다 (타격 연출 기록과 같은 규약).
+    uint8_t firedFx;                     // 이번 실행에서 발동한 기믹 (GIMMICK_NONE = 없음)
+    int8_t fxA;                          // 대상 1: 슬롯·주사위·면 인덱스 또는 수치 (-1 없음)
+    int8_t fxB;                          // 대상 2: 면 인덱스나 보조 플래그 (-1 없음)
     int gauge;                           // 압력·오염 게이지
     int gaugeMax;
     int countdown;                       // N:\ TIMEOUT 카운트다운
