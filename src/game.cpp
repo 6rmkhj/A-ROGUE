@@ -1653,6 +1653,31 @@ static void ResolveEnemies(GameState* game) {
     }
 }
 
+// 재굴림이 걸린 주사위의 흔들림은 그 슬롯 하나로 끝나지 않는다. 증폭 보너스는 뒤에 해결될
+// 공격·방어에 실리고, 연쇄는 그 공격·방어를 그대로 반복한다. 체크섬은 배치와 무관하게 세
+// 주사위 출력의 합만 보므로 공격에 바로 걸린다. 역전 턴에는 증폭 보너스가 소실되고 연쇄가
+// 먼저 돌아 반복할 값이 아직 없으므로 (연쇄 → 방어 → 공격 → 증폭) 전파가 없다.
+static void MarkShakenSlots(const GameState* game, TurnPreview* out) {
+    // 비었거나 잠긴 슬롯, 출력이 0으로 고정된 주사위(오프라인·조각화)가 놓인 슬롯은 어떤 눈이
+    // 나와도 산출량이 0이라 확정이다. SlotPower와 같은 조건으로 먼저 걸러 두고, 전파가 끝난
+    // 뒤 한 번 더 걷어 낸다.
+    int certain[SLOT_COUNT];
+    for (int s = 0; s < SLOT_COUNT; ++s) {
+        int die = DieForSlot(game, s);
+        certain[s] = die < 0 || game->boss.lockedSlot[s] || game->dice[die].offline || game->dice[die].disabled;
+        if (certain[s]) out->slotUnknown[s] = 0;
+    }
+    if (IsModifierActive(game, MOD_CHECKSUM)) out->slotUnknown[SLOT_ATTACK] = 1;
+    if (!ResolveOrderReversed(game)) {
+        if (out->slotUnknown[SLOT_AMPLIFY]) {
+            out->slotUnknown[SLOT_ATTACK] = 1;
+            out->slotUnknown[SLOT_DEFEND] = 1;
+        }
+        if (out->slotUnknown[SLOT_ATTACK] || out->slotUnknown[SLOT_DEFEND]) out->slotUnknown[SLOT_CHAIN] = 1;
+    }
+    for (int s = 0; s < SLOT_COUNT; ++s) if (certain[s]) out->slotUnknown[s] = 0;
+}
+
 // 사본에서 한 턴을 그대로 실행해 결과 숫자만 돌려준다. 원본은 읽기만 하므로
 // 난수도, 기믹 상태도, 전투 진행도 전혀 움직이지 않는다.
 void PreviewTurn(const GameState* game, TurnPreview* out) {
@@ -1664,8 +1689,18 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
     if (assigned == 0) return;
 
     GameState copy = *game;
-    // 읽기 오류는 실행하는 순간 다시 굴러간다. 그 주사위가 있으면 예상은 확정이 아니다.
-    for (int d = 0; d < 3; ++d) if (copy.dice[d].unstable) out->uncertain = 1;
+    // 읽기 오류는 실행하는 순간 다시 굴러간다. 사본에서 그대로 굴려 보면 실제로 나올 숫자가
+    // 미리보기로 새어 나가므로, 재굴림 자체를 빼고 돌린다. 대신 예상은 확정이 아니라고 밝히고,
+    // 흔들리는 값이 닿는 슬롯은 산출량을 모른다고 표시한다.
+    int shaken = 0;
+    for (int d = 0; d < 3; ++d) {
+        if (!copy.dice[d].unstable) continue;
+        out->uncertain = 1;
+        shaken = 1;
+        if (copy.dice[d].assignedSlot >= 0) out->slotUnknown[copy.dice[d].assignedSlot] = 1;
+        copy.dice[d].unstable = 0;
+    }
+    if (shaken) MarkShakenSlots(&copy, out);
     EndTurn(&copy);
 
     out->valid = 1;

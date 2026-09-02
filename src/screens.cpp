@@ -299,9 +299,13 @@ static void DrawSlot(HDC dc, int slot) {
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], SlotAccent(slot), gFontMedium);
     // 예상 산출량. 0이면 이 슬롯이 이번 턴 아무 일도 하지 않는다는 뜻이라 흐리게 둔다.
+    // 읽기 오류로 다시 굴러갈 주사위가 놓인 슬롯은 숫자를 만들어 보이지 않고 ? 로 남긴다.
     if (gPreview.valid && die >= 0) {
-        wchar_t out[24]; wsprintfW(out, L"→ %d", gPreview.slotOutput[slot]);
-        COLORREF tint = gPreview.slotOutput[slot] > 0 ? SlotAccent(slot) : C_DIM;
+        int unknown = gPreview.slotUnknown[slot];
+        wchar_t out[24];
+        if (unknown) lstrcpyW(out, L"→ ?");
+        else wsprintfW(out, L"→ %d", gPreview.slotOutput[slot]);
+        COLORREF tint = unknown ? C_YELLOW : gPreview.slotOutput[slot] > 0 ? SlotAccent(slot) : C_DIM;
         TextRect(dc, MakeRect(r.left + 58, r.top + 10, r.right - 8, r.top + 32), out, tint, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
     if (die >= 0) {
@@ -420,11 +424,17 @@ static void DrawCombat(HDC dc, int width, int height) {
     else ZeroMemory(&gPreview, sizeof(gPreview));
     if (gPreview.valid) {
         // 미리보기가 안내 줄을 덮으므로, 이 줄에만 있던 경고는 뒤에 붙여 그대로 남긴다.
-        wchar_t note[80]; note[0] = 0;
+        wchar_t note[120]; note[0] = 0;
         if (ResolveOrderReversed(&gGame)) lstrcatW(note, L"  ·  역전 턴!");
         if (gPreview.uncertain) lstrcatW(note, L"  ·  읽기 오류로 확정 아님");
-        wchar_t result[200];
-        if (gPreview.playerDies)
+        wchar_t result[220];
+        if (gPreview.uncertain) {
+            // 재굴림을 빼고 돌린 예상이라 총합도 그대로는 맞지 않는다. 숫자를 그대로 두면
+            // 확정으로 읽히므로 전부 ? 로 가리고, 지금 굴림 기준의 결말만 가능성으로 덧붙인다.
+            if (gPreview.playerDies) lstrcatW(note, L"  ·  시스템 정지 가능");
+            else if (gPreview.combatEnds) lstrcatW(note, L"  ·  적 삭제 가능");
+            wsprintfW(result, L"예상 결과  적 체력 -?  ·  내 체력 -?  ·  획득 방어도 ?%s", note);
+        } else if (gPreview.playerDies)
             wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  →  시스템 정지%s",
                 gPreview.damageDealt, gPreview.damageTaken, note);
         else if (gPreview.combatEnds)
@@ -433,7 +443,7 @@ static void DrawCombat(HDC dc, int width, int height) {
         else
             wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d%s",
                 gPreview.damageDealt, gPreview.damageTaken, gPreview.blockGained, note);
-        Text(dc, 28, 382, result, gPreview.playerDies ? C_RED : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
+        Text(dc, 28, 382, result, gPreview.playerDies ? C_RED : gPreview.uncertain ? C_YELLOW : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
     } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
     else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);

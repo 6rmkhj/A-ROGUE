@@ -184,6 +184,7 @@ struct TurnPreview {
     int damageTaken;              // 내가 잃을 체력
     int blockGained;              // 이번 턴 얻는 방어도
     int slotOutput[SLOT_COUNT];   // 슬롯별 산출량
+    int slotUnknown[SLOT_COUNT];  // 읽기 오류로 확정할 수 없는 슬롯 (미리보기는 ? 로 표시)
     int combatEnds;               // 이 배치로 적이 전멸하는가
     int playerDies;               // 이 배치로 내가 쓰러지는가
     int uncertain;                // 읽기 오류로 확정할 수 없음
