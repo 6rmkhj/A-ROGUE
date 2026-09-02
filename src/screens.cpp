@@ -651,7 +651,8 @@ static const wchar_t* const DIE_BADGE[3] = {L"①", L"②", L"③"};
 
 static void DrawSlot(HDC dc, int slot) {
     RECT r = SlotRect(slot); int die = DieForSlotUI(slot); int hover = Inside(r, gMouse.x, gMouse.y);
-    int locked = SlotLockedThisTurn(&gGame, slot), lockedNext = SlotLockedNextTurn(&gGame, slot);
+    int locked = SlotLockedThisTurn(&gGame, slot) && !GimmickLockPending(slot);
+    int lockedNext = SlotLockedNextTurn(&gGame, slot);
     if (locked) {
         // 잠긴 슬롯: 배치를 받지 않으며 어둡고 붉게 오버레이한다.
         Panel(dc, r, RGB(38, 16, 18), C_RED);
@@ -1593,9 +1594,9 @@ static void DrawGuide(HDC dc, int width, int height) {
 // 되돌릴 수 없는 삭제만 700~1200.
 int GimmickFxDuration(int kind, int b) {
     switch (kind) {
-    case GIMMICK_ACCESS_DENIED:  return 400;
-    case GIMMICK_KERNEL_PANIC:   return 430;
-    case GIMMICK_BLUE_SCREEN:    return 700;    // 두 슬롯을 한꺼번에 닫는 강한 발동
+    case GIMMICK_ACCESS_DENIED:  return 780;
+    case GIMMICK_KERNEL_PANIC:   return 820;
+    case GIMMICK_BLUE_SCREEN:    return 1150;   // 두 슬롯을 한꺼번에 닫는 강한 발동
     case GIMMICK_RESTORE_POINT:  return 520;
     case GIMMICK_TAPE_LOOP:      return 300;    // 매턴 나올 수 있어 가장 짧다
     case GIMMICK_MASTER_BACKUP:  return 700;    // 런에 한 번뿐
@@ -1624,6 +1625,9 @@ static int GimmickFxAction(int kind) {
     case GIMMICK_OUT_OF_MEMORY:  return 440;
     case GIMMICK_TAPE_LOOP:      return 220;
     case GIMMICK_TIMEOUT:        return 200;
+    // 잠금 계열은 앞 절반을 신호 경로가 쓰므로 철문이 내려올 시간을 따로 준다.
+    case GIMMICK_ACCESS_DENIED:
+    case GIMMICK_KERNEL_PANIC:   return 560;
     default: return 280;
     }
 }
@@ -1774,7 +1778,15 @@ static void MarkBlueScreenShown() { gBsodFloor = gGame.floor; gBsodEncounter = g
 // ---- C:\ 잠금 -------------------------------------------------------------
 // 보스 카드에서 얇은 경로가 슬롯까지 내려오고, 도착한 슬롯의 좌우 테두리가
 // 가운데로 닫힌다. 슬롯 하나로 끝나는 사건이므로 화면은 건드리지 않는다.
-static void DrawLockShutter(HDC dc, int slot, int act, COLORREF fam) {
+// 셔터가 지금 얼마나 내려왔는가 (0~1000). 그리기와 잠금 표시 보류가 같은 계산을
+// 봐야 하므로 한 곳에 둔다.
+static int LockShutterFall(int act) {
+    if (act < 520) return 0;                       // 아직 신호가 슬롯에 닿는 중
+    return ShutterFall((act - 520) * 1000 / 480);
+}
+
+// 상부 박스에서 철문이 풀려 내려와 칸을 덮는다. 층이 깊을수록 두꺼운 문이 온다.
+static void DrawLockShutter(HDC dc, int slot, int act, COLORREF fam, int style, const wchar_t* label) {
     if (slot < 0 || slot >= SLOT_COUNT) return;
     RECT r = SlotRect(slot);
     int boss = BossCardIndex();
@@ -1785,18 +1797,33 @@ static void DrawLockShutter(HDC dc, int slot, int act, COLORREF fam) {
         DrawSignalPath(dc, from, to, CFX_ROUTE_Y, act * 1000 / 520, 2, C_RED, 10, 0);
         return;
     }
-    int close = (r.right - r.left) / 2 * (act - 520) / 480;
-    if (close > (r.right - r.left) / 2) close = (r.right - r.left) / 2;
-    Fill(dc, MakeRect(r.left, r.top, r.left + close, r.bottom), RGB(48, 12, 14));
-    Fill(dc, MakeRect(r.right - close, r.top, r.right, r.bottom), RGB(48, 12, 14));
-    Fill(dc, MakeRect(r.left + close - 2, r.top, r.left + close, r.bottom), C_RED);
-    Fill(dc, MakeRect(r.right - close, r.top, r.right - close + 2, r.bottom), C_RED);
-    if (act >= 1000) {
-        Fill(dc, r, RGB(48, 12, 14));
-        Outline(dc, r, C_RED, 3);
-        TextRect(dc, r, L"ACCESS DENIED", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    int fall = LockShutterFall(act);
+    int height = r.bottom - r.top;
+    DrawShutter(dc, r, style, Lerp(0, height, fall), fall < 1000, fam);
+    if (fall >= 880) {
+        // 셔터에 붙은 안내판. 실제 닫힌 상가의 종이 공고와 같은 자리다.
+        RECT sign = MakeRect(r.left + 12, r.top + 46, r.right - 12, r.top + 76);
+        Fill(dc, sign, RGB(18, 9, 11));
+        Outline(dc, sign, C_RED, 2);
+        TextRect(dc, sign, label, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    (void)fam;
+}
+
+// 계산 재생 중이거나 셔터가 아직 안 내려왔으면 잠금 표시를 미룬다. 규칙은 이미
+// 잠겨 있지만, 화면에서는 철문이 닿는 그 순간에 잠겨야 연출이 사건이 된다.
+int GimmickLockPending(int slot) {
+    int kind = gGame.boss.firedFx;
+    if (kind != GIMMICK_ACCESS_DENIED && kind != GIMMICK_KERNEL_PANIC && kind != GIMMICK_BLUE_SCREEN) return 0;
+    if (gGame.boss.fxA != slot && gGame.boss.fxB != slot) return 0;
+    if (gTurnTraceActive) return 1;                    // 재생 중 — 아직 벌어지지 않은 일이다
+    if (GimmickFxKind() != kind) return 0;             // 연출이 끝났다 — 이제 잠긴 게 맞다
+    int t = GimmickFxElapsed();
+    int dur = GimmickFxDuration(kind, GimmickFxB());
+    int actionMs = GimmickFxAction(kind);
+    if (actionMs > dur) actionMs = dur;
+    if (actionMs <= 0) return 0;
+    int act = t < actionMs ? t * 1000 / actionMs : 1000;
+    return LockShutterFall(act) < 880;
 }
 
 // ---- D:\ 복원 -------------------------------------------------------------
@@ -1966,10 +1993,10 @@ void DrawGimmickFx(HDC dc) {
 
     // ---- C:\ 잠금 : 닫힌다 -------------------------------------------------
     case GIMMICK_ACCESS_DENIED:
-        DrawLockShutter(dc, a, act, fam);
+        DrawLockShutter(dc, a, act, fam, SHUTTER_MESH, L"ACCESS DENIED");
         break;
     case GIMMICK_KERNEL_PANIC: {
-        DrawLockShutter(dc, a, act, fam);
+        DrawLockShutter(dc, a, act, fam, SHUTTER_CORR, L"KERNEL PANIC");
         // 잠긴 슬롯에서만 균열이 뻗는다. 화면 전체로는 번지지 않는다.
         if (a >= 0 && a < SLOT_COUNT && act >= 520 && FxDecorOn()) {
             RECT r = SlotRect(a);
@@ -1992,8 +2019,8 @@ void DrawGimmickFx(HDC dc) {
             global = 1;
         } else {
             if (t >= 420) MarkBlueScreenShown();
-            DrawLockShutter(dc, a, act, fam);
-            DrawLockShutter(dc, b, act, fam);
+            DrawLockShutter(dc, a, act, fam, SHUTTER_SLAT, L"HALTED");
+            DrawLockShutter(dc, b, act, fam, SHUTTER_SLAT, L"HALTED");
         }
         break;
     }

@@ -85,6 +85,8 @@ int GimmickFxA();           // 대상 1 (슬롯·주사위·면 또는 수치)
 int GimmickFxB();           // 대상 2
 int GimmickFxDuration(int kind, int b);   // 그 기믹 연출의 총 길이 ms
 void DrawGimmickFx(HDC dc);
+// 철문이 아직 안 내려왔으면 1. 잠금 표시를 그때까지 미루는 데 쓴다.
+int GimmickLockPending(int slot);
 
 // ---- 전투 시각 이벤트 재생 -------------------------------------------------
 // game.cpp가 남긴 CombatFxEvent를 계산 줄 번호에 맞춰 되짚는다.
