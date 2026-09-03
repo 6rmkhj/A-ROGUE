@@ -1594,24 +1594,24 @@ static void DrawGuide(HDC dc, int width, int height) {
 // 되돌릴 수 없는 삭제만 700~1200.
 int GimmickFxDuration(int kind, int b) {
     switch (kind) {
-    case GIMMICK_ACCESS_DENIED:  return 1100;
-    case GIMMICK_KERNEL_PANIC:   return 1250;
-    case GIMMICK_BLUE_SCREEN:    return 2000;   // 전면 BSOD 뒤 두 칸에 철문
-    case GIMMICK_RESTORE_POINT:  return 1100;
-    case GIMMICK_TAPE_LOOP:      return 620;    // 매턴 나올 수 있어 가장 짧다
-    case GIMMICK_MASTER_BACKUP:  return 1900;   // 런에 한 번뿐
-    case GIMMICK_AUTOPLAY:       return 900;
-    case GIMMICK_UNSAFE_EJECT:   return 1050;
-    case GIMMICK_NO_MEDIA:       return b == 1 ? 900 : 700;
-    case GIMMICK_PROXY:          return 1100;
-    case GIMMICK_ROUTING_LOOP:   return 1250;
-    case GIMMICK_TIMEOUT:        return b ? 1500 : 560;
-    case GIMMICK_LEAK:           return 950;
-    case GIMMICK_HEAP_OVERFLOW:  return 1100;
-    case GIMMICK_OUT_OF_MEMORY:  return 1500;
-    case GIMMICK_SAMPLE13:       return 1050;
-    case GIMMICK_SANDBOX_BREACH: return 1050;
-    case GIMMICK_ZERO_DAY:       return 2200;   // 되돌릴 수 없는 유일한 기믹
+    case GIMMICK_ACCESS_DENIED:  return 2000;
+    case GIMMICK_KERNEL_PANIC:   return 2250;
+    case GIMMICK_BLUE_SCREEN:    return 3400;   // 전면 BSOD 뒤 두 칸에 철문
+    case GIMMICK_RESTORE_POINT:  return 2000;
+    case GIMMICK_TAPE_LOOP:      return 900;    // 매턴 나올 수 있어 가장 짧다
+    case GIMMICK_MASTER_BACKUP:  return 3200;   // 런에 한 번뿐
+    case GIMMICK_AUTOPLAY:       return 1600;
+    case GIMMICK_UNSAFE_EJECT:   return 1900;
+    case GIMMICK_NO_MEDIA:       return b == 1 ? 1500 : 1200;
+    case GIMMICK_PROXY:          return 2000;
+    case GIMMICK_ROUTING_LOOP:   return 2250;
+    case GIMMICK_TIMEOUT:        return b ? 2600 : 900;
+    case GIMMICK_LEAK:           return 1700;
+    case GIMMICK_HEAP_OVERFLOW:  return 2000;
+    case GIMMICK_OUT_OF_MEMORY:  return 2700;
+    case GIMMICK_SAMPLE13:       return 1900;
+    case GIMMICK_SANDBOX_BREACH: return 1900;
+    case GIMMICK_ZERO_DAY:       return 3800;   // 되돌릴 수 없는 유일한 기믹
     default: return 0;
     }
 }
@@ -1619,47 +1619,47 @@ int GimmickFxDuration(int kind, int b) {
 // 동작 자체에 쓰는 시간. 나머지는 도장·배너가 걷히는 짧은 여운이다.
 static int GimmickFxAction(int kind) {
     switch (kind) {
-    case GIMMICK_ACCESS_DENIED:  return 620;
-    case GIMMICK_KERNEL_PANIC:   return 700;
-    case GIMMICK_BLUE_SCREEN:    return 1400;
-    case GIMMICK_RESTORE_POINT:  return 640;
-    case GIMMICK_TAPE_LOOP:      return 380;
-    case GIMMICK_MASTER_BACKUP:  return 1000;
-    case GIMMICK_AUTOPLAY:       return 480;
-    case GIMMICK_UNSAFE_EJECT:   return 560;
-    case GIMMICK_NO_MEDIA:       return 420;
-    case GIMMICK_PROXY:          return 700;
-    case GIMMICK_ROUTING_LOOP:   return 760;
-    case GIMMICK_TIMEOUT:        return 300;
-    case GIMMICK_LEAK:           return 520;
-    case GIMMICK_HEAP_OVERFLOW:  return 600;
-    case GIMMICK_OUT_OF_MEMORY:  return 900;
+    case GIMMICK_ACCESS_DENIED:  return 1100;
+    case GIMMICK_KERNEL_PANIC:   return 1250;
+    case GIMMICK_BLUE_SCREEN:    return 2400;
+    case GIMMICK_RESTORE_POINT:  return 1150;
+    case GIMMICK_TAPE_LOOP:      return 560;
+    case GIMMICK_MASTER_BACKUP:  return 1700;
+    case GIMMICK_AUTOPLAY:       return 860;
+    case GIMMICK_UNSAFE_EJECT:   return 1000;
+    case GIMMICK_NO_MEDIA:       return 760;
+    case GIMMICK_PROXY:          return 1250;
+    case GIMMICK_ROUTING_LOOP:   return 1350;
+    case GIMMICK_TIMEOUT:        return 540;
+    case GIMMICK_LEAK:           return 940;
+    case GIMMICK_HEAP_OVERFLOW:  return 1080;
+    case GIMMICK_OUT_OF_MEMORY:  return 1600;
     case GIMMICK_SAMPLE13:
-    case GIMMICK_SANDBOX_BREACH: return 600;
-    case GIMMICK_ZERO_DAY:       return 1100;
-    default: return 500;
+    case GIMMICK_SANDBOX_BREACH: return 1080;
+    case GIMMICK_ZERO_DAY:       return 1900;
+    default: return 900;
     }
 }
 
 // 히트스톱 시점. 철문이 닿고, 봉인이 내려앉고, 되감기 머리가 도착하는 그 순간이다.
 int GimmickFxImpactAt(int kind, int b) {
     switch (kind) {
-    case GIMMICK_ACCESS_DENIED:  return 554;
-    case GIMMICK_KERNEL_PANIC:   return 626;
-    case GIMMICK_BLUE_SCREEN:    return 40;
-    case GIMMICK_RESTORE_POINT:  return 640;
-    case GIMMICK_MASTER_BACKUP:  return 120;
-    case GIMMICK_AUTOPLAY:       return 200;
-    case GIMMICK_UNSAFE_EJECT:   return 300;
-    case GIMMICK_PROXY:          return 280;
-    case GIMMICK_ROUTING_LOOP:   return 300;
-    case GIMMICK_TIMEOUT:        return b ? 210 : 0;
-    case GIMMICK_LEAK:           return 400;
-    case GIMMICK_HEAP_OVERFLOW:  return 480;
-    case GIMMICK_OUT_OF_MEMORY:  return 540;
+    case GIMMICK_ACCESS_DENIED:  return 983;    // 철문 착지 = 동작의 89%
+    case GIMMICK_KERNEL_PANIC:   return 1118;
+    case GIMMICK_BLUE_SCREEN:    return 60;
+    case GIMMICK_RESTORE_POINT:  return 1150;
+    case GIMMICK_MASTER_BACKUP:  return 200;
+    case GIMMICK_AUTOPLAY:       return 360;
+    case GIMMICK_UNSAFE_EJECT:   return 540;
+    case GIMMICK_PROXY:          return 500;
+    case GIMMICK_ROUTING_LOOP:   return 540;
+    case GIMMICK_TIMEOUT:        return b ? 380 : 0;
+    case GIMMICK_LEAK:           return 720;
+    case GIMMICK_HEAP_OVERFLOW:  return 860;
+    case GIMMICK_OUT_OF_MEMORY:  return 970;
     case GIMMICK_SAMPLE13:
-    case GIMMICK_SANDBOX_BREACH: return 420;
-    case GIMMICK_ZERO_DAY:       return 462;
+    case GIMMICK_SANDBOX_BREACH: return 760;
+    case GIMMICK_ZERO_DAY:       return 800;
     default: return 0;                          // TAPE.LOOP · NO.MEDIA는 매턴이라 멈추지 않는다
     }
 }
@@ -2094,9 +2094,9 @@ void DrawGimmickFx(HDC dc) {
     RECT card = EnemyRect(boss < 0 ? 0 : boss);
 
     // 임팩트 순간의 공용 처리: 짧은 섬광과 가장자리 글로우. 세기는 접근성 모드를 따른다.
-    if (sinceImpact >= 0 && sinceImpact < 180 && FxDecorOn()) {
-        DrawFxImpact(dc, screen, sinceImpact, 120, fam);
-        DrawEdgeGlow(dc, screen, fam, FxScale(1000 - sinceImpact * 1000 / 180), 14);
+    if (sinceImpact >= 0 && sinceImpact < 300 && FxDecorOn()) {
+        DrawFxImpact(dc, screen, sinceImpact, 170, fam);
+        DrawEdgeGlow(dc, screen, fam, FxScale(1000 - sinceImpact * 1000 / 300), 14);
     }
 
     switch (kind) {
@@ -2112,7 +2112,7 @@ void DrawGimmickFx(HDC dc) {
         if (a >= 0 && a < SLOT_COUNT && sinceImpact >= 0) {
             RECT r = SlotRect(a);
             DrawFxShardsStaggered(dc, (r.left + r.right) / 2, r.bottom - 6, sinceImpact, 380, 18, a * 7 + 3, C_RED, 9);
-            if (sinceImpact < 90) Fill(dc, MakeRect(r.left - 2, r.bottom - 3, r.right + 2, r.bottom + 4), MixColor(C_BG, RGB(255, 210, 200), 80 - sinceImpact * 80 / 90));
+            if (sinceImpact < 160) Fill(dc, MakeRect(r.left - 2, r.bottom - 3, r.right + 2, r.bottom + 4), MixColor(C_BG, RGB(255, 210, 200), 80 - sinceImpact * 80 / 160));
         }
         break;
     }
@@ -2131,13 +2131,13 @@ void DrawGimmickFx(HDC dc) {
             DrawLockShutter(dc, a, act, fam, SHUTTER_CORR, L"KERNEL PANIC");
             if (sinceImpact >= 0) {
                 DrawFxShardsStaggered(dc, ox, oy, sinceImpact, 460, 30, a * 11 + 5, C_RED, 7);
-                if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(sinceImpact < 120 ? 14 - 14 * sinceImpact / 120 : 0), kind);
+                if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(sinceImpact < 220 ? 14 - 14 * sinceImpact / 220 : 0), kind);
             }
         }
         break;
     }
     case GIMMICK_BLUE_SCREEN: {
-        int takeover = BlueScreenTakeoverAllowed() && t < 700;
+        int takeover = BlueScreenTakeoverAllowed() && t < 1200;
         if (takeover) {
             Fill(dc, screen, RGB(0, 26, 132));
             // 위에서 아래로 훑는 주사선 두 줄과 재부팅 깜빡임
@@ -2153,19 +2153,19 @@ void DrawGimmickFx(HDC dc) {
                 RGB(200, 212, 248), gFontMedium, DT_CENTER | DT_WORDBREAK);
             if ((t / 380) % 2 == 0)
                 TextRect(dc, MakeRect(0, 500, BASE_WIDTH, 530), L"계속하려면 아무 키나 누르십시오 _", RGB(170, 186, 236), gFontSmall, DT_CENTER | DT_SINGLELINE);
-            if (t < 160 && (t / 40) % 2 == 0) Fill(dc, screen, RGB(210, 222, 255));
-            if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(t < 200 ? 16 - 16 * t / 200 : 0), kind);
+            if (t < 260 && (t / 55) % 2 == 0) Fill(dc, screen, RGB(210, 222, 255));
+            if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(t < 340 ? 16 - 16 * t / 340 : 0), kind);
             global = 1;
         } else {
-            if (t >= 700) MarkBlueScreenShown();
+            if (t >= 1200) MarkBlueScreenShown();
             // BSOD가 걷힌 뒤 두 칸에 가장 두꺼운 문이 함께 내려온다
-            int shutterAct = Track(t, BlueScreenTakeoverAllowed() ? 700 : 0, actionMs);
+            int shutterAct = Track(t, BlueScreenTakeoverAllowed() ? 1200 : 0, actionMs);
             int lockAct = 520 + shutterAct * 480 / 1000;
             DrawLockShutter(dc, a, lockAct, fam, SHUTTER_SLAT, L"HALTED");
             DrawLockShutter(dc, b, lockAct, fam, SHUTTER_SLAT, L"HALTED");
             int fall = LockShutterFall(lockAct);
             if (fall >= 880) {
-                int land = Track(t, actionMs - 60, actionMs + 340);
+                int land = Track(t, actionMs - 60, actionMs + 560);
                 for (int i = 0; i < 2; ++i) {
                     int s = i == 0 ? a : b;
                     if (s < 0 || s >= SLOT_COUNT) continue;
@@ -2199,15 +2199,15 @@ void DrawGimmickFx(HDC dc) {
     case GIMMICK_MASTER_BACKUP: {
         if (FxDecorOn() && FxSnapshotHeld()) {
             // 판 전체의 잔상이 좌우로 어긋난 채 남았다가 걷힌다
-            int ghost = Lerp(14, 0, EaseOutCubic(Track(t, 0, 900)));
+            int ghost = Lerp(14, 0, EaseOutCubic(Track(t, 0, 1500)));
             FxSnapshotBlit(dc, screen, -ghost, 0, 30);
             FxSnapshotBlit(dc, screen, ghost, 0, 20);
-            DrawFxTear(dc, screen, t, FxScale(t < 260 ? 22 - 22 * t / 260 : 0), kind);
+            DrawFxTear(dc, screen, t, FxScale(t < 440 ? 22 - 22 * t / 440 : 0), kind);
         }
         DrawBossSquash(dc, 1000 - 80 * (act < 500 ? act : 1000 - act) / 500,
                            1000 + 140 * (act < 500 ? act : 1000 - act) / 500, sinceImpact >= 0 && sinceImpact < 120 ? 600 : 0);
         DrawRestoreRewind(dc, act, fam);
-        DrawFxWave(dc, (card.top + card.bottom) / 2, sinceImpact, 460, fam);
+        DrawFxWave(dc, (card.top + card.bottom) / 2, sinceImpact, 760, fam);
         DrawFxBanner(dc, kind, t, dur, fam);
         global = 1;
         break;
@@ -2297,7 +2297,7 @@ void DrawGimmickFx(HDC dc) {
         wchar_t num[16]; wsprintfW(num, L"%d", a < 0 ? 0 : a);
         COLORREF col = b ? C_RED : (a <= 1 ? C_YELLOW : fam);
         // 숫자가 오버슈트로 꽂혔다 자리를 잡는다
-        int pop = EaseOutBack(Track(t, 0, 220));
+        int pop = EaseOutBack(Track(t, 0, 380));
         int grow = Lerp(46, 0, pop);
         RECT box = MakeRect(card.left + 6 - grow / 2, card.top + 62 - grow / 2, card.right - 6 + grow / 2, card.top + 140 + grow / 2);
         int fade = act < 700 ? 1000 : 1000 - (act - 700) * 1000 / 300;
@@ -2306,9 +2306,9 @@ void DrawGimmickFx(HDC dc) {
         TextRect(dc, box, num, MixColor(C_BG, col, fade / 10), gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (b) {
             // 0에 닿았다: 정지 프레임 뒤 붉은 배선 재구성
-            if (sinceImpact >= 0 && sinceImpact < 140 && FxDecorOn()) DrawScanlines(dc, screen);
+            if (sinceImpact >= 0 && sinceImpact < 240 && FxDecorOn()) DrawScanlines(dc, screen);
             DrawRoutingBus(dc, ROUTE_ORDER_REVERSED, EaseOutCubic(act), C_RED, 0);
-            DrawOrderScramble(dc, t, 200, 600, 1, C_RED);
+            DrawOrderScramble(dc, t, 350, 1100, 1, C_RED);
             if (sinceImpact >= 0) DrawFxShardsStaggered(dc, (box.left + box.right) / 2, (box.top + box.bottom) / 2, sinceImpact, 400, 22, 41, C_RED, 8);
             global = 1;
         } else global = 1;
@@ -2404,7 +2404,7 @@ void DrawGimmickFx(HDC dc) {
             int after = t - actionMs * 700 / 1000;
             DrawFxShardsStaggered(dc, (r.left + r.right) / 2, r.top + 50, after, 520, 34, 77, C_RED, 6);
             DrawFxWave(dc, (r.top + r.bottom) / 2, after, 420, C_RED);
-            if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(after < 160 ? 12 - 12 * after / 160 : 0), kind);
+            if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(after < 280 ? 12 - 12 * after / 280 : 0), kind);
         }
         DrawFxBanner(dc, kind, t, dur, fam);
         break;

@@ -319,7 +319,7 @@ static int gFxShakePeak;
 int GimmickFxKind() { return gFxActive ? gFxKind : 0; }
 // 히트스톱. 착지 시점에 시간을 잠깐 얼린다. 모든 트랙이 이 값을 읽으므로
 // 여기 한 곳에서 18종 전부가 함께 멈춘다. 총 벽시계 길이는 그만큼 늘어난다.
-#define FX_HITSTOP_MS 70
+#define FX_HITSTOP_MS 110
 static int gFxImpactPlayed;
 int GimmickFxElapsed() {
     if (!gFxActive) return 0;
