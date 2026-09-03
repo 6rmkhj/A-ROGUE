@@ -2433,8 +2433,18 @@ void PaintGame(HWND window) {
     int clientWidth = client.right, clientHeight = client.bottom;
     if (clientWidth <= 0 || clientHeight <= 0) { EndPaint(window, &paint); return; }
 
-    // 1단계: 항상 고정된 BASE_WIDTH x BASE_HEIGHT 캔버스에 그린다 - 기존 좌표 계산은 전부 그대로 둔다.
-    HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, BASE_WIDTH, BASE_HEIGHT); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
+    // 1단계: 논리 좌표계는 BASE_WIDTH x BASE_HEIGHT 그대로 두고, 실제 비트맵만
+    // 화면에 실릴 크기로 만든다. 매핑 모드가 좌표를 대신 늘려 주므로 기존 좌표
+    // 계산과 히트 판정은 한 줄도 바꾸지 않는다. 확대가 사라져 글자와 선이 또렷해진다.
+    float scale; int offsetX, offsetY; ComputeCanvasTransform(clientWidth, clientHeight, &scale, &offsetX, &offsetY);
+    if (scale > RENDER_SCALE_MAX) scale = RENDER_SCALE_MAX;
+    int deviceW = (int)(BASE_WIDTH * scale), deviceH = (int)(BASE_HEIGHT * scale);
+    if (deviceW < 1) deviceW = 1;
+    if (deviceH < 1) deviceH = 1;
+    HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, deviceW, deviceH); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
+    SetMapMode(canvas, MM_ANISOTROPIC);
+    SetWindowExtEx(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(canvas, deviceW, deviceH, 0);
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
     if (gTurnTraceActive || gDeathActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -2453,7 +2463,7 @@ void PaintGame(HWND window) {
 
     if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive) {
         // 연출이 시작되는 첫 프레임의 판을 붙잡아 둔다. 잔상·트레일이 여기서 나온다.
-        if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas);
+        if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawGimmickFx(canvas);
     }
     if (GimmickFxKind() <= 0 && FxSnapshotHeld()) FxSnapshotRelease();
@@ -2479,12 +2489,18 @@ void PaintGame(HWND window) {
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
     HDC composite = CreateCompatibleDC(dc); HBITMAP compositeBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight); HBITMAP oldComposite = (HBITMAP)SelectObject(composite, compositeBitmap);
-    float scale; int offsetX, offsetY; ComputeCanvasTransform(clientWidth, clientHeight, &scale, &offsetX, &offsetY);
-    int scaledWidth = (int)(BASE_WIDTH * scale), scaledHeight = (int)(BASE_HEIGHT * scale);
+    float outScale; int outX, outY; ComputeCanvasTransform(clientWidth, clientHeight, &outScale, &outX, &outY);
+    int scaledWidth = (int)(BASE_WIDTH * outScale), scaledHeight = (int)(BASE_HEIGHT * outScale);
     Fill(composite, client, C_BG);
     SetStretchBltMode(composite, HALFTONE); SetBrushOrgEx(composite, 0, 0, 0);
-    int shakeX = (int)(ScreenShakeX() * scale), shakeY = (int)(ScreenShakeY() * scale);
-    StretchBlt(composite, offsetX + shakeX, offsetY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, BASE_WIDTH, BASE_HEIGHT, SRCCOPY);
+    int shakeX = (int)(ScreenShakeX() * outScale), shakeY = (int)(ScreenShakeY() * outScale);
+    // 캔버스를 장치 좌표로 되돌려 픽셀 대 픽셀로 옮긴다. 화면과 크기가 같으면
+    // 확대가 일어나지 않고, 상한에 걸린 경우에만 남은 몫을 늘린다.
+    SetMapMode(canvas, MM_TEXT);
+    if (deviceW == scaledWidth && deviceH == scaledHeight)
+        BitBlt(composite, outX + shakeX, outY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, SRCCOPY);
+    else
+        StretchBlt(composite, outX + shakeX, outY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, deviceW, deviceH, SRCCOPY);
 
     // 3단계: 완성된 프레임을 화면에 단 한 번에 복사한다.
     BitBlt(dc, 0, 0, clientWidth, clientHeight, composite, 0, 0, SRCCOPY);
