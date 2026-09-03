@@ -317,7 +317,18 @@ static DWORD gFxStart, gFxShakeAt;
 static int gFxShakePeak;
 
 int GimmickFxKind() { return gFxActive ? gFxKind : 0; }
-int GimmickFxElapsed() { return gFxActive ? (int)(GetTickCount() - gFxStart) : 0; }
+// 히트스톱. 착지 시점에 시간을 잠깐 얼린다. 모든 트랙이 이 값을 읽으므로
+// 여기 한 곳에서 18종 전부가 함께 멈춘다. 총 벽시계 길이는 그만큼 늘어난다.
+#define FX_HITSTOP_MS 110
+static int gFxImpactPlayed;
+int GimmickFxElapsed() {
+    if (!gFxActive) return 0;
+    int raw = (int)(GetTickCount() - gFxStart);
+    int at = GimmickFxImpactAt(gFxKind, gFxB);
+    if (at <= 0 || raw < at) return raw;
+    if (raw < at + FX_HITSTOP_MS) return at;
+    return raw - FX_HITSTOP_MS;
+}
 int GimmickFxA() { return gFxA; }
 int GimmickFxB() { return gFxB; }
 
@@ -332,11 +343,12 @@ static void BeginGimmickFx(int kind, int a, int b) {
     // 같은 계열 안에서도 층이 깊을수록 낮게 울린다.
     int depth = (kind - 1) % 3;
     PlaySfxPitched(FAMILY_SFX[family], depth == 0 ? 2 : depth == 1 ? 1 : 0);
-    gFxShakeAt = gFxStart;
-    // 일반 기믹은 화면을 흔들지 않는다. 매턴 반복되는 사건이 판을 흔들면
-    // 정말 판을 바꾸는 발동과 구별되지 않는다.
-    gFxShakePeak = kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
-                || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 7 : 0;
+    gFxImpactPlayed = 0;
+    // 흔들림은 임팩트(히트스톱) 시점에 건다. 매턴 반복되는 것들은 흔들지 않는다.
+    int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || (kind == GIMMICK_TIMEOUT && !b);
+    gFxShakeAt = 0;
+    gFxShakePeak = perTurn ? 0 : (kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
+                || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5);
     SetTimer(gWindow, 8, 16, 0);
 }
 
@@ -348,7 +360,7 @@ static void FinishGimmickFx() {
 }
 
 static int GimmickShakeAmplitude() {
-    if (!gFxActive || gFxShakePeak <= 0) return 0;
+    if (!gFxActive || gFxShakePeak <= 0 || !gFxShakeAt) return 0;
     int since = (int)(GetTickCount() - gFxShakeAt);
     if (since < 0 || since >= SHAKE_MS) return 0;
     return FxScale(gFxShakePeak * (SHAKE_MS - since) / SHAKE_MS);
@@ -778,6 +790,13 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 8u) {
+            // 임팩트 시점을 지나는 순간 한 번: 흔들림 시작 + 둔탁한 타격음
+            int at = GimmickFxImpactAt(gFxKind, gFxB);
+            if (!gFxImpactPlayed && at > 0 && (int)(GetTickCount() - gFxStart) >= at) {
+                gFxImpactPlayed = 1;
+                gFxShakeAt = GetTickCount();
+                if (gFxShakePeak > 0) PlaySfxPitched(SFX_PLAYER_HIT, gFxShakePeak >= 9 ? 0 : 3);
+            }
             if (GimmickFxElapsed() >= GimmickFxDuration(gFxKind, gFxB)) FinishGimmickFx();
             else InvalidateRect(window, 0, FALSE);
         }

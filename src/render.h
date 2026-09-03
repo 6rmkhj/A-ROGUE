@@ -32,6 +32,39 @@ void Bar(HDC dc, const RECT& rect, int value, int maximum, COLORREF color);
 int TextWidth(HDC dc, const wchar_t* value, HFONT font);
 COLORREF MixColor(COLORREF from, COLORREF to, int amount);
 
+// ---- 애니메이션 어휘 -------------------------------------------------------
+// 정수 0~1000만 쓴다. 프레임이 시간의 순수 함수라는 규약을 지키기 위해 상태를
+// 들고 다니지 않는다.
+int Track(int t, int fromMs, int toMs);   // 구간 진행도. 구간 밖은 0/1000으로 물린다
+int Lerp(int a, int b, int p);
+int EaseOutCubic(int p);
+int EaseInCubic(int p);
+int ShutterFall(int p);                   // 가속 낙하 뒤 두 번 작게 튀는 셔터 곡선
+int EaseOutBack(int p);                   // 목표를 지나쳤다 되돌아온다
+int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
+
+// ---- 프레임 스냅샷 ---------------------------------------------------------
+// 연출이 시작되는 순간의 캔버스를 붙잡아 두고, 연출 동안 어긋나게·옅게 겹친다.
+// 잔상·트레일·데이터모싱이 전부 여기서 나온다. 게임 상태가 아니라 그리기 버퍼다.
+void FxSnapshotCapture(HDC canvas);
+int  FxSnapshotHeld();
+void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
+void FxSnapshotRelease();
+void FxSnapshotDestroy();
+
+// ---- 스프라이트 변형 -------------------------------------------------------
+// DrawSpriteArt는 정수 균일 배율이라 늘어나지 않는다. 작은 오프스크린에 그린 뒤
+// StretchBlt로 늘려 스쿼시/스트레치를 낸다. 바닥을 기준으로 변한다 (천분율).
+void DrawSpriteStretched(HDC dc, const RECT& box, int kind, int alive, int flash, int sxMille, int syMille);
+
+// ---- 셔터 -----------------------------------------------------------------
+// 슬롯 하나를 덮으며 내려오는 철문. descended는 내려온 픽셀 높이다.
+// 무늬는 슬롯 위쪽에 고정되므로 늘어나지 않고 아래로 드러난다.
+#define SHUTTER_MESH  0   // 마름모 격자 — 안이 비친다
+#define SHUTTER_CORR  1   // 골판 — 완전히 막는다
+#define SHUTTER_SLAT  2   // 단열 슬랫 — 가장 두껍다
+void DrawShutter(HDC dc, const RECT& slot, int style, int descended, int rattle, COLORREF tint);
+
 void FormatFace(const Face* face, wchar_t* out);
 COLORREF FaceColor(const Face* face);
 void AppendStatus(wchar_t* output, const wchar_t* status);

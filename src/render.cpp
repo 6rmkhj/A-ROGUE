@@ -17,6 +17,7 @@ void CreateRenderFonts() {
 }
 
 void DestroyRenderFonts() {
+    FxSnapshotDestroy();
     if (gFontSmall) DeleteObject(gFontSmall);
     if (gFontMedium) DeleteObject(gFontMedium);
     if (gFontLarge) DeleteObject(gFontLarge);
@@ -111,6 +112,188 @@ int TextWidth(HDC dc, const wchar_t* value, HFONT font) {
     int ok = GetTextExtentPoint32W(dc, value, lstrlenW(value), &size);
     SelectObject(dc, old);
     return ok ? size.cx : 0;
+}
+
+// ---- 애니메이션 어휘 -------------------------------------------------------
+
+int Track(int t, int fromMs, int toMs) {
+    if (toMs <= fromMs) return t >= toMs ? 1000 : 0;
+    if (t <= fromMs) return 0;
+    if (t >= toMs) return 1000;
+    return (t - fromMs) * 1000 / (toMs - fromMs);
+}
+
+int Lerp(int a, int b, int p) { return a + (b - a) * p / 1000; }
+
+int EaseOutCubic(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    int q = 1000 - p;
+    return 1000 - q * q / 1000 * q / 1000;
+}
+
+int EaseInCubic(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    return p * p / 1000 * p / 1000;
+}
+
+// 셔터는 천천히 풀렸다 가속해 바닥을 치고, 반동으로 두 번 작게 튄 뒤 멈춘다.
+int ShutterFall(int p) {
+    if (p <= 0) return 0;
+    if (p >= 1000) return 1000;
+    if (p < 780) return EaseInCubic(p * 1000 / 780);
+    int q = (p - 780) * 1000 / 220;              // 착지 후 반동 구간
+    int amp = 55 * (1000 - q) / 1000;            // 진폭이 잦아든다
+    int wave = q < 500 ? q * 2 : (1000 - q) * 2; // 0 → 1000 → 0
+    return 1000 - amp * wave / 1000;
+}
+
+int EaseOutBack(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    int q = p - 1000;                                  // -1000..0
+    // 1 + 2.7 q^3 + 1.7 q^2  (q는 -1..0)
+    long long q2 = (long long)q * q / 1000, q3 = q2 * q / 1000;
+    long long v = 1000 + 2700 * q3 / 1000 + 1700 * q2 / 1000;
+    return (int)v;
+}
+
+int EaseOutBounce(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    if (p < 364) return 7563 * p / 1000 * p / 1000;
+    if (p < 727) { int q = p - 545; return 7563 * q / 1000 * q / 1000 + 750; }
+    if (p < 909) { int q = p - 818; return 7563 * q / 1000 * q / 1000 + 938; }
+    int q = p - 955; return 7563 * q / 1000 * q / 1000 + 984;
+}
+
+// ---- 프레임 스냅샷 ---------------------------------------------------------
+static HDC gSnapDc; static HBITMAP gSnapBmp, gSnapOld; static int gSnapHeld;
+
+void FxSnapshotCapture(HDC canvas) {
+    if (!gSnapDc) {
+        gSnapDc = CreateCompatibleDC(canvas);
+        gSnapBmp = CreateCompatibleBitmap(canvas, BASE_WIDTH, BASE_HEIGHT);
+        gSnapOld = (HBITMAP)SelectObject(gSnapDc, gSnapBmp);
+    }
+    if (!gSnapDc) return;
+    BitBlt(gSnapDc, 0, 0, BASE_WIDTH, BASE_HEIGHT, canvas, 0, 0, SRCCOPY);
+    gSnapHeld = 1;
+}
+int FxSnapshotHeld() { return gSnapHeld; }
+void FxSnapshotRelease() { gSnapHeld = 0; }
+void FxSnapshotDestroy() {
+    if (gSnapDc) { SelectObject(gSnapDc, gSnapOld); DeleteDC(gSnapDc); gSnapDc = 0; }
+    if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
+    gSnapHeld = 0;
+}
+// keepPercent가 낮을수록 줄을 성기게 가져와 옅어진다. 알파 없이 줄 간격으로 낸다.
+void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent) {
+    if (!gSnapHeld || !gSnapDc || keepPercent <= 0) return;
+    int step = keepPercent >= 90 ? 1 : keepPercent >= 60 ? 2 : keepPercent >= 35 ? 3 : keepPercent >= 15 ? 5 : 8;
+    int w = area.right - area.left;
+    if (w <= 0) return;
+    for (int y = area.top; y < area.bottom; y += step) {
+        int sy = y - dy;
+        if (sy < 0 || sy >= BASE_HEIGHT) continue;
+        BitBlt(dc, area.left + dx, y, w, 1, gSnapDc, area.left, sy, SRCCOPY);
+    }
+}
+
+// ---- 스프라이트 변형 -------------------------------------------------------
+void DrawSpriteStretched(HDC dc, const RECT& box, int kind, int alive, int flash, int sxMille, int syMille) {
+    const int S = 7, side = SPRITE_SIZE * S;
+    HDC mem = CreateCompatibleDC(dc);
+    if (!mem) return;
+    HBITMAP bmp = CreateCompatibleBitmap(dc, side, side);
+    if (!bmp) { DeleteDC(mem); return; }
+    HBITMAP old = (HBITMAP)SelectObject(mem, bmp);
+    RECT full = MakeRect(0, 0, side, side);
+    Fill(mem, full, RGB(11, 17, 24));
+    DrawSpriteArt(mem, full, kind, alive, flash, 0, 0);
+    int bw = box.right - box.left - 2, bh = box.bottom - box.top - 2;
+    int base = bw < bh ? bw : bh;
+    int w = base * (sxMille > 0 ? sxMille : 1000) / 1000, h = base * (syMille > 0 ? syMille : 1000) / 1000;
+    int cx = (box.left + box.right) / 2, bottom = box.bottom - 10;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, box.left + 1, box.top + 1, box.right - 1, box.bottom - 1);
+    Fill(dc, MakeRect(box.left + 1, box.top + 1, box.right - 1, box.bottom - 1), RGB(11, 17, 24));
+    for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
+    SetStretchBltMode(dc, COLORONCOLOR);
+    StretchBlt(dc, cx - w / 2, bottom - h, w, h, mem, 0, 0, side, side, SRCCOPY);
+    RestoreDC(dc, saved);
+    SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem);
+}
+
+// ---- 셔터 -----------------------------------------------------------------
+
+static void ShutterMesh(HDC dc, const RECT& body, COLORREF tint) {
+    // 격자는 선으로 그린다. 픽셀마다 Fill을 부르면 한 프레임에 수천 번이 된다.
+    COLORREF wire = MixColor(RGB(158, 163, 172), tint, 22);
+    HPEN pen = CreatePen(PS_SOLID, 2, wire);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    int h = body.bottom - body.top, w = body.right - body.left;
+    const int gap = 20;
+    for (int x = body.left - h; x < body.right + h; x += gap) {
+        MoveToEx(dc, x, body.top, 0);          LineTo(dc, x + h, body.top + h);
+        MoveToEx(dc, x + h, body.top, 0);      LineTo(dc, x, body.top + h);
+    }
+    SelectObject(dc, oldPen); DeleteObject(pen);
+    (void)w;
+}
+
+static void ShutterCorrugated(HDC dc, const RECT& body) {
+    for (int y = body.top; y < body.bottom; y += 5) {
+        Fill(dc, MakeRect(body.left, y, body.right, y + 3), RGB(152, 155, 162));
+        Fill(dc, MakeRect(body.left, y + 3, body.right, y + 5), RGB(96, 99, 106));
+    }
+}
+
+static void ShutterSlat(HDC dc, const RECT& body) {
+    for (int y = body.top; y < body.bottom; y += 12) {
+        Fill(dc, MakeRect(body.left, y, body.right, y + 12), RGB(178, 181, 188));
+        Fill(dc, MakeRect(body.left, y, body.right, y + 2), RGB(216, 219, 226));   // 윗면 반사
+        Fill(dc, MakeRect(body.left, y + 10, body.right, y + 12), RGB(74, 77, 84)); // 이음매 그림자
+    }
+}
+
+void DrawShutter(HDC dc, const RECT& slot, int style, int descended, int rattle, COLORREF tint) {
+    int h = slot.bottom - slot.top;
+    if (h <= 0 || descended <= 0) return;
+    if (descended > h) descended = h;
+    int shift = rattle ? (int)(Hash3(slot.left, descended / 3, 91) % 3u) - 1 : 0;
+    int bottom = slot.top + descended;
+
+    // 좌우 가이드 레일. 셔터가 무엇을 타고 내려오는지 보여 준다.
+    Fill(dc, MakeRect(slot.left, slot.top, slot.left + 4, slot.bottom), RGB(44, 46, 52));
+    Fill(dc, MakeRect(slot.right - 4, slot.top, slot.right, slot.bottom), RGB(44, 46, 52));
+
+    RECT body = MakeRect(slot.left + 4 + shift, slot.top, slot.right - 4 + shift, bottom);
+    if (body.right <= body.left) return;
+
+    // 무늬가 슬롯 밖으로 새지 않게 자른다.
+    HRGN saved = CreateRectRgn(0, 0, 0, 0);
+    int hadClip = GetClipRgn(dc, saved) == 1;
+    IntersectClipRect(dc, slot.left + 4, slot.top, slot.right - 4, bottom);
+
+    if (style == SHUTTER_MESH) {
+        Fill(dc, body, RGB(14, 16, 20));   // 살짝 어두워지되 뒤가 비친다
+        ShutterMesh(dc, body, tint);
+    } else if (style == SHUTTER_CORR) {
+        ShutterCorrugated(dc, body);
+    } else {
+        ShutterSlat(dc, body);
+    }
+
+    SelectClipRgn(dc, hadClip ? saved : 0);
+    DeleteObject(saved);
+
+    // 마감 바. 이 한 줄이 "셔터다"라는 인상을 가장 크게 만든다.
+    int barTop = bottom - 8; if (barTop < slot.top) barTop = slot.top;
+    Fill(dc, MakeRect(slot.left + shift, barTop, slot.right + shift, bottom), RGB(56, 58, 64));
+    Fill(dc, MakeRect(slot.left + shift, barTop, slot.right + shift, barTop + 2), RGB(198, 201, 208));
+
+    // 상부 박스. 셔터는 여기서 풀려 나온다.
+    Fill(dc, MakeRect(slot.left - 2, slot.top, slot.right + 2, slot.top + 11), RGB(62, 64, 70));
+    Fill(dc, MakeRect(slot.left - 2, slot.top, slot.right + 2, slot.top + 2), RGB(126, 129, 136));
+    Fill(dc, MakeRect(slot.left - 2, slot.top + 9, slot.right + 2, slot.top + 11), RGB(30, 32, 38));
 }
 
 COLORREF MixColor(COLORREF from, COLORREF to, int amount) {
