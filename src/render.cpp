@@ -17,6 +17,7 @@ void CreateRenderFonts() {
 }
 
 void DestroyRenderFonts() {
+    FxSnapshotDestroy();
     if (gFontSmall) DeleteObject(gFontSmall);
     if (gFontMedium) DeleteObject(gFontMedium);
     if (gFontLarge) DeleteObject(gFontLarge);
@@ -144,6 +145,81 @@ int ShutterFall(int p) {
     int amp = 55 * (1000 - q) / 1000;            // 진폭이 잦아든다
     int wave = q < 500 ? q * 2 : (1000 - q) * 2; // 0 → 1000 → 0
     return 1000 - amp * wave / 1000;
+}
+
+int EaseOutBack(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    int q = p - 1000;                                  // -1000..0
+    // 1 + 2.7 q^3 + 1.7 q^2  (q는 -1..0)
+    long long q2 = (long long)q * q / 1000, q3 = q2 * q / 1000;
+    long long v = 1000 + 2700 * q3 / 1000 + 1700 * q2 / 1000;
+    return (int)v;
+}
+
+int EaseOutBounce(int p) {
+    if (p <= 0) return 0; if (p >= 1000) return 1000;
+    if (p < 364) return 7563 * p / 1000 * p / 1000;
+    if (p < 727) { int q = p - 545; return 7563 * q / 1000 * q / 1000 + 750; }
+    if (p < 909) { int q = p - 818; return 7563 * q / 1000 * q / 1000 + 938; }
+    int q = p - 955; return 7563 * q / 1000 * q / 1000 + 984;
+}
+
+// ---- 프레임 스냅샷 ---------------------------------------------------------
+static HDC gSnapDc; static HBITMAP gSnapBmp, gSnapOld; static int gSnapHeld;
+
+void FxSnapshotCapture(HDC canvas) {
+    if (!gSnapDc) {
+        gSnapDc = CreateCompatibleDC(canvas);
+        gSnapBmp = CreateCompatibleBitmap(canvas, BASE_WIDTH, BASE_HEIGHT);
+        gSnapOld = (HBITMAP)SelectObject(gSnapDc, gSnapBmp);
+    }
+    if (!gSnapDc) return;
+    BitBlt(gSnapDc, 0, 0, BASE_WIDTH, BASE_HEIGHT, canvas, 0, 0, SRCCOPY);
+    gSnapHeld = 1;
+}
+int FxSnapshotHeld() { return gSnapHeld; }
+void FxSnapshotRelease() { gSnapHeld = 0; }
+void FxSnapshotDestroy() {
+    if (gSnapDc) { SelectObject(gSnapDc, gSnapOld); DeleteDC(gSnapDc); gSnapDc = 0; }
+    if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
+    gSnapHeld = 0;
+}
+// keepPercent가 낮을수록 줄을 성기게 가져와 옅어진다. 알파 없이 줄 간격으로 낸다.
+void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent) {
+    if (!gSnapHeld || !gSnapDc || keepPercent <= 0) return;
+    int step = keepPercent >= 90 ? 1 : keepPercent >= 60 ? 2 : keepPercent >= 35 ? 3 : keepPercent >= 15 ? 5 : 8;
+    int w = area.right - area.left;
+    if (w <= 0) return;
+    for (int y = area.top; y < area.bottom; y += step) {
+        int sy = y - dy;
+        if (sy < 0 || sy >= BASE_HEIGHT) continue;
+        BitBlt(dc, area.left + dx, y, w, 1, gSnapDc, area.left, sy, SRCCOPY);
+    }
+}
+
+// ---- 스프라이트 변형 -------------------------------------------------------
+void DrawSpriteStretched(HDC dc, const RECT& box, int kind, int alive, int flash, int sxMille, int syMille) {
+    const int S = 7, side = SPRITE_SIZE * S;
+    HDC mem = CreateCompatibleDC(dc);
+    if (!mem) return;
+    HBITMAP bmp = CreateCompatibleBitmap(dc, side, side);
+    if (!bmp) { DeleteDC(mem); return; }
+    HBITMAP old = (HBITMAP)SelectObject(mem, bmp);
+    RECT full = MakeRect(0, 0, side, side);
+    Fill(mem, full, RGB(11, 17, 24));
+    DrawSpriteArt(mem, full, kind, alive, flash, 0, 0);
+    int bw = box.right - box.left - 2, bh = box.bottom - box.top - 2;
+    int base = bw < bh ? bw : bh;
+    int w = base * (sxMille > 0 ? sxMille : 1000) / 1000, h = base * (syMille > 0 ? syMille : 1000) / 1000;
+    int cx = (box.left + box.right) / 2, bottom = box.bottom - 10;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, box.left + 1, box.top + 1, box.right - 1, box.bottom - 1);
+    Fill(dc, MakeRect(box.left + 1, box.top + 1, box.right - 1, box.bottom - 1), RGB(11, 17, 24));
+    for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
+    SetStretchBltMode(dc, COLORONCOLOR);
+    StretchBlt(dc, cx - w / 2, bottom - h, w, h, mem, 0, 0, side, side, SRCCOPY);
+    RestoreDC(dc, saved);
+    SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem);
 }
 
 // ---- 셔터 -----------------------------------------------------------------
