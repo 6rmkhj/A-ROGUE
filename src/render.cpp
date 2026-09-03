@@ -166,15 +166,29 @@ int EaseOutBounce(int p) {
 
 // ---- 프레임 스냅샷 ---------------------------------------------------------
 static HDC gSnapDc; static HBITMAP gSnapBmp, gSnapOld; static int gSnapHeld;
+static int gSnapW, gSnapH;
 
-void FxSnapshotCapture(HDC canvas) {
+void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH) {
+    if (deviceW <= 0 || deviceH <= 0) return;
+    // 창 크기가 바뀌면 버퍼도 다시 잡는다.
+    if (gSnapDc && (gSnapW != deviceW || gSnapH != deviceH)) FxSnapshotDestroy();
     if (!gSnapDc) {
         gSnapDc = CreateCompatibleDC(canvas);
-        gSnapBmp = CreateCompatibleBitmap(canvas, BASE_WIDTH, BASE_HEIGHT);
+        if (!gSnapDc) return;
+        gSnapBmp = CreateCompatibleBitmap(canvas, deviceW, deviceH);
+        if (!gSnapBmp) { DeleteDC(gSnapDc); gSnapDc = 0; return; }
         gSnapOld = (HBITMAP)SelectObject(gSnapDc, gSnapBmp);
+        gSnapW = deviceW; gSnapH = deviceH;
     }
-    if (!gSnapDc) return;
-    BitBlt(gSnapDc, 0, 0, BASE_WIDTH, BASE_HEIGHT, canvas, 0, 0, SRCCOPY);
+    // 논리 좌표로 읽고 쓰도록 캔버스와 같은 변환을 건다.
+    SetMapMode(gSnapDc, MM_ANISOTROPIC);
+    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(gSnapDc, deviceW, deviceH, 0);
+    SetMapMode(gSnapDc, MM_TEXT);
+    BitBlt(gSnapDc, 0, 0, deviceW, deviceH, canvas, 0, 0, SRCCOPY);
+    SetMapMode(gSnapDc, MM_ANISOTROPIC);
+    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(gSnapDc, deviceW, deviceH, 0);
     gSnapHeld = 1;
 }
 int FxSnapshotHeld() { return gSnapHeld; }
@@ -182,7 +196,7 @@ void FxSnapshotRelease() { gSnapHeld = 0; }
 void FxSnapshotDestroy() {
     if (gSnapDc) { SelectObject(gSnapDc, gSnapOld); DeleteDC(gSnapDc); gSnapDc = 0; }
     if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
-    gSnapHeld = 0;
+    gSnapHeld = 0; gSnapW = 0; gSnapH = 0;
 }
 // keepPercent가 낮을수록 줄을 성기게 가져와 옅어진다. 알파 없이 줄 간격으로 낸다.
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent) {
@@ -199,7 +213,7 @@ void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent) {
 
 // ---- 스프라이트 변형 -------------------------------------------------------
 void DrawSpriteStretched(HDC dc, const RECT& box, int kind, int alive, int flash, int sxMille, int syMille) {
-    const int S = 7, side = SPRITE_SIZE * S;
+    const int S = 14, side = SPRITE_SIZE * S;   // 논리 화소보다 넉넉히 그려 두고 줄인다
     HDC mem = CreateCompatibleDC(dc);
     if (!mem) return;
     HBITMAP bmp = CreateCompatibleBitmap(dc, side, side);

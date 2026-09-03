@@ -7,7 +7,11 @@
 // GDI 위에 얹은 얇은 그리기 도구. 게임 규칙을 모르고, 넘겨받은 값만 그린다.
 // 모든 그리기는 아래 고정 캔버스에 이뤄지고, 마지막에 창 크기로 확대된다.
 
+// 논리 캔버스. 모든 좌표·히트 판정·폰트 크기가 이 좌표계로 적혀 있다.
 static const int BASE_WIDTH = 1120, BASE_HEIGHT = 760;
+// 실제로 그려지는 픽셀 수는 창 크기를 따라간다. 확대가 없으므로 FHD 창에서는
+// FHD로 그려진다. 상한은 비용을 묶어 두기 위한 것이다 (2배 = 2240x1520).
+#define RENDER_SCALE_MAX 2.0f
 
 static const COLORREF C_BG = RGB(8, 12, 17), C_PANEL = RGB(16, 23, 31), C_PANEL_2 = RGB(23, 33, 43);
 static const COLORREF C_LINE = RGB(50, 71, 87), C_TEXT = RGB(218, 232, 238), C_DIM = RGB(120, 145, 157);
@@ -46,7 +50,9 @@ int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
 // ---- 프레임 스냅샷 ---------------------------------------------------------
 // 연출이 시작되는 순간의 캔버스를 붙잡아 두고, 연출 동안 어긋나게·옅게 겹친다.
 // 잔상·트레일·데이터모싱이 전부 여기서 나온다. 게임 상태가 아니라 그리기 버퍼다.
-void FxSnapshotCapture(HDC canvas);
+// deviceW/H는 캔버스 비트맵의 실제 픽셀 크기다. 논리 좌표계가 그대로 실려야
+// 하므로 스냅샷도 같은 배율을 쓴다.
+void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH);
 int  FxSnapshotHeld();
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
 void FxSnapshotRelease();
