@@ -1447,6 +1447,50 @@ int main() {
     if (!unsure.valid) return Fail("a read-error turn must still produce a preview");
     if (!unsure.uncertain) return Fail("a read error must mark the preview as uncertain");
 
+    // 경고된 주사위를 사본에서 다시 굴려 버리면 실제로 나올 숫자가 미리보기로 새어 나간다.
+    // 재굴림은 빠지고, 흔들리는 값이 닿는 슬롯만 "모름"으로 표시되어야 한다.
+    int shakyDie = -1;
+    for (int d = 0; d < 3; ++d) if (shaky.dice[d].unstable) shakyDie = d;
+    if (shakyDie < 0) return Fail("a read-error drive must mark one die unstable");
+    for (int d = 0; d < 3; ++d) UnassignDie(&shaky, d);
+    AssignDieToSlot(&shaky, shakyDie, SLOT_DEFEND);
+    AssignDieToSlot(&shaky, (shakyDie + 1) % 3, SLOT_ATTACK);
+    GameState shakyBefore = shaky;
+    TurnPreview hidden; PreviewTurn(&shaky, &hidden);
+    if (memcmp(&shakyBefore, &shaky, sizeof(GameState)) != 0) return Fail("previewing a read-error turn must not mutate the game state");
+    if (shaky.dice[shakyDie].rolledFace != shakyBefore.dice[shakyDie].rolledFace) return Fail("preview must not reroll the unstable die");
+    if (!hidden.uncertain) return Fail("a read error must mark the preview as uncertain");
+    if (!hidden.slotUnknown[SLOT_DEFEND]) return Fail("the slot holding an unstable die must preview as unknown");
+    // 체크섬은 세 주사위 출력의 합만 보므로 흔들리는 주사위가 어디 놓이든 공격이 함께 흔들린다.
+    if (!hidden.slotUnknown[SLOT_ATTACK]) return Fail("a checksum run must preview the attack as unknown");
+    if (hidden.slotUnknown[SLOT_AMPLIFY] || hidden.slotUnknown[SLOT_CHAIN]) return Fail("an empty slot must never preview as unknown");
+
+    // 증폭은 뒤에 해결될 공격·방어에 보너스를 얹고, 연쇄는 그 공격을 반복한다.
+    // 증폭에 놓인 불안정 주사위 하나가 세 슬롯을 전부 모르게 만들어야 한다.
+    GameState spread; NewRun(&spread, 0x9E1E0005u); spread.modifierA = MOD_READ_ERROR; spread.modifierB = MOD_BAD_SECTOR;
+    ConfigureDriveForTest(&spread, TEST_DRIVE, TEST_SEED, 1); StartCombat(&spread);
+    SetAllFaces(&spread, FACE_NUMBER, 4);
+    spread.enemies[0].hp = 99; spread.enemies[0].maxHp = 99;
+    int ampDie = -1;
+    for (int d = 0; d < 3; ++d) if (spread.dice[d].unstable) ampDie = d;
+    if (ampDie < 0) return Fail("a read-error drive must mark one die unstable");
+    for (int d = 0; d < 3; ++d) UnassignDie(&spread, d);
+    AssignDieToSlot(&spread, ampDie, SLOT_AMPLIFY);
+    AssignDieToSlot(&spread, (ampDie + 1) % 3, SLOT_ATTACK);
+    AssignDieToSlot(&spread, (ampDie + 2) % 3, SLOT_CHAIN);
+    TurnPreview chained; PreviewTurn(&spread, &chained);
+    if (!chained.slotUnknown[SLOT_AMPLIFY]) return Fail("the amplify slot holding an unstable die must preview as unknown");
+    if (!chained.slotUnknown[SLOT_ATTACK]) return Fail("an unstable amplify die must make the attack it boosts unknown");
+    if (!chained.slotUnknown[SLOT_CHAIN]) return Fail("an unstable amplify die must make the chain repeat unknown");
+    if (chained.slotUnknown[SLOT_DEFEND]) return Fail("an empty slot must never preview as unknown");
+
+    // 오프라인 주사위는 어떤 눈이 나와도 출력 0이라, 재굴림이 걸려 있어도 슬롯 숫자는 확정이다.
+    GameState pinned = spread; pinned.dice[ampDie].offline = 1;
+    TurnPreview certain; PreviewTurn(&pinned, &certain);
+    if (!certain.uncertain) return Fail("a read error must still mark the preview as uncertain");
+    for (int s = 0; s < SLOT_COUNT; ++s)
+        if (certain.slotUnknown[s]) return Fail("an offline unstable die must leave every slot certain");
+
     GameState badSector; NewRun(&badSector, 0xBADD5EC7u); badSector.phase = PHASE_REWARD;
     ConfigureDriveForTest(&badSector, TEST_DRIVE, TEST_SEED, 1);
     badSector.dice[0].faces[0].kind = FACE_FIRE; badSector.dice[0].faces[0].value = 8; badSector.dice[0].faces[0].damaged = 1;
