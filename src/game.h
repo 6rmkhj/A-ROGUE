@@ -269,6 +269,12 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex);
 void UnassignDie(GameState* game, int dieIndex);
 void SelectEnemy(GameState* game, int enemyIndex);
 void EndTurn(GameState* game);
+
+// ---- 디버그 ---------------------------------------------------------------
+// 관리자 터미널(`)의 win 전용. 규칙 경로를 우회하지 않고 살아 있는 적을 전부
+// 눕힌 뒤 정상 승리 처리를 그대로 탄다. 스모크·밸런스는 이 함수를 부르지 않으므로
+// 자동 검증의 결정론에는 아무 영향이 없다.
+void DebugWinCombat(GameState* game);
 void SelectReward(GameState* game, int rewardIndex);
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex);
 void InstallTsr(GameState* game, int rewardIndex);

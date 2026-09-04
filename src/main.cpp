@@ -9,6 +9,11 @@ GameState gGame;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
+int gTermOpen;
+wchar_t gTermLog[TERM_LOG_LINES][TERM_LOG_CAP];
+int gTermLogCount;
+wchar_t gTermInput[TERM_INPUT_MAX + 1];
+int gTermInputLen;
 int gGuidePage;
 int gRestartArmed;
 int gFxLevel = FX_FULL;
@@ -701,7 +706,101 @@ static void HandleClick(int x, int y) {
     InvalidateRect(gWindow, 0, FALSE);
 }
 
+// 가장 오래된 줄을 밀어내는 고정 크기 스크롤백. 동적 할당은 쓰지 않는다.
+static void TermPrint(const wchar_t* line) {
+    if (gTermLogCount >= TERM_LOG_LINES) {
+        for (int i = 1; i < TERM_LOG_LINES; ++i) lstrcpynW(gTermLog[i - 1], gTermLog[i], TERM_LOG_CAP);
+        gTermLogCount = TERM_LOG_LINES - 1;
+    }
+    lstrcpynW(gTermLog[gTermLogCount++], line, TERM_LOG_CAP);
+}
+
+// 연출이 도는 중에 판을 갈아엎으면 재생과 결과가 어긋난다. 그동안은 막는다.
+static int TermBusy() {
+    return gTurnTraceActive || gDeathActive || gCombatClearActive
+        || gDescentActive || gDirEnterActive || GimmickFxKind() > 0;
+}
+
+static void TermRun() {
+    wchar_t echo[TERM_LOG_CAP];
+    wsprintfW(echo, L"> %s", gTermInput);
+    TermPrint(echo);
+
+    // 명령어와 숫자 인자 하나로 가른다.
+    const wchar_t* p = gTermInput;
+    wchar_t cmd[TERM_INPUT_MAX + 1];
+    int n = 0;
+    while (*p == L' ') ++p;
+    while (*p && *p != L' ' && n < TERM_INPUT_MAX) cmd[n++] = *p++;
+    cmd[n] = 0;
+    while (*p == L' ') ++p;
+    int arg = 0, hasArg = 0;
+    while (*p >= L'0' && *p <= L'9') { arg = arg * 10 + (int)(*p++ - L'0'); hasArg = 1; }
+
+    gTermInput[0] = 0; gTermInputLen = 0;
+    if (n == 0) return;
+
+    if (lstrcmpW(cmd, L"win") == 0) {
+        if (TermBusy()) { TermPrint(L"  연출이 끝난 뒤에 다시 실행하십시오."); return; }
+        if (gGame.phase != PHASE_COMBAT) { TermPrint(L"  전투 중이 아닙니다."); return; }
+        int floor = gGame.floor, encounter = gGame.encounter;
+        DebugWinCombat(&gGame);
+        PlaySfx(SFX_ENEMY_DOWN);
+        TermPrint(L"  적 전멸. 전투 종료 처리 완료.");
+        gTermOpen = 0;
+        BeginCombatClear(floor, encounter);
+        return;
+    }
+    if (lstrcmpW(cmd, L"hp") == 0) {
+        if (gGame.phase == PHASE_TITLE) { TermPrint(L"  런이 시작되지 않았습니다."); return; }
+        int want = hasArg ? arg : gGame.playerMaxHp;
+        if (want > gGame.playerMaxHp) want = gGame.playerMaxHp;
+        if (want < 1) want = 1;
+        gGame.playerHp = want;
+        wchar_t msg[TERM_LOG_CAP];
+        wsprintfW(msg, L"  체력 %d / %d", gGame.playerHp, gGame.playerMaxHp);
+        TermPrint(msg);
+        return;
+    }
+    if (lstrcmpW(cmd, L"help") == 0) {
+        TermPrint(L"  win       현재 전투를 즉시 승리 처리한다");
+        TermPrint(L"  hp [n]    체력을 n으로 (생략하면 최대치)");
+        TermPrint(L"  clear     기록 지우기");
+        TermPrint(L"  help      이 목록");
+        return;
+    }
+    if (lstrcmpW(cmd, L"clear") == 0) { gTermLogCount = 0; return; }
+
+    wchar_t msg[TERM_LOG_CAP];
+    wsprintfW(msg, L"  알 수 없는 명령: %s", cmd);
+    TermPrint(msg);
+}
+
 static void HandleKey(WPARAM key) {
+    // 터미널은 어떤 상태에서도 열린다. 연출 중이나 정지 화면에서도 판을 봐야 한다.
+    if (key == VK_OEM_3) {
+        gTermOpen = !gTermOpen;
+        if (gTermOpen && gTermLogCount == 0) TermPrint(L"  help 로 명령 목록.");
+        gTermInput[0] = 0; gTermInputLen = 0;
+        InvalidateRect(gWindow, 0, FALSE);
+        return;
+    }
+    if (gTermOpen) {
+        // IME가 켜져 있어도 먹히도록 WM_CHAR가 아니라 가상 키에서 직접 만든다.
+        if (key == VK_ESCAPE) gTermOpen = 0;
+        else if (key == VK_RETURN) TermRun();
+        else if (key == VK_BACK) { if (gTermInputLen > 0) gTermInput[--gTermInputLen] = 0; }
+        else if (gTermInputLen < TERM_INPUT_MAX) {
+            wchar_t c = 0;
+            if (key >= 'A' && key <= 'Z') c = (wchar_t)(key - 'A' + L'a');
+            else if (key >= '0' && key <= '9') c = (wchar_t)key;
+            else if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) c = (wchar_t)(L'0' + key - VK_NUMPAD0);
+            else if (key == VK_SPACE) c = L' ';
+            if (c) { gTermInput[gTermInputLen++] = c; gTermInput[gTermInputLen] = 0; }
+        }
+        InvalidateRect(gWindow, 0, FALSE);
+        return;
+    }
     if (gDeathActive) return;
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
