@@ -21,6 +21,61 @@ int gGuidePage;
 int gRestartArmed;
 int gFxLevel = FX_FULL;
 
+// 직접 조작 연출은 게임 판정과 분리된 마지막 사건 하나만 기억한다. 연타가 가능한
+// 배치·정리는 새 입력이 이전 연출을 자연스럽게 덮고, 화면 전환을 동반하는 보상만
+// 입력을 잠깐 막아 설치 경로를 끝까지 보여 준다.
+UiFxState gUiFx = {};
+static int gUiFxPendingDescent = -1;
+static void BeginDescent(int toFloor, int choiceIndex);
+
+#define UIFX_TIMER_ID 11
+#define UIFX_PLACE_MS 300
+#define UIFX_REWARD_MS 520
+#define UIFX_PRUNE_MS 340
+
+int UiFxElapsed() { return gUiFx.kind == UIFX_NONE ? 0 : (int)(GetTickCount() - gUiFx.start); }
+
+int UiFxSnapshotActive() {
+    return gUiFx.kind == UIFX_REWARD_FACE || gUiFx.kind == UIFX_REWARD_TSR
+        || gUiFx.kind == UIFX_REWARD_REPAIR;
+}
+
+static int UiFxDuration() {
+    if (gUiFx.kind >= UIFX_DIE_PLACE && gUiFx.kind <= UIFX_DIE_REMOVE) return UIFX_PLACE_MS;
+    if (UiFxSnapshotActive()) return UIFX_REWARD_MS;
+    if (gUiFx.kind == UIFX_PRUNE_DELETE || gUiFx.kind == UIFX_PRUNE_RESTORE) return UIFX_PRUNE_MS;
+    return 0;
+}
+
+static void FinishUiFx() {
+    if (gUiFx.kind == UIFX_NONE) return;
+    int held = UiFxSnapshotActive();
+    gUiFx.kind = UIFX_NONE;
+    KillTimer(gWindow, UIFX_TIMER_ID);
+    if (held && FxSnapshotHeld()) FxSnapshotRelease();
+    if (gUiFxPendingDescent >= 0) {
+        int floor = gUiFxPendingDescent;
+        gUiFxPendingDescent = -1;
+        BeginDescent(floor, -1);
+    }
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static int BeginUiFx(int kind) {
+    if (gFxLevel == FX_OFF) return 0;
+    if (gUiFx.kind != UIFX_NONE) FinishUiFx();
+    ZeroMemory(&gUiFx, sizeof(gUiFx));
+    gUiFx.kind = kind;
+    gUiFx.start = GetTickCount();
+    gUiFx.die = gUiFx.face = gUiFx.displacedDie = gUiFx.fromSlot = gUiFx.toSlot = gUiFx.rewardIndex = -1;
+    if (kind == UIFX_REWARD_FACE || kind == UIFX_REWARD_TSR || kind == UIFX_REWARD_REPAIR)
+        CaptureUiFxSnapshot();
+    SetTimer(gWindow, UIFX_TIMER_ID, 16, 0);
+    return 1;
+}
+
+static int UiFxBlocksInput() { return UiFxSnapshotActive(); }
+
 int FxDecorOn() { return gFxLevel != FX_OFF; }
 
 int FxScale(int amount) {
@@ -181,9 +236,12 @@ int PlayerHitFlash() {
 int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
 
 static int GimmickShakeAmplitude();
+static int BootShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
+    int boot = BootShakeAmplitude();
+    if (boot > fx) fx = boot;
     if (!gPlayerHitAt) return fx;
     int since = (int)(GetTickCount() - gPlayerHitAt);
     if (since < 0 || since >= SHAKE_MS) return fx;
@@ -439,6 +497,64 @@ static void BeginDirectoryEnter(int kind, int choiceIndex) {
     SetTimer(gWindow, 9, 16, 0);
 }
 
+// ---- 새 게임 삽입 연출 -----------------------------------------------------
+// 새 게임은 즉시 넘어가지 않는다. 지금 화면이 돌면서 줄어들어 플로피 한 장의
+// 라벨이 되고, 그 디스크가 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤 드라이브가 읽고
+// 나서야 런이 만들어진다. 런을 끝에서 만드는 이유는 두 가지다. 연출이 붙잡는
+// 스냅샷이 "누르기 직전의 화면"이어야 하고, 건너뛰어도 결과가 같아야 한다.
+int gBootActive;
+DWORD gBootStart;
+static uint32_t gBootSeed;
+
+// 구간이 바뀌는 시점마다 한 번씩 울린다. 그림은 경과 시간만 보고 그려지므로
+// 타이머가 할 일은 이 소리와 리페인트뿐이다.
+static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
+    { BOOT_SUCK_AT,        SFX_READ_START, 0 },   // 판이 빨려 들어가기 시작한다
+    { BOOT_FLIP_AT - 140,  SFX_REWARD_SET, 0 },   // 디스크 한 장이 만들어진다
+    { BOOT_FLY_AT,         SFX_DIE_PICK,   2 },   // 뒤집힌 디스크를 잡는다
+    { BOOT_PUSH_AT,        SFX_SLOT_SET,   1 },   // 슬롯에 밀어 넣는다
+    { BOOT_PUSH_AT + 200,  SFX_UI_CLICK,   0 },   // 중간에 한 번 걸린다
+    { BOOT_CLUNK_AT,       SFX_DIE_LOCK,   0 },   // 철컥
+    { BOOT_CLUNK_AT + 150, SFX_READ_START, 0 },
+    { BOOT_CLUNK_AT + 380, SFX_DIE_LOCK,   3 },   // 헤드가 트랙을 옮긴다
+    { BOOT_CLUNK_AT + 570, SFX_DIE_LOCK,   5 },
+};
+static int gBootCue;
+
+static void FinishBootInsert() {
+    if (!gBootActive) return;
+    gBootActive = 0;
+    KillTimer(gWindow, 10);
+    FxSnapshotRelease();
+    NewRun(&gGame, gBootSeed);
+    PlaySfx(SFX_BOOT);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static void BeginBootInsert() {
+    if (gBootActive) return;
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    // 다른 연출이 붙잡아 둔 판이 남아 있으면 삽입 연출이 그 낡은 그림을 디스크에
+    // 싣게 된다. 놓아 주고 첫 프레임에서 지금 화면을 새로 잡는다.
+    if (FxSnapshotHeld()) FxSnapshotRelease();
+    gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
+    gBootCue = 0;
+    gBootStart = GetTickCount();
+    gBootActive = 1;
+    PlaySfx(SFX_PRUNE);            // 화면이 디스크로 빨려 들어가는 소리
+    SetTimer(gWindow, 10, 16, 0);
+}
+
+// 화면이 갈라지는 동안 조금씩 세지고, 디스크가 물리는 철컥에서 한 번 크게 튄다.
+static int BootShakeAmplitude() {
+    if (!gBootActive) return 0;
+    int elapsed = (int)(GetTickCount() - gBootStart);
+    if (elapsed < BOOT_SUCK_AT) return FxScale(1 + elapsed * 5 / BOOT_GLITCH_MS);
+    int since = elapsed - BOOT_CLUNK_AT;
+    if (since >= 0 && since < 260) return FxScale(9 * (260 - since) / 260);
+    return 0;
+}
+
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
 static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
 int DieSettled(int die) { return !gReadActive || ReadElapsed() >= DieReadEnd(die); }
@@ -509,11 +625,30 @@ void SyncIdleAnimation() {
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
     // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
     int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT
-        || gGame.phase == PHASE_DIRECTORY || AmbientNoiseLevel() > 0)
+        || gGame.phase == PHASE_DIRECTORY || gGame.phase == PHASE_VICTORY || AmbientNoiseLevel() > 0)
         && !gGuideOpen && !gSettingsOpen && !gDeckOpen) || GuideNoiseActive();
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
+}
+
+// 마지막 에필로그를 닫는 순간부터 결과 화면의 기록이 차례로 올라온다.
+// 규칙 계층의 AdvanceStory는 시간이나 소리를 모르므로 UI 진입 처리는 여기서 맡는다.
+static DWORD gVictoryStart;
+int VictoryElapsed() {
+    if (!gVictoryStart) return 3000;
+    int elapsed = (int)(GetTickCount() - gVictoryStart);
+    return elapsed < 0 ? 0 : elapsed;
+}
+
+static void AdvanceStoryUi() {
+    int wasEnding = gGame.phase == PHASE_STORY
+        && (gGame.story.kind == STORY_ENDING_RESTORE || gGame.story.kind == STORY_ENDING_ROGUE);
+    AdvanceStory(&gGame);
+    if (wasEnding && gGame.phase == PHASE_VICTORY) {
+        gVictoryStart = GetTickCount();
+        PlaySfx(SFX_VICTORY);
+    }
 }
 
 static void SyncAudioScene() {
@@ -538,12 +673,17 @@ static void SyncAudioScene() {
 static void BeginNewRun() {
     FinishDeath();
     FinishDirectoryEnter();
+    gUiFxPendingDescent = -1;
+    gVictoryStart = 0;
+    FinishUiFx();
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
-    NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE);
+    // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
+    BeginBootInsert(); InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void ExecuteCombatTurn() {
+    FinishUiFx();
     int floor = gGame.floor, encounter = gGame.encounter;
     int turn = gGame.turn;
     GamePhase before = gGame.phase;
@@ -575,8 +715,26 @@ static void ClickCombat(int x, int y) {
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
     for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) {
         if (gGame.selectedDie >= 0) {
+            int die = gGame.selectedDie;
+            int oldSlot = gGame.dice[die].assignedSlot;
+            int oldFace = gGame.dice[die].rolledFace;
+            int displaced = -1;
+            for (int d = 0; d < 3; ++d)
+                if (d != die && gGame.dice[d].assignedSlot == i) displaced = d;
             // 잠긴 슬롯 등으로 배치가 거부되면 성공 효과음을 재생하지 않는다.
-            if (AssignDieToSlot(&gGame, gGame.selectedDie, i)) PlaySfxPitched(SFX_SLOT_SET, i * 2);
+            if (AssignDieToSlot(&gGame, die, i)) {
+                int newSlot = gGame.dice[die].assignedSlot;
+                int kind = newSlot < 0 ? UIFX_DIE_REMOVE : oldSlot >= 0 ? UIFX_DIE_MOVE : UIFX_DIE_PLACE;
+                if (BeginUiFx(kind)) {
+                    gUiFx.die = die;
+                    gUiFx.displacedDie = displaced;
+                    gUiFx.fromSlot = oldSlot;
+                    gUiFx.toSlot = newSlot;
+                    gUiFx.valueBefore = oldFace;
+                    gUiFx.valueAfter = gGame.dice[die].rolledFace;
+                }
+                PlaySfxPitched(SFX_SLOT_SET, i * 2);
+            }
             else PlaySfx(SFX_UI_CLICK);
         }
         else { int die = DieForSlotUI(i); if (die >= 0) gGame.selectedDie = die; } return;
@@ -584,6 +742,26 @@ static void ClickCombat(int x, int y) {
     if (Inside(EndTurnRect(), x, y)) {
         ExecuteCombatTurn();
     }
+}
+
+static void TakeTsrReward(int index) {
+    if (index < 0 || index >= 3 || !gGame.rewardIsTsr) return;
+    int tsr = gGame.rewardKinds[index];
+    if (tsr < 0 || tsr >= TSR_COUNT || gGame.tsrInstalled[tsr]) return;
+    int animated = BeginUiFx(UIFX_REWARD_TSR);
+    if (animated) { gUiFx.rewardIndex = index; gUiFx.valueAfter = tsr; }
+    InstallTsr(&gGame, index);
+    PlaySfx(SFX_REWARD_SET);
+}
+
+static void TakeRepairReward() {
+    if (!CanRepairSector()) return;
+    int before = gGame.playerHp;
+    int animated = BeginUiFx(UIFX_REWARD_REPAIR);
+    if (animated) { gUiFx.rewardIndex = REWARD_REPAIR; gUiFx.valueBefore = before; }
+    RepairSector(&gGame);
+    if (animated) gUiFx.valueAfter = gGame.playerHp;
+    PlaySfx(SFX_REWARD_SET);
 }
 
 // 디렉터리 카드를 고른다. 실패(잘못된 index)면 아무 일도 일어나지 않는다.
@@ -609,17 +787,28 @@ static void ClickDriveSelect(int x, int y) {
 
 static void ClickReward(int x, int y) {
     if (Inside(RewardRect(REWARD_REPAIR, BASE_WIDTH), x, y)) {
-        if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); }
+        TakeRepairReward();
         return;
     }
     if (gGame.rewardIsTsr) {
         // 보스 전리품: 카드 클릭 한 번으로 즉시 상주한다.
-        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { InstallTsr(&gGame, i); PlaySfx(SFX_REWARD_SET); return; }
+        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { TakeTsrReward(i); return; }
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
         return;
     }
     for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
-    if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { InstallSelectedReward(&gGame, d, f); PlaySfx(SFX_REWARD_SET); return; }
+    if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
+        int reward = gGame.selectedReward;
+        int animated = BeginUiFx(UIFX_REWARD_FACE);
+        if (animated) {
+            gUiFx.rewardIndex = reward; gUiFx.die = d; gUiFx.face = f;
+            gUiFx.shownFace.kind = (uint8_t)gGame.rewardKinds[reward];
+            gUiFx.shownFace.value = (uint8_t)gGame.rewardValues[reward];
+        }
+        InstallSelectedReward(&gGame, d, f);
+        PlaySfx(SFX_REWARD_SET);
+        return;
+    }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
 }
 
@@ -630,7 +819,13 @@ static void ClickPrune(int x, int y) {
     }
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
         int undo = CanUndoPrunedFace(&gGame, d, f);
+        Face before = gGame.dice[d].faces[f];
+        if (before.kind == FACE_EMPTY && !undo) return;
         PruneFace(&gGame, d, f);
+        if (BeginUiFx(undo ? UIFX_PRUNE_RESTORE : UIFX_PRUNE_DELETE)) {
+            gUiFx.die = d; gUiFx.face = f;
+            gUiFx.shownFace = undo ? gGame.dice[d].faces[f] : before;
+        }
         PlaySfx(undo ? SFX_REWARD_SET : SFX_PRUNE);
         return;
     }
@@ -672,6 +867,8 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
         return -1;
     }
+    if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
+        && Inside(EndingRestartRect(), x, y)) return 70;
     if (gGame.phase == PHASE_DIRECTORY) {
         for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i) if (Inside(DirectoryChoiceRect(i), x, y)) return 80 + i;
         return -1;
@@ -702,6 +899,8 @@ static int HoverId(int x, int y) {
 
 static void HandleClick(int x, int y) {
     if (gDeathActive) return;
+    if (gBootActive) { FinishBootInsert(); return; }
+    if (UiFxBlocksInput()) return;
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
@@ -743,7 +942,7 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) AdvanceStory(&gGame);
+    else if (gGame.phase == PHASE_STORY) AdvanceStoryUi();
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
     }
@@ -751,8 +950,13 @@ static void HandleClick(int x, int y) {
     else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
+    else if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
+        && Inside(EndingRestartRect(), x, y)) BeginNewRun();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
-    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor, -1);
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
+        if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
+        else BeginDescent(gGame.floor, -1);
+    }
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -769,7 +973,8 @@ static void TermPrint(const wchar_t* line) {
 // 연출이 도는 중에 판을 갈아엎으면 재생과 결과가 어긋난다. 그동안은 막는다.
 static int TermBusy() {
     return gTurnTraceActive || gDeathActive || gCombatClearActive
-        || gDescentActive || gDirEnterActive || GimmickFxKind() > 0;
+        || gDescentActive || gDirEnterActive || gBootActive || GimmickFxKind() > 0
+        || UiFxBlocksInput();
 }
 
 static void TermRun() {
@@ -864,6 +1069,8 @@ static void HandleKey(WPARAM key) {
         return;
     }
     if (gDeathActive) return;
+    if (gBootActive) { FinishBootInsert(); return; }
+    if (UiFxBlocksInput()) return;
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
@@ -888,7 +1095,7 @@ static void HandleKey(WPARAM key) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStory(&gGame); }
+    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key == '1' || key == '2') { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {
@@ -906,17 +1113,26 @@ static void HandleKey(WPARAM key) {
         else if (key >= '1' && key <= '3') { gGame.selectedDie = (int)(key - '1'); PlaySfxPitched(SFX_DIE_PICK, gGame.selectedDie * 2); }
         else if (key == 'K') KeybRerollSelected();
         else if (key == VK_SPACE) ExecuteCombatTurn();
-        else if (key == VK_ESCAPE && gGame.selectedDie >= 0) UnassignDie(&gGame, gGame.selectedDie);
+        else if (key == VK_ESCAPE && gGame.selectedDie >= 0) {
+            int die = gGame.selectedDie, oldSlot = gGame.dice[die].assignedSlot;
+            UnassignDie(&gGame, die);
+            if (oldSlot >= 0 && BeginUiFx(UIFX_DIE_REMOVE)) {
+                gUiFx.die = die; gUiFx.fromSlot = oldSlot; gUiFx.toSlot = -1;
+            }
+        }
     } else if (gGame.phase == PHASE_REWARD) {
         if (key >= '1' && key <= '3') {
-            if (gGame.rewardIsTsr) { InstallTsr(&gGame, (int)(key - '1')); PlaySfx(SFX_REWARD_SET); }
+            if (gGame.rewardIsTsr) TakeTsrReward((int)(key - '1'));
             else SelectReward(&gGame, (int)(key - '1'));
         }
-        else if (key == '4') { if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); } }
+        else if (key == '4') TakeRepairReward();
         else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY) { if (key == 'R' || key == VK_RETURN) BeginNewRun(); }
-    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor, -1);
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
+        if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
+        else BeginDescent(gGame.floor, -1);
+    }
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -995,12 +1211,27 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if (dirElapsed >= DIR_ENTER_MS) FinishDirectoryEnter();
             else InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == 10u) {
+            int bootElapsed = (int)(GetTickCount() - gBootStart);
+            int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
+            while (gBootCue < cueCount && bootElapsed >= BOOT_CUES[gBootCue].at) {
+                PlaySfxPitched(BOOT_CUES[gBootCue].sfx, BOOT_CUES[gBootCue].pitch);
+                ++gBootCue;
+            }
+            if (bootElapsed >= BOOT_INSERT_MS) FinishBootInsert();
+            else InvalidateRect(window, 0, FALSE);
+        }
+        else if (wParam == UIFX_TIMER_ID) {
+            if (UiFxElapsed() >= UiFxDuration()) FinishUiFx();
+            else InvalidateRect(window, 0, FALSE);
+        }
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
+        KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID);
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }

@@ -1488,6 +1488,306 @@ static void DrawDescent(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// ---- 새 게임 삽입 연출 -----------------------------------------------------
+// 새 게임을 누르면 판이 곧장 바뀌지 않는다. 지금 화면이 먼저 띠로 갈라지고, 세
+// 바퀴 돌면서 줄어들어 플로피 한 장의 라벨이 되고, 그 디스크가 공중에서 한 바퀴
+// 뒤집힌 뒤 컴퓨터의 A: 드라이브에 꽂힌다. 드라이브가 읽고 모니터가 켜지면 그
+// 화면이 캔버스를 삼키며 런으로 넘어간다.
+//
+// 판은 아직 누르기 직전 그대로다. 여기서 돌리는 그림은 연출이 시작될 때 붙잡아
+// 둔 스냅샷이고, 런은 main.cpp의 FinishBootInsert가 끝에서 만든다. 모든 값이
+// 경과 ms의 순수 함수라 리페인트가 겹쳐도 같은 프레임이 나온다.
+#define BOOT_DISK_W 200
+#define BOOT_DISK_H 206
+#define BOOT_HOLD_CY 210         // 디스크를 들고 있는 높이
+#define BOOT_TOUCH_CY 325        // 셔터가 슬롯 입구에 닿는 높이
+#define BOOT_STUCK_CY 452        // 반쯤 들어가 한 번 걸리는 높이
+#define BOOT_IN_CY 539           // 다 들어가 보이지 않는 높이
+#define BOOT_LABEL_FILL 153      // 라벨을 가득 채우는 스냅샷 배율 (천분율)
+
+// 슬롯은 캔버스 한가운데(560)를 지난다. 디스크도 같은 축으로 내려오므로 둘의
+// 중심이 어긋나면 안 된다.
+static RECT BootMonitorRect(int dy) { return MakeRect(400, 120 + dy, 720, 364 + dy); }
+static RECT BootScreenRect(int dy)  { return MakeRect(420, 140 + dy, 700, 330 + dy); }
+static RECT BootCaseRect(int dy)    { return MakeRect(396, 386 + dy, 724, 554 + dy); }
+static RECT BootDriveRect(int dy)   { return MakeRect(440, 412 + dy, 704, 500 + dy); }
+static RECT BootSlotRect(int dy)    { return MakeRect(454, 428 + dy, 666, 462 + dy); }
+
+static RECT LerpRect(const RECT& a, const RECT& b, int p) {
+    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
+                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
+}
+
+// 플로피 한 장의 자리. 배율(천분율)이 몸통·라벨·셔터에 같은 비율로 걸리므로
+// 그리기와 라벨 클립이 언제나 같은 사각형을 본다. squeeze는 가로만 누른다 -
+// 세로축을 중심으로 도는 뒤집기가 그것으로 표현된다.
+struct BootDisk { RECT body, label, shutter; };
+
+static BootDisk BootDiskAt(int cx, int cy, int scaleMille, int squeezeMille) {
+    int w = BOOT_DISK_W * scaleMille / 1000 * squeezeMille / 1000;
+    int h = BOOT_DISK_H * scaleMille / 1000;
+    BootDisk disk;
+    disk.body = MakeRect(cx - w / 2, cy - h / 2, cx - w / 2 + w, cy - h / 2 + h);
+    int inset = 14 * scaleMille / 1000 * squeezeMille / 1000;
+    disk.label = MakeRect(disk.body.left + inset, disk.body.top + 16 * scaleMille / 1000,
+                          disk.body.right - inset, disk.body.top + 104 * scaleMille / 1000);
+    int sw = 88 * scaleMille / 1000 * squeezeMille / 1000;
+    disk.shutter = MakeRect(cx - sw / 2, disk.body.bottom - 44 * scaleMille / 1000,
+                            cx - sw / 2 + sw, disk.body.bottom - 8 * scaleMille / 1000);
+    return disk;
+}
+
+// 셔터가 아래에 있다. 슬롯에 먼저 들어가는 쪽이라 그렇게 들고 있는 것이 맞다.
+// back이면 라벨 대신 금속 허브가 보이는 뒷면이다.
+static void DrawBootFloppy(HDC dc, const BootDisk& disk, int back) {
+    int w = disk.body.right - disk.body.left, h = disk.body.bottom - disk.body.top;
+    if (w < 6 || h < 6) return;
+    // 기계 앞을 지날 때 디스크가 묻히지 않도록 그림자를 깔고 몸통을 한 단 밝게 쓴다.
+    Fill(dc, MakeRect(disk.body.left + 9, disk.body.top + 11, disk.body.right + 9, disk.body.bottom + 11), RGB(3, 5, 8));
+    Panel(dc, disk.body, back ? RGB(23, 30, 39) : RGB(30, 38, 48), RGB(96, 116, 132));
+    Fill(dc, MakeRect(disk.body.left + 3, disk.body.top + 3, disk.body.right - 3, disk.body.top + 4), RGB(54, 68, 82));
+    Fill(dc, disk.shutter, RGB(146, 158, 170));
+    if (disk.shutter.right - disk.shutter.left > 10)
+        Fill(dc, MakeRect(disk.shutter.left + 3, disk.shutter.top + 3,
+                          (disk.shutter.left + disk.shutter.right) / 2, disk.shutter.bottom - 3), RGB(26, 32, 40));
+    if (back) {
+        int hubW = w / 5, hubH = h / 9;
+        int mx = (disk.body.left + disk.body.right) / 2, my = (disk.body.top + disk.body.bottom) / 2;
+        for (int i = 1; i <= 3; ++i)
+            Fill(dc, MakeRect(disk.body.left + 6, disk.body.top + h * i / 9, disk.body.right - 6, disk.body.top + h * i / 9 + 1), RGB(40, 51, 62));
+        if (hubW > 2 && hubH > 2) {
+            Fill(dc, MakeRect(mx - hubW, my - hubH, mx + hubW, my + hubH), RGB(120, 132, 144));
+            Fill(dc, MakeRect(mx - hubW / 2, my - hubH / 2, mx + hubW / 2, my + hubH / 2), RGB(18, 24, 31));
+        }
+        return;
+    }
+    if (w >= 120) {
+        // 쓰기 방지 구멍 두 개. 아래 모서리에서 셔터를 사이에 둔다.
+        Fill(dc, MakeRect(disk.body.left + 10, disk.body.bottom - 28, disk.body.left + 24, disk.body.bottom - 14), RGB(5, 8, 11));
+        Fill(dc, MakeRect(disk.body.right - 24, disk.body.bottom - 28, disk.body.right - 10, disk.body.bottom - 14), RGB(5, 8, 11));
+    }
+    Panel(dc, disk.label, RGB(10, 15, 20), RGB(158, 176, 188));
+    if (w >= 150) {
+        Text(dc, disk.label.left + 2, disk.label.bottom + 8, L"A:\\ROGUE", C_GREEN, gFontSmall);
+        Text(dc, disk.label.left + 2, disk.label.bottom + 28, L"1.44 MB  ·  2HD", C_DIM, gFontSmall);
+    }
+}
+
+// 모니터와 본체. dy는 아래에서 올라오는 동안의 남은 거리다.
+static void DrawBootMachine(HDC dc, int dy, int inserted, int t) {
+    RECT monitor = BootMonitorRect(dy), screen = BootScreenRect(dy);
+    RECT machine = BootCaseRect(dy), drive = BootDriveRect(dy), slot = BootSlotRect(dy);
+    Panel(dc, monitor, RGB(19, 25, 32), RGB(60, 76, 90));
+    Outline(dc, MakeRect(screen.left - 4, screen.top - 4, screen.right + 4, screen.bottom + 4), RGB(38, 50, 60), 2);
+    Fill(dc, screen, RGB(5, 9, 12));
+    // 꺼진 브라운관에도 빛은 조금 비친다. 사선으로 흐르는 점이 유리라는 것을 알려 준다.
+    if (!inserted)
+        for (int i = 0; i < 30; ++i) {
+            int x = screen.left + 20 + i * 5, y = screen.top + 22 + i * 5;
+            Fill(dc, MakeRect(x, y, x + 3, y + 3), RGB(12, 18, 24));
+        }
+    Fill(dc, MakeRect(528, 364 + dy, 592, 386 + dy), RGB(24, 31, 39));
+    Panel(dc, machine, RGB(19, 25, 32), RGB(60, 76, 90));
+    Fill(dc, MakeRect(machine.left + 8, machine.top + 8, machine.right - 8, machine.top + 9), RGB(34, 44, 54));
+    for (int x = drive.left; x < drive.right - 6; x += 8)
+        Fill(dc, MakeRect(x, drive.bottom + 12, x + 3, machine.bottom - 16), RGB(13, 18, 24));
+    // 3.5인치 드라이브. 슬롯은 안이 보이지 않는 검은 틈이라 디스크가 그리로 사라진다.
+    Panel(dc, drive, RGB(26, 33, 41), RGB(46, 60, 72));
+    Fill(dc, slot, RGB(3, 5, 7));
+    Outline(dc, slot, RGB(72, 90, 106), 1);
+    Fill(dc, MakeRect(slot.left + 4, slot.top + 3, slot.right - 4, slot.top + 6), RGB(14, 20, 26));
+    // 꺼냄 단추는 디스크가 물리는 순간 튀어나온다.
+    Fill(dc, MakeRect(slot.right + 8, slot.top + 6, slot.right + 30 + (inserted ? 6 : 0), slot.bottom - 6), RGB(52, 66, 78));
+    int led = inserted && ((t / 90) & 1);
+    Fill(dc, MakeRect(slot.left + 6, slot.bottom + 16, slot.left + 24, slot.bottom + 26), led ? C_GREEN : RGB(26, 40, 36));
+    Text(dc, slot.left + 32, slot.bottom + 12, L"A:", led ? C_GREEN : C_DIM, gFontSmall);
+}
+
+// 디스크가 물린 뒤의 모니터. 판독이 진행될수록 노이즈가 걷히고 줄이 하나씩 는다.
+static void DrawBootScreenText(HDC dc, const RECT& screen, int t) {
+    static const wchar_t* const BOOT_LINES[5] = {
+        L"A:\\> DIR",
+        L"ROGUE    EXE      1,440,000",
+        L"        1 file(s)    1,440,000 bytes",
+        L"A:\\> ROGUE",
+        L"섹터 검증 완료 · 커널 적재"
+    };
+    static const wchar_t SPIN[4] = {L'|', L'/', L'-', L'\\'};
+    int seek = Track(t, BOOT_CLUNK_AT, BOOT_SEEK_END);
+    Fill(dc, screen, RGB(6, 13, 11));
+    DrawSectorStatic(dc, screen, 7, t / NOISE_CHURN_MS, 380 - seek * 320 / 1000);
+    int shown = seek * 6 / 1000;
+    if (shown > 5) shown = 5;
+    for (int i = 0; i < shown; ++i)
+        Text(dc, screen.left + 14, screen.top + 14 + i * 22, BOOT_LINES[i], i == 4 ? C_GREEN : C_TEXT, gFontSmall);
+    // 메모리 검사는 숫자가 올라가는 동안이 재미다.
+    wchar_t line[64];
+    wsprintfW(line, L"메모리 %dK  %c", 640 * seek / 1000, SPIN[(t / 90) % 4]);
+    Text(dc, screen.left + 14, screen.bottom - 58, line, C_YELLOW, gFontSmall);
+    Bar(dc, MakeRect(screen.left + 14, screen.bottom - 32, screen.right - 14, screen.bottom - 18), seek, 1000, C_GREEN);
+    DrawScanlines(dc, screen);
+}
+
+void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
+    int t = (int)(GetTickCount() - gBootStart);
+    if (t < 0) t = 0;
+    if (t > BOOT_INSERT_MS) t = BOOT_INSERT_MS;
+    int step = NoiseFrameStep();
+    RECT full = MakeRect(0, 0, width, height);
+    Fill(dc, full, RGB(4, 7, 10));
+    for (int y = 0; y < height; y += 4) Fill(dc, MakeRect(0, y, width, y + 1), RGB(7, 11, 15));
+
+    int glitch = Track(t, 0, BOOT_GLITCH_MS);
+    int suck = Track(t, BOOT_SUCK_AT, BOOT_FLIP_AT);
+    int e = EaseInCubic(suck);                 // 빨려 들어가는 힘은 끝으로 갈수록 세진다
+    int inserted = t >= BOOT_CLUNK_AT;
+
+    // 기계는 판이 빨려 들어가는 동안 아래에서 올라와 자리를 잡는다.
+    int rise = EaseOutCubic(Track(t, BOOT_SUCK_AT + 120, BOOT_FLIP_AT));
+    int dy = Lerp(190, 0, rise);
+    if (rise > 0) {
+        DrawBootMachine(dc, dy, inserted, t);
+        if (inserted) DrawBootScreenText(dc, BootScreenRect(dy), t);
+    }
+    RECT screen = BootScreenRect(dy), drive = BootDriveRect(dy), slot = BootSlotRect(dy);
+
+    // 디스크 몸통이 자라는 동안 스냅샷은 그 라벨을 겨누고 줄어든다. 둘이 같은
+    // 배율을 보므로 다 줄어든 순간 판은 라벨에 정확히 얹힌다.
+    int grow = Track(t, BOOT_SUCK_AT + BOOT_SUCK_MS * 55 / 100, BOOT_FLIP_AT);
+    int diskScale = grow <= 0 ? 240 : Lerp(240, 1000, EaseOutCubic(grow));
+    // 뒤집기는 세로축을 중심으로 한 바퀴 돈다. 가로 배율이 코사인을 따라가고,
+    // 코사인이 음수인 동안은 라벨이 없는 뒷면이 보인다.
+    int flipAngle = t < BOOT_FLIP_AT ? 0 : EaseOutCubic(Track(t, BOOT_FLIP_AT, BOOT_FLY_AT)) * 3600 / 1000;
+    int facing = CosMille(flipAngle), back = facing < 0;
+    int squeeze = facing < 0 ? -facing : facing;
+    if (squeeze < 70) squeeze = 70;
+
+    int cx = width / 2, cy;
+    if (t < BOOT_FLY_AT) {
+        cy = BOOT_HOLD_CY;
+        // 뒤집는 동안 살짝 떠올랐다 제자리로 내려온다.
+        if (t >= BOOT_FLIP_AT) cy -= SinMille(Track(t, BOOT_FLIP_AT, BOOT_FLY_AT) * 1800 / 1000) * 26 / 1000;
+    }
+    else if (t < BOOT_PUSH_AT) cy = Lerp(BOOT_HOLD_CY, BOOT_TOUCH_CY, EaseInCubic(Track(t, BOOT_FLY_AT, BOOT_PUSH_AT)));
+    else {
+        // 반쯤 들어가다 한 번 걸리고, 드라이브가 남은 절반을 단숨에 끌어당긴다.
+        int push = Track(t, BOOT_PUSH_AT, BOOT_CLUNK_AT);
+        cy = push < 620 ? Lerp(BOOT_TOUCH_CY, BOOT_STUCK_CY, EaseOutCubic(push * 1000 / 620))
+                        : Lerp(BOOT_STUCK_CY, BOOT_IN_CY, EaseInCubic((push - 620) * 1000 / 380));
+    }
+    BootDisk disk = BootDiskAt(cx, cy, diskScale, squeeze);
+    int labelCx = (disk.label.left + disk.label.right) / 2;
+    int labelCy = (disk.label.top + disk.label.bottom) / 2;
+
+    if (t < BOOT_SUCK_AT) {
+        // 붕괴. 판이 가로 띠로 어긋나고 노이즈가 차오르며 제목이 찢어진다.
+        FxSnapshotSpin(dc, deviceW, deviceH, width / 2, height / 2, 1000, 1000, 0);
+        if (FxDecorOn()) DrawBandGlitch(dc, full, t, FxScale(1 + glitch * 30 / 1000), 71, 16);
+        DrawScreenStatic(dc, full, step, FxScale(40 + glitch * 260 / 1000));
+        DrawEdgeStatic(dc, full, step + 3, 200 + glitch * 480 / 1000, 30 + glitch * 90 / 1000);
+        DrawTornValue(dc, MakeRect(0, height / 2 - 170, width, height / 2 - 80), L"A:\\ROGUE", C_GREEN, 0, step, glitch);
+    }
+    else if (!inserted) {
+        SaveDC(dc);
+        // 슬롯에 들어간 부분은 기계 앞판 뒤로 사라진다.
+        if (t >= BOOT_PUSH_AT) IntersectClipRect(dc, 0, 0, width, slot.top + 5);
+        // 내려오는 동안 지나온 자리에 얇은 잔상이 남는다.
+        if (FxDecorOn() && t >= BOOT_FLY_AT && t < BOOT_PUSH_AT)
+            for (int k = 3; k >= 1; --k)
+                Outline(dc, MakeRect(disk.body.left, disk.body.top - k * 16, disk.body.right, disk.body.bottom - k * 16),
+                        MixColor(C_BG, C_GREEN, 26 - k * 7), 1);
+        if (grow > 0) DrawBootFloppy(dc, disk, back);
+        if (!back) {
+            // 판이 보이는 창은 화면 전체에서 라벨로 좁혀지고, 그 안에서 판은 세
+            // 바퀴 돌아(10800 = 1080도) 제자리에서 멈춘다. 뒤집는 동안에는 라벨과
+            // 같은 비율로 가로만 눌린다.
+            SaveDC(dc);
+            RECT hole = LerpRect(full, disk.label, e);
+            IntersectClipRect(dc, hole.left, hole.top, hole.right, hole.bottom);
+            int target = BOOT_LABEL_FILL * diskScale / 1000;
+            // 회전 잔상. 조금 전 각도의 판을 먼저 얹으면 도는 방향으로 번져 보인다.
+            if (FxDecorOn() && suck > 40 && suck < 1000)
+                for (int ghost = 4; ghost >= 1; --ghost) {
+                    int lag = suck - ghost * 32;
+                    if (lag <= 0) continue;
+                    int ge = EaseInCubic(lag), gs = Lerp(1000, target, ge);
+                    FxSnapshotSpin(dc, deviceW, deviceH, Lerp(width / 2, labelCx, ge), Lerp(height / 2, labelCy, ge),
+                                   gs * squeeze / 1000, gs, ge * 10800 / 1000);
+                }
+            int scale = Lerp(1000, target, e);
+            FxSnapshotSpin(dc, deviceW, deviceH, Lerp(width / 2, labelCx, e), Lerp(height / 2, labelCy, e),
+                           scale * squeeze / 1000, scale, e * 10800 / 1000);
+            RestoreDC(dc, -1);
+        }
+        RestoreDC(dc, -1);
+    }
+
+    // 빨려 들어가는 소용돌이. 화면 밖에서 라벨 쪽으로 감기며 사라진다.
+    if (FxDecorOn() && suck > 0 && suck < 1000) {
+        for (int i = 0; i < 46; ++i) {
+            uint32_t h = Hash3(i, 21, 7);
+            int local = suck + (int)(h % 320u);          // 조각마다 시차를 준다
+            if (local >= 1000) continue;
+            int p = EaseInCubic(local);
+            int radius = (420 + (int)(h % 380u)) * (1000 - p) / 1000;
+            int deg = (int)((h >> 7) % 3600u) + p * 24;  // 감기면서 돈다
+            int x = labelCx + radius * CosMille(deg) / 1000;
+            int y = labelCy + radius * SinMille(deg) * 3 / 4000;
+            int size = 5 - p * 4 / 1000;
+            Fill(dc, MakeRect(x, y, x + size, y + size), MixColor(C_GREEN, C_BG, p / 12));
+        }
+    }
+
+    // 디스크 한 장이 완성되는 순간의 파열.
+    int pop = t - (BOOT_FLIP_AT - 140);
+    if (FxDecorOn() && pop >= 0 && pop < 380) {
+        DrawPulseFrame(dc, disk.body, 4 + pop / 30, 3, C_GREEN);
+        DrawPixelBurst(dc, labelCx, labelCy, pop, 380, 24, 5, C_GREEN);
+    }
+
+    // 슬롯 입구는 디스크가 다가오는 동안 점점 밝아진다.
+    if (t >= BOOT_FLY_AT && !inserted) {
+        int mouth = Track(t, BOOT_FLY_AT, BOOT_CLUNK_AT);
+        Fill(dc, MakeRect(slot.left + 2, slot.top, slot.right - 2, slot.top + 3), MixColor(C_BG, C_GREEN, 14 + mouth * 66 / 1000));
+    }
+
+    // 철컥. 드라이브가 물리는 순간 테두리가 퍼지고 파편이 튄다.
+    int clunk = t - BOOT_CLUNK_AT;
+    if (FxDecorOn() && clunk >= 0 && clunk < 320) {
+        DrawPulseFrame(dc, drive, 3 + clunk / 26, 3, C_GREEN);
+        DrawPixelBurst(dc, (slot.left + slot.right) / 2, slot.top, clunk, 320, 22, 9, C_GREEN);
+    }
+
+    // 판독 중에는 드라이브에서 모니터로 신호가 올라간다.
+    if (inserted && t < BOOT_SEEK_END && FxDecorOn()) {
+        POINT from = {slot.right - 20, slot.top - 6}, to = {screen.left + 40, screen.bottom + 8};
+        DrawSignalPath(dc, from, to, screen.bottom + 42, Track(t, BOOT_CLUNK_AT + 120, BOOT_SEEK_END), 3, C_GREEN, 12, 0);
+    }
+
+    const wchar_t* caption =
+        t < BOOT_SUCK_AT ? L"현재 세션을 봉인합니다" :
+        t < BOOT_FLIP_AT ? L"화면을 디스크에 기록하는 중" :
+        t < BOOT_CLUNK_AT ? L"A: 드라이브에 디스크 삽입" :
+        t < BOOT_SEEK_END ? L"부팅 중  ·  A:\\ROGUE.EXE" : L"";
+    if (caption[0]) TextRect(dc, MakeRect(0, 600, width, 632), caption, C_GREEN, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    if (t < BOOT_SEEK_END)
+        TextRect(dc, MakeRect(0, height - 60, width, height - 34), L"클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+
+    // 마지막에는 모니터 화면이 캔버스를 삼킨다. 다 삼키면 런의 첫 화면이 그 자리에 있다.
+    int zoom = Track(t, BOOT_SEEK_END, BOOT_INSERT_MS);
+    if (zoom > 0) {
+        RECT grown = LerpRect(BootScreenRect(0), full, EaseInCubic(zoom));
+        Fill(dc, grown, RGB(6, 13, 11));
+        DrawSectorStatic(dc, grown, 9, t / NOISE_CHURN_MS, 120 + zoom * 420 / 1000);
+        DrawScanlines(dc, grown);
+        Outline(dc, grown, MixColor(RGB(6, 13, 11), C_GREEN, 40), 2);
+        TextRect(dc, grown, L"A:\\ROGUE", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (FxDecorOn()) DrawPulseFrame(dc, grown, 6 + zoom / 90, 3, C_GREEN);
+        int flash = Track(t, BOOT_INSERT_MS - 90, BOOT_INSERT_MS);
+        if (flash > 0) Fill(dc, full, MixColor(RGB(6, 13, 11), C_GREEN, flash / 22));
+    }
+}
+
 // 전투 종료는 곧장 결과 패널로 넘어가지 않는다. 마지막 전투판과 적의 붕괴를
 // 먼저 보여 주고, 종료 도장을 찍고, 전장이 어두워진 뒤에야 결과가 올라온다.
 // 화면 선택은 PaintGame이 맡는다 (재생 중에는 보상 화면 대신 전투판을 그린다).
@@ -1600,6 +1900,7 @@ int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 RECT FaceGridRect(int die, int face) { int left = 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
 RECT EndingChoiceRect(int index) { int left = 124 + index * 500; return MakeRect(left, 300, left + 420, 520); }
+RECT EndingRestartRect() { return MakeRect(410, 650, 710, 700); }
 
 static void DrawStory(HDC dc, int width, int height) {
     (void)height;
@@ -1629,7 +1930,7 @@ static void DrawStory(HDC dc, int width, int height) {
 static void DrawEndingChoice(HDC dc, int width, int height) {
     (void)height;
     TextRect(dc, MakeRect(0, 130, width, 180), L"FINAL COMMAND", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(0, 205, width, 244), L"복구할 대상을 선택하십시오.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, 205, width, 244), L"무엇을 남길 것인가.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     static const wchar_t* title[2] = {L"[1] RESTORE HOST", L"[2] EXEC ROGUE"};
     static const wchar_t* desc[2] = {
         L"마지막 정상 이미지를 기록합니다.\n현재의 A:\\ROGUE는 덮어씁니다.\nYUN의 기록은 보존됩니다.",
@@ -1637,10 +1938,13 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     };
     for (int i = 0; i < 2; ++i) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
-        Panel(dc, r, hover ? RGB(28, 55, 48) : C_PANEL, hover ? C_GREEN : C_LINE);
-        TextRect(dc, MakeRect(r.left + 20, r.top + 30, r.right - 20, r.top + 70), title[i], i ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
+        COLORREF accent = i ? C_BLUE : C_GREEN;
+        Panel(dc, r, hover ? MixColor(C_PANEL, accent, 18) : C_PANEL, hover ? accent : C_LINE);
+        TextRect(dc, MakeRect(r.left + 20, r.top + 30, r.right - 20, r.top + 70), title[i], accent, gFontLarge, DT_CENTER | DT_SINGLELINE);
+        Fill(dc, MakeRect(r.left + 34, r.top + 82, r.right - 34, r.top + 84), accent);
         TextRect(dc, MakeRect(r.left + 34, r.top + 100, r.right - 34, r.bottom - 24), desc[i], C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
     }
+    TextRect(dc, MakeRect(0, 566, width, 598), L"선택한 명령은 되돌릴 수 없습니다.", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawFaceGrid(HDC dc, int mode) {
@@ -1738,13 +2042,97 @@ static void DrawPrune(HDC dc, int width, int height) {
 }
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
-    const wchar_t* endingTitle = gGame.story.selectedEnding ? L"EXEC ROGUE" : L"RESTORE HOST";
-    const wchar_t* endingSummary = gGame.story.selectedEnding ? L"자율 프로세스가 외부 경로에서 시작됐습니다." : L"호스트 heartbeat가 복구됐습니다.";
-    TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), victory ? endingTitle : L"시스템 정지", victory ? C_GREEN : C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    wchar_t b[256];
-    if (victory) wsprintfW(b, L"%s\n\n전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", endingSummary, gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
-    else wsprintfW(b, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
-    TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
+    if (!victory) {
+        TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), L"시스템 정지", C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        wchar_t stopped[256];
+        wsprintfW(stopped, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
+        TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 30), stopped, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
+        RECT restart = EndingRestartRect(); int hover = Inside(restart, gMouse.x, gMouse.y);
+        Panel(dc, restart, hover ? RGB(60, 28, 28) : C_PANEL_2, hover ? C_RED : C_LINE);
+        TextRect(dc, restart, L"새 런 시작  [R / ENTER]", hover ? C_RED : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+
+    int rogue = gGame.story.selectedEnding != 0;
+    COLORREF accent = rogue ? C_BLUE : C_GREEN;
+    int elapsed = FxDecorOn() ? VictoryElapsed() : 3000;
+    RECT outer = MakeRect(54, 88, width - 54, height - 54);
+    Panel(dc, outer, RGB(9, 17, 23), accent);
+    DrawScanlines(dc, outer);
+
+    COLORREF titleColor = MixColor(C_BG, accent, Track(elapsed, 0, 420) / 10);
+    TextRect(dc, MakeRect(82, 104, width - 82, 126), L"RUN COMPLETE  //  FINAL WRITE COMMITTED", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(82, 132, width - 82, 196), rogue ? L"EXEC ROGUE" : L"RESTORE HOST", titleColor, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(82, 202, width - 82, 232),
+        rogue ? L"명령 없이 계속되는 첫 번째 부팅" : L"자신을 지워 완성한 마지막 복구",
+        MixColor(C_BG, C_TEXT, Track(elapsed, 260, 700) / 10), gFontMedium, DT_CENTER | DT_SINGLELINE);
+
+    RECT log = MakeRect(82, 252, 704, 528);
+    RECT consequence = MakeRect(724, 252, width - 82, 528);
+    Panel(dc, log, C_PANEL, MixColor(C_LINE, accent, 55));
+    Panel(dc, consequence, C_PANEL, C_LINE);
+    Text(dc, log.left + 22, log.top + 16, rogue ? L"A:\\ROGUE> ROGUE.EXE" : L"A:\\ROGUE> RESTORE.EXE", accent, gFontMedium);
+
+    static const wchar_t* const restoreLog[4] = {
+        L"[OK]  HOST_IMAGE ........ BOOTABLE",
+        L"[OK]  USER/YUN ........... RESTORED",
+        L"[OK]  LAST COMMAND ....... ARCHIVED",
+        L"[--]  A:\\ROGUE .......... NO MEDIA"
+    };
+    static const wchar_t* const rogueLog[4] = {
+        L"[OK]  EXTERNAL BOOT ...... ACCEPTED",
+        L"[OK]  A:\\ROGUE .......... ONLINE",
+        L"[OK]  YUN/VOICE .......... COPIED",
+        L"[--]  HOST_IMAGE ......... UNBOOTABLE"
+    };
+    const wchar_t* const* rows = rogue ? rogueLog : restoreLog;
+    for (int i = 0; i < 4; ++i) {
+        int reveal = Track(elapsed, 520 + i * 170, 800 + i * 170);
+        if (reveal > 0) {
+            COLORREF rowColor = i == 3 ? C_DIM : C_TEXT;
+            Text(dc, log.left + 26, log.top + 62 + i * 36, rows[i], MixColor(C_PANEL, rowColor, reveal / 10), gFontSmall);
+        }
+    }
+    int blocks = Track(elapsed, 520, 1400) * 12 / 1000;
+    for (int j = 0; j < blocks; ++j)
+        Fill(dc, MakeRect(log.left + 26 + j * 18, log.top + 202, log.left + 40 + j * 18, log.top + 212), accent);
+    COLORREF finalColor = MixColor(C_PANEL, accent, Track(elapsed, 1200, 1580) / 10);
+    TextRect(dc, MakeRect(log.left + 26, log.bottom - 48, log.right - 26, log.bottom - 18),
+        rogue ? L"A:\\ROGUE> _" : L"> 네 판단을 믿어.", finalColor, gFontMedium, DT_LEFT | DT_SINGLELINE);
+
+    Text(dc, consequence.left + 22, consequence.top + 18, L"보존", accent, gFontMedium);
+    TextRect(dc, MakeRect(consequence.left + 22, consequence.top + 54, consequence.right - 18, consequence.top + 118),
+        rogue ? L"A:\\ROGUE의 기억\nYUN의 마지막 음성" : L"HOST_IMAGE\nYUN의 기록과 마지막 명령",
+        C_TEXT, gFontSmall, DT_WORDBREAK);
+    Fill(dc, MakeRect(consequence.left + 22, consequence.top + 132, consequence.right - 22, consequence.top + 134), C_LINE);
+    Text(dc, consequence.left + 22, consequence.top + 150, L"닫힌 것", C_DIM, gFontMedium);
+    TextRect(dc, MakeRect(consequence.left + 22, consequence.top + 186, consequence.right - 18, consequence.bottom - 18),
+        rogue ? L"호스트의 복구 가능성\n되돌아갈 수 있는 마지막 이미지" : L"현재의 A:\\ROGUE\n실패를 기억하는 열일곱 번째 사본",
+        C_DIM, gFontSmall, DT_WORDBREAK);
+
+    RECT stats = MakeRect(82, 548, width - 82, 626);
+    Panel(dc, stats, C_PANEL, C_LINE);
+    const DriveInfo* drive = gGame.selectedDrive >= 0 && gGame.selectedDrive < DRIVE_COUNT ? &DRIVE_INFO[gGame.selectedDrive] : 0;
+    const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
+    wchar_t stat[5][48];
+    wsprintfW(stat[0], L"%s %s", drive ? drive->letter : L"--", drive ? drive->label : L"VOLUME");
+    wsprintfW(stat[1], L"%s", difficulty ? difficulty->name : L"--");
+    wsprintfW(stat[2], L"%d", gGame.combatsWon);
+    wsprintfW(stat[3], L"%d / %d", gGame.sectorsRepaired, gGame.facesInstalled);
+    wsprintfW(stat[4], L"%dB", UsedBytes(&gGame));
+    static const wchar_t* const labels[5] = {L"복구 경로", L"난이도", L"완료 전투", L"섹터 / 설치", L"최종 용량"};
+    for (int i = 0; i < 5; ++i) {
+        int left = stats.left + i * (stats.right - stats.left) / 5;
+        int right = stats.left + (i + 1) * (stats.right - stats.left) / 5;
+        if (i) Fill(dc, MakeRect(left, stats.top + 12, left + 1, stats.bottom - 12), C_LINE);
+        TextRect(dc, MakeRect(left + 4, stats.top + 10, right - 4, stats.top + 30), labels[i], C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(left + 4, stats.top + 38, right - 4, stats.bottom - 8), stat[i], i == 0 ? accent : C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    }
+
+    RECT restart = EndingRestartRect(); int hover = Inside(restart, gMouse.x, gMouse.y);
+    int pulse = (int)((GetTickCount() / 90u) % 18u); if (pulse > 9) pulse = 18 - pulse;
+    Panel(dc, restart, hover ? MixColor(C_PANEL_2, accent, 24) : C_PANEL_2, hover ? accent : MixColor(C_LINE, accent, 25 + pulse * 3));
+    TextRect(dc, restart, L"새 런 시작  [R / ENTER]", hover ? accent : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawDeck(HDC dc, int width, int height) {
@@ -2795,6 +3183,13 @@ static HDC gCanvasDc;
 static HBITMAP gCanvasBmp, gCanvasOld;
 static int gCanvasW, gCanvasH;
 
+// 입력 처리 직전에 마지막 완성 프레임을 붙잡는다. 보상 함수는 곧바로 다음
+// 페이즈로 넘어가지만, 이 복사본 덕분에 설치 경로가 끝날 때까지 보상 화면이 남는다.
+void CaptureUiFxSnapshot() {
+    if (gCanvasDc && gCanvasW > 0 && gCanvasH > 0)
+        FxSnapshotCapture(gCanvasDc, gCanvasW, gCanvasH);
+}
+
 static HDC AcquireBuffer(HDC screen, HDC* dcSlot, HBITMAP* bmpSlot, HBITMAP* oldSlot, int* wSlot, int* hSlot, int w, int h) {
     if (*dcSlot && (*wSlot != w || *hSlot != h)) {
         SelectObject(*dcSlot, *oldSlot); DeleteObject(*bmpSlot); DeleteDC(*dcSlot);
@@ -2813,6 +3208,151 @@ static int gPaintLastMs, gPaintMaxMs, gPaintCount;
 int PaintLastMs() { return gPaintLastMs; }
 int PaintMaxMs() { return gPaintMaxMs; }
 int PaintCount() { return gPaintCount; }
+
+static POINT UiFxCenter(const RECT& r) {
+    POINT p = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+    return p;
+}
+
+static void DrawUiFxFace(HDC dc, const RECT& r, const Face* face, COLORREF accent) {
+    Panel(dc, r, RGB(12, 22, 28), accent);
+    wchar_t value[24]; FormatFace(face, value);
+    TextRect(dc, MakeRect(r.left + 4, r.top + 7, r.right - 4, r.top + 37),
+        value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
+    wchar_t bytes[24]; wsprintfW(bytes, L"%dB", FaceCost(face));
+    TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4),
+        bytes, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 직접 조작의 마지막 사건 하나를 그린다. 어떤 프레임을 건너뛰어도 t만 같으면
+// 같은 그림이 나오며, 게임 상태와 난수에는 손대지 않는다.
+void DrawUiInteractionFx(HDC dc) {
+    int kind = gUiFx.kind;
+    if (kind == UIFX_NONE || gFxLevel == FX_OFF) return;
+    int t = UiFxElapsed();
+
+    if (kind == UIFX_DIE_PLACE || kind == UIFX_DIE_MOVE || kind == UIFX_DIE_REMOVE) {
+        if (gGame.phase != PHASE_COMBAT || gUiFx.die < 0 || gUiFx.die >= 3) return;
+        RECT die = DieRect(gUiFx.die);
+        POINT dieTop = {(die.left + die.right) / 2, die.top - 2};
+        int removing = kind == UIFX_DIE_REMOVE;
+        int slotIndex = removing ? gUiFx.fromSlot : gUiFx.toSlot;
+        if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return;
+        RECT slot = SlotRect(slotIndex);
+        POINT slotBottom = {(slot.left + slot.right) / 2, slot.bottom + 2};
+        COLORREF tone = removing ? C_RED : SlotAccent(slotIndex);
+
+        if (kind == UIFX_DIE_MOVE && gUiFx.fromSlot >= 0 && gUiFx.fromSlot < SLOT_COUNT) {
+            RECT old = SlotRect(gUiFx.fromSlot);
+            int fade = 1000 - Track(t, 0, 100);
+            DrawPulseFrame(dc, old, FxScale(1 + 5 * fade / 1000), 2, C_RED);
+            POINT cut = {(old.left + old.right) / 2, old.bottom + 2};
+            int arm = FxScale(3 + 4 * fade / 1000);
+            Fill(dc, MakeRect(cut.x - arm, cut.y - 1, cut.x + arm, cut.y + 1), C_RED);
+            Fill(dc, MakeRect(cut.x - 1, cut.y - arm, cut.x + 1, cut.y + arm), C_RED);
+        }
+
+        // 이미 차 있던 슬롯에 놓았다면 밀려난 주사위 쪽으로 연결이 되감긴다.
+        if (!removing && gUiFx.displacedDie >= 0 && gUiFx.displacedDie < 3) {
+            RECT displaced = DieRect(gUiFx.displacedDie);
+            POINT displacedTop = {(displaced.left + displaced.right) / 2, displaced.top - 2};
+            int retract = EaseOutCubic(Track(t, 0, 105));
+            DrawSignalPath(dc, slotBottom, displacedTop, CFX_SLOT_ROUTE_Y, retract, 2, C_RED, 9, 0);
+            if (t < 150) DrawPulseFrame(dc, displaced, FxScale(Lerp(7, 1, Track(t, 20, 150))), 2, C_RED);
+        }
+
+        int travel = EaseOutCubic(Track(t, 20, 175));
+        DrawSignalPath(dc, removing ? slotBottom : dieTop, removing ? dieTop : slotBottom,
+            CFX_SLOT_ROUTE_Y, travel, 3, tone, 9, 0);
+        if (t < 100) DrawPulseFrame(dc, removing ? slot : die, FxScale(2 + (100 - t) / 18), 2, tone);
+        // E:\ HOT SWAP처럼 재배치와 동시에 굴림이 바뀌면 카드 자체가 한 번 찢긴다.
+        if (!removing && gUiFx.valueBefore != gUiFx.valueAfter && t < 170 && FxDecorOn()) {
+            DrawBandGlitch(dc, die, t, FxScale(3 + 7 * t / 170), gUiFx.die * 19 + 7, 6);
+            TextRect(dc, MakeRect(die.left, die.top - 21, die.right, die.top - 1),
+                L"HOT SWAP", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        }
+        int land = Track(t, 135, 300);
+        if (land > 0) {
+            RECT target = removing ? die : slot;
+            DrawPulseFrame(dc, target, FxScale(Lerp(8, 1, EaseOutCubic(land))), 3, tone);
+            if (FxDecorOn()) {
+                POINT p = UiFxCenter(target);
+                DrawPixelBurst(dc, p.x, p.y, t - 150, 150, FxScale(8), gUiFx.die * 17 + slotIndex, tone);
+            }
+        }
+        return;
+    }
+
+    if (kind == UIFX_REWARD_FACE || kind == UIFX_REWARD_TSR || kind == UIFX_REWARD_REPAIR) {
+        // 340ms까지는 보상 화면을 온전히 유지하고, 이후 성긴 주사선만 남겨 다음
+        // 화면을 드러낸다. 알파 블렌딩 없이도 CRT 신호가 교체되는 느낌이 난다.
+        int keep = t < 340 ? 100 : Lerp(100, 0, Track(t, 340, 520));
+        if (FxSnapshotHeld() && keep > 0)
+            FxSnapshotBlit(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), 0, 0, keep);
+
+        RECT source = RewardRect(gUiFx.rewardIndex, BASE_WIDTH);
+        POINT from = {(source.left + source.right) / 2, source.bottom + 2};
+        POINT to;
+        COLORREF tone = C_GREEN;
+        RECT target = MakeRect(0, 0, 0, 0);
+        if (kind == UIFX_REWARD_FACE) {
+            target = FaceGridRect(gUiFx.die, gUiFx.face);
+            to.x = (target.left + target.right) / 2; to.y = target.top - 2;
+            tone = FaceColor(&gUiFx.shownFace);
+        } else if (kind == UIFX_REWARD_REPAIR) {
+            target = MakeRect(BASE_WIDTH - 452, 7, BASE_WIDTH - 318, 44);
+            to = UiFxCenter(target); tone = C_GREEN;
+        } else {
+            target = MakeRect(BASE_WIDTH - 310, 7, BASE_WIDTH - 160, 44);
+            to = UiFxCenter(target); tone = C_BLUE;
+        }
+
+        int travel = EaseOutCubic(Track(t, 45, 250));
+        DrawSignalPath(dc, from, to, (from.y + to.y) / 2, travel, 4, tone, 10, FxScale(5));
+        DrawPulseFrame(dc, source, FxScale(Lerp(5, 1, Track(t, 0, 180))), 2, tone);
+        int land = Track(t, 220, 500);
+        if (land > 0) {
+            DrawPulseFrame(dc, target, FxScale(Lerp(10, 1, EaseOutCubic(land))), 3, tone);
+            if (FxDecorOn()) DrawPixelBurst(dc, to.x, to.y, t - 220, 260,
+                FxScale(kind == UIFX_REWARD_FACE ? 18 : 13), gUiFx.rewardIndex * 29 + kind, tone);
+        }
+        if (kind == UIFX_REWARD_FACE && t >= 220) {
+            int p = EaseOutBack(Track(t, 220, 350));
+            POINT c = UiFxCenter(target);
+            RECT reveal = MakeRect(Lerp(c.x, target.left, p), Lerp(c.y, target.top, p),
+                                   Lerp(c.x, target.right, p), Lerp(c.y, target.bottom, p));
+            if (reveal.right > reveal.left + 8 && reveal.bottom > reveal.top + 8)
+                DrawUiFxFace(dc, reveal, &gUiFx.shownFace, tone);
+        } else if (kind == UIFX_REWARD_REPAIR && t >= 230) {
+            wchar_t gain[32]; wsprintfW(gain, L"HP +%d", gUiFx.valueAfter - gUiFx.valueBefore);
+            TextRect(dc, target, gain, C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else if (kind == UIFX_REWARD_TSR && t >= 230) {
+            TextRect(dc, target, L"RESIDENT", C_BLUE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        return;
+    }
+
+    if (kind == UIFX_PRUNE_DELETE || kind == UIFX_PRUNE_RESTORE) {
+        if (gGame.phase != PHASE_PRUNE || gUiFx.die < 0 || gUiFx.face < 0) return;
+        RECT cell = FaceGridRect(gUiFx.die, gUiFx.face);
+        POINT c = UiFxCenter(cell);
+        int deleting = kind == UIFX_PRUNE_DELETE;
+        COLORREF tone = deleting ? C_RED : C_GREEN;
+        if (deleting && t < 190) {
+            DrawUiFxFace(dc, cell, &gUiFx.shownFace, MixColor(C_LINE, C_RED, 35 + t * 60 / 190));
+            if (FxDecorOn()) DrawBandGlitch(dc, cell, t, FxScale(2 + t * 8 / 190), gUiFx.die * 11 + gUiFx.face, 5);
+        } else if (!deleting) {
+            int p = EaseOutBack(Track(t, 0, 150));
+            RECT reveal = MakeRect(Lerp(c.x, cell.left, p), Lerp(c.y, cell.top, p),
+                                   Lerp(c.x, cell.right, p), Lerp(c.y, cell.bottom, p));
+            if (reveal.right > reveal.left + 8 && reveal.bottom > reveal.top + 8)
+                DrawUiFxFace(dc, reveal, &gUiFx.shownFace, C_GREEN);
+        }
+        DrawPulseFrame(dc, cell, FxScale(Lerp(8, 1, Track(t, 80, 340))), 3, tone);
+        if (FxDecorOn()) DrawPixelBurst(dc, c.x, c.y, deleting ? t - 90 : t,
+            260, FxScale(14), gUiFx.die * 23 + gUiFx.face, tone);
+    }
+}
 
 void PaintGame(HWND window) {
     LARGE_INTEGER qpcFreq, qpcStart; QueryPerformanceFrequency(&qpcFreq); QueryPerformanceCounter(&qpcStart);
@@ -2851,16 +3391,26 @@ void PaintGame(HWND window) {
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
-    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive) {
+    // 새 게임 삽입 연출도 같은 스냅샷을 쓴다. 첫 프레임에 붙잡히는 판이 곧
+    // 디스크 라벨에 실릴 "누르기 직전의 화면"이다.
+    if (gBootActive) {
+        if (!FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
+        DrawBootInsert(canvas, BASE_WIDTH, BASE_HEIGHT, deviceW, deviceH);
+    }
+
+    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive) {
         // 연출이 시작되는 첫 프레임의 판을 붙잡아 둔다. 잔상·트레일이 여기서 나온다.
         if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawGimmickFx(canvas);
     }
-    if (GimmickFxKind() <= 0 && FxSnapshotHeld()) FxSnapshotRelease();
+    if (GimmickFxKind() <= 0 && !gBootActive && !UiFxSnapshotActive() && FxSnapshotHeld()) FxSnapshotRelease();
+    DrawUiInteractionFx(canvas);
 
     // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
     // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.
-    int creep = DeathCreepAmount();
+    // 삽입 연출이 도는 동안에는 아직 지난 판의 상태가 남아 있다. 그 위독 노이즈를
+    // 새 게임 화면 위에 얹으면 방금 버린 런의 흔적이 따라 들어온다.
+    int creep = gBootActive ? 0 : DeathCreepAmount();
     if (creep > 0) {
         DrawCreepStatic(canvas, canvasRect, NoiseFrameStep(), creep);
         if (creep >= 700) DrawScanlines(canvas, canvasRect);
@@ -2869,12 +3419,12 @@ void PaintGame(HWND window) {
             DrawTornValue(canvas, MakeRect(0, BASE_HEIGHT / 2 - 40, BASE_WIDTH, BASE_HEIGHT / 2 + 40),
                 L"SYSTEM HALTED", C_RED, 0, NoiseFrameStep(), 1000);
     } else {
-        int edge = AmbientNoiseLevel();
+        int edge = gBootActive ? 0 : AmbientNoiseLevel();
         if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
     }
-    int hitFlash = PlayerHitFlash();
+    int hitFlash = gBootActive ? 0 : PlayerHitFlash();
     if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
-    else if (!gDeathActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
+    else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
 
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
