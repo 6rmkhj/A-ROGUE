@@ -260,6 +260,29 @@ static int CheckCombatFxTrace() {
         return Fail("an attack chain must record its target and real hp damage");
     if (!TraceLineHas(&chain, repeat->traceLine, L"[연쇄")) return Fail("chain must point at the chain line");
 
+    // 적이 둘이면 연쇄는 대상이 아닌 쪽으로 튄다 (이슈 #31).
+    GameState spreadChain; SetupBossFight(&spreadChain, 5, 1, 0xFC00000Bu, 5);
+    spreadChain.enemies[0].hp = 999; spreadChain.enemies[0].maxHp = 999; spreadChain.enemies[0].block = 0;
+    spreadChain.enemies[0].intent = INTENT_GUARD; spreadChain.enemies[0].intentValue = 0;
+    if (spreadChain.enemyCount != 1) return Fail("the spread chain setup must open with one enemy");
+    // 두 번째 카드를 직접 세운다. 소환 턴을 기다리지 않는다 (다른 시험들과 같은 방식).
+    spreadChain.enemyCount = 2;
+    EnemyState* extra = &spreadChain.enemies[1];
+    extra->kind = (uint8_t)MOB_X_ESCAPEE; extra->alive = 1; extra->burn = 0; extra->power = 0;
+    extra->hp = 999; extra->maxHp = 999; extra->block = 0;
+    extra->intent = INTENT_GUARD; extra->intentValue = 0;
+    spreadChain.targetEnemy = 0;
+    spreadChain.playerHp = 999;
+    int bossBefore = spreadChain.enemies[0].hp, minionBefore = spreadChain.enemies[1].hp;
+    AssignDieToSlot(&spreadChain, 0, SLOT_ATTACK);
+    AssignDieToSlot(&spreadChain, 1, SLOT_CHAIN);
+    EndTurn(&spreadChain);
+    const CombatFxEvent* spread = FirstFx(&spreadChain, CFX_CHAIN);
+    if (!spread) return Fail("a chain with two enemies must still be recorded");
+    if (spread->targetEnemy != 1) return Fail("the chain must jump to the enemy that is not the target");
+    if (spreadChain.enemies[1].hp >= minionBefore) return Fail("the chain must actually damage the second enemy");
+    if (spreadChain.enemies[0].hp >= bossBefore) return Fail("the attack slot must still hit the chosen target");
+
     GameState chainBlock; SetupBossFight(&chainBlock, 0, 0, 0xFC000008u, 5);
     chainBlock.boss.gimmick = GIMMICK_NONE;
     chainBlock.enemies[0].hp = 999; chainBlock.enemies[0].maxHp = 999;

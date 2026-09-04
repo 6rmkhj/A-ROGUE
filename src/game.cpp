@@ -1437,6 +1437,19 @@ static int FirstLivingEnemy(const GameState* game) {
     return -1;
 }
 
+// 연쇄가 때릴 자리. 대상이 아닌 다른 적으로 튄다.
+//
+// 적이 하나뿐이던 시절 연쇄는 같은 적을 한 번 더 때렸고, 그래서 공격 슬롯에
+// 좋은 면을 넣는 것과 역할이 겹쳐 잘 쓰이지 않았다(이슈 #31). 판에 적이
+// 여럿일 때만 갈라지므로, 적이 하나면 예전과 같은 자리를 때린다.
+static int ChainTarget(const GameState* game) {
+    int primary = FirstLivingEnemy(game);
+    if (primary < 0) return -1;
+    for (int i = 0; i < game->enemyCount; ++i)
+        if (i != primary && game->enemies[i].alive) return i;
+    return primary;
+}
+
 static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
     if (enemyIndex < 0 || damage <= 0) return 0;
     EnemyState* enemy = &game->enemies[enemyIndex];
@@ -1680,7 +1693,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
         int repeat = (game->lastDamage * (chainPower + 4)) / 13;
         if (chainKind == FACE_ECHO) repeat = game->lastDamage;
         if (chainKind == FACE_WILD) repeat += 2;
-        int chainTarget = FirstLivingEnemy(game);
+        int chainTarget = ChainTarget(game);
         int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
         int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
         DamageEnemy(game, chainTarget, repeat);
