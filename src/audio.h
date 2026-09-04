@@ -20,8 +20,9 @@ enum SfxId {
 };
 
 void AudioOpen(HWND window);
-void AudioPump();
 void AudioClose();
+// 장치가 버퍼를 다 비웠는데 채워 주지 못한 횟수. 끊김이 실제로 났는지 여기서 본다.
+int AudioUnderruns();
 void PlaySfx(int id);
 void PlaySfxPitched(int id, int semitones);
 

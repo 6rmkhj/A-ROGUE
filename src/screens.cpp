@@ -2603,7 +2603,35 @@ void DrawGimmickFx(HDC dc) {
     if (!global) DrawFxStamp(dc, kind, t, dur, fam);
 }
 
+// ---- 프레임 버퍼 캐시 ----------------------------------------------------
+// 캔버스(논리 해상도 x 배율)를 프레임마다 새로 만들면 FHD에서는 매 프레임 13MB짜리
+// 비트맵을 할당·해제하게 된다. 애니메이션 타이머가 16ms마다 리페인트를 걸면
+// 그것만으로 렉이 난다. 크기가 바뀔 때만 다시 만든다.
+static HDC gCanvasDc;
+static HBITMAP gCanvasBmp, gCanvasOld;
+static int gCanvasW, gCanvasH;
+
+static HDC AcquireBuffer(HDC screen, HDC* dcSlot, HBITMAP* bmpSlot, HBITMAP* oldSlot, int* wSlot, int* hSlot, int w, int h) {
+    if (*dcSlot && (*wSlot != w || *hSlot != h)) {
+        SelectObject(*dcSlot, *oldSlot); DeleteObject(*bmpSlot); DeleteDC(*dcSlot);
+        *dcSlot = 0; *bmpSlot = 0;
+    }
+    if (!*dcSlot) {
+        *dcSlot = CreateCompatibleDC(screen);
+        *bmpSlot = CreateCompatibleBitmap(screen, w, h);
+        *oldSlot = (HBITMAP)SelectObject(*dcSlot, *bmpSlot);
+        *wSlot = w; *hSlot = h;
+    }
+    return *dcSlot;
+}
+
+static int gPaintLastMs, gPaintMaxMs, gPaintCount;
+int PaintLastMs() { return gPaintLastMs; }
+int PaintMaxMs() { return gPaintMaxMs; }
+int PaintCount() { return gPaintCount; }
+
 void PaintGame(HWND window) {
+    LARGE_INTEGER qpcFreq, qpcStart; QueryPerformanceFrequency(&qpcFreq); QueryPerformanceCounter(&qpcStart);
     SyncLastGasp();
     SyncIdleAnimation();
     SyncCombatFx();
@@ -2619,7 +2647,7 @@ void PaintGame(HWND window) {
     int deviceW = (int)(BASE_WIDTH * scale), deviceH = (int)(BASE_HEIGHT * scale);
     if (deviceW < 1) deviceW = 1;
     if (deviceH < 1) deviceH = 1;
-    HDC canvas = CreateCompatibleDC(dc); HBITMAP canvasBitmap = CreateCompatibleBitmap(dc, deviceW, deviceH); HBITMAP oldCanvas = (HBITMAP)SelectObject(canvas, canvasBitmap);
+    HDC canvas = AcquireBuffer(dc, &gCanvasDc, &gCanvasBmp, &gCanvasOld, &gCanvasW, &gCanvasH, deviceW, deviceH);
     SetMapMode(canvas, MM_ANISOTROPIC);
     SetWindowExtEx(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
     SetViewportExtEx(canvas, deviceW, deviceH, 0);
@@ -2667,26 +2695,33 @@ void PaintGame(HWND window) {
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 
-    // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
-    // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
-    HDC composite = CreateCompatibleDC(dc); HBITMAP compositeBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight); HBITMAP oldComposite = (HBITMAP)SelectObject(composite, compositeBitmap);
+    // 2단계: 캔버스를 화면에 직접 올린다. 예전에는 창 크기 합성 버퍼에 배경을 깔고
+    // 캔버스를 얹은 뒤 그 버퍼를 다시 화면에 복사했다 - 배경 채우기와 확대 사이가
+    // 노출돼 깜빡인다는 이유였다. 그런데 캔버스가 덮는 자리에는 배경을 칠할 필요가
+    // 없다. 캔버스 바깥의 띠 네 개만 따로 채우면 겹치는 픽셀이 없어 깜빡일 자리가
+    // 없고, 창 크기 복사 한 번(FHD에서 3.4M 픽셀)이 통째로 사라진다.
     float outScale; int outX, outY; ComputeCanvasTransform(clientWidth, clientHeight, &outScale, &outX, &outY);
     int scaledWidth = (int)(BASE_WIDTH * outScale), scaledHeight = (int)(BASE_HEIGHT * outScale);
-    Fill(composite, client, C_BG);
-    SetStretchBltMode(composite, HALFTONE); SetBrushOrgEx(composite, 0, 0, 0);
     int shakeX = (int)(ScreenShakeX() * outScale), shakeY = (int)(ScreenShakeY() * outScale);
+    int left = outX + shakeX, top = outY + shakeY, right = left + scaledWidth, bottom = top + scaledHeight;
+    if (top > 0) Fill(dc, MakeRect(0, 0, clientWidth, top), C_BG);
+    if (bottom < clientHeight) Fill(dc, MakeRect(0, bottom, clientWidth, clientHeight), C_BG);
+    if (left > 0) Fill(dc, MakeRect(0, top, left, bottom), C_BG);
+    if (right < clientWidth) Fill(dc, MakeRect(right, top, clientWidth, bottom), C_BG);
     // 캔버스를 장치 좌표로 되돌려 픽셀 대 픽셀로 옮긴다. 화면과 크기가 같으면
     // 확대가 일어나지 않고, 상한에 걸린 경우에만 남은 몫을 늘린다.
     SetMapMode(canvas, MM_TEXT);
     if (deviceW == scaledWidth && deviceH == scaledHeight)
-        BitBlt(composite, outX + shakeX, outY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, SRCCOPY);
-    else
-        StretchBlt(composite, outX + shakeX, outY + shakeY, scaledWidth, scaledHeight, canvas, 0, 0, deviceW, deviceH, SRCCOPY);
+        BitBlt(dc, left, top, scaledWidth, scaledHeight, canvas, 0, 0, SRCCOPY);
+    else {
+        SetStretchBltMode(dc, HALFTONE); SetBrushOrgEx(dc, 0, 0, 0);
+        StretchBlt(dc, left, top, scaledWidth, scaledHeight, canvas, 0, 0, deviceW, deviceH, SRCCOPY);
+    }
 
-    // 3단계: 완성된 프레임을 화면에 단 한 번에 복사한다.
-    BitBlt(dc, 0, 0, clientWidth, clientHeight, composite, 0, 0, SRCCOPY);
-
-    SelectObject(composite, oldComposite); DeleteObject(compositeBitmap); DeleteDC(composite);
-    SelectObject(canvas, oldCanvas); DeleteObject(canvasBitmap); DeleteDC(canvas);
+    // 버퍼는 다음 프레임이 그대로 쓴다. 지우지 않는다.
     EndPaint(window, &paint);
+    LARGE_INTEGER qpcEnd; QueryPerformanceCounter(&qpcEnd);
+    gPaintLastMs = (int)((qpcEnd.QuadPart - qpcStart.QuadPart) * 1000 / qpcFreq.QuadPart);
+    if (gPaintLastMs > gPaintMaxMs) gPaintMaxMs = gPaintLastMs;
+    ++gPaintCount;
 }

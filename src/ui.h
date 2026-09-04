@@ -179,3 +179,7 @@ int CanRepairSector();
 void ApplyFullscreen(int enable);
 void ApplyWindowedScale(int percent);
 void PaintGame(HWND window);
+// 페인트 계측. 터미널 perf 명령이 읽는다.
+int PaintLastMs();
+int PaintMaxMs();
+int PaintCount();
