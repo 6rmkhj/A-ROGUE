@@ -92,6 +92,10 @@ int GimmickFxImpactAt(int kind, int b);   // 히트스톱이 걸리는 시점 ms
 void DrawGimmickFx(HDC dc);
 // 철문이 아직 안 내려왔으면 1. 잠금 표시를 그때까지 미루는 데 쓴다.
 int GimmickLockPending(int slot);
+// 소환된 카드가 아직 격리막 안에 있으면 1. 계산 재생 중과 연출의 임팩트 전까지는
+// 카드를 그리지도, 클릭하지도, 세지도 않는다. 규칙은 이미 소환을 끝냈지만 화면에서는
+// 막이 깨지는 순간에 나타나야 연출이 사건이 된다.
+int GimmickSummonPending(int enemyIndex);
 
 // ---- 전투 시각 이벤트 재생 -------------------------------------------------
 // game.cpp가 남긴 CombatFxEvent를 계산 줄 번호에 맞춰 되짚는다.

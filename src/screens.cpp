@@ -344,6 +344,7 @@ static void FormatGimmickStatus(wchar_t* out, int size) {
         else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) {
             // 예고는 저장된 상태가 아니라 턴 번호에서 나온다. 규칙과 같은 식이다.
             int loose = LivingMinionCount(&gGame), cap = gi->p2;
+            if (loose > 0 && GimmickSummonPending(gGame.boss.fxA)) --loose;   // 아직 안 나온 탈주체는 세지 않는다
             if (loose >= cap) wsprintfW(out, L"탈주체 %d · 한계", loose);
             else if (gGame.turn % gi->p1 == 0) lstrcpynW(out, L"이번 턴 끝 탈주", size);
             else if ((gGame.turn + 1) % gi->p1 == 0) lstrcpynW(out, L"예고: 다음 턴 탈주", size);
@@ -913,7 +914,7 @@ static void DrawSidebar(HDC dc, int width, int height) {
 }
 
 static void DrawCombat(HDC dc, int width, int height) {
-    for (int i = 0; i < gGame.enemyCount; ++i) DrawEnemy(dc, i);
+    for (int i = 0; i < gGame.enemyCount; ++i) if (!GimmickSummonPending(i)) DrawEnemy(dc, i);   // 격리막 안의 카드는 연출이 연다
     DrawTsrPanel(dc);
     DrawRoutingState(dc);   // 지금 이어진 해결 순서 (N:\ 계열 보스전에서만)
     DrawCombatFxBack(dc);   // 신호는 슬롯·주사위 아래를 지나간다
@@ -1996,6 +1997,13 @@ int GimmickLockPending(int slot) {
     if (actionMs <= 0) return 0;
     int act = t < actionMs ? t * 1000 / actionMs : 1000;
     return LockShutterFall(act) < 880;
+}
+
+int GimmickSummonPending(int enemyIndex) {
+    if (gGame.boss.firedFx != GIMMICK_SANDBOX_BREACH || gGame.boss.fxA != enemyIndex) return 0;
+    if (gTurnTraceActive) return 1;                            // 재생 중 — 아직 벌어지지 않은 일이다
+    if (GimmickFxKind() != GIMMICK_SANDBOX_BREACH) return 0;   // 연출이 끝났다 — 이제 나와 있는 게 맞다
+    return GimmickFxElapsed() < GimmickFxImpactAt(GIMMICK_SANDBOX_BREACH, GimmickFxB());   // 막이 깨지기 전
 }
 
 // ---- D:\ 복원 -------------------------------------------------------------

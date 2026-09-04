@@ -566,7 +566,7 @@ static void ClickCombat(int x, int y) {
     if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
     if (IsTsrInstalled(&gGame, TSR_KEYB) && Inside(KeybButtonRect(), x, y)) { KeybRerollSelected(); return; }
     if (!gRolled) return;
-    for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
+    for (int i = 0; i < gGame.enemyCount; ++i) if (!GimmickSummonPending(i) && Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
     for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) {
         if (gGame.selectedDie >= 0) {
