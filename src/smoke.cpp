@@ -398,11 +398,14 @@ static int CheckDriveRulesStoryAndMusic() {
     MusicSetDrive(&m1, 5); int32_t xbuf[10000] = {}; MusicRender(&m1, xbuf, 10000); if (m1.stepCount != 15) return Fail("QUARANTINE music must use a 15-step bar");
     MusicState mute; MusicInit(&mute); MusicSetEnabled(&mute, 0); int32_t silent[128] = {}; MusicRender(&mute, silent, 128);
     for (int i = 0; i < 128; ++i) if (silent[i] != 0) return Fail("muted music must render silence");
-    MusicState clockTest; MusicInit(&clockTest); int32_t timing[3308] = {}; MusicRender(&clockTest, timing, 3307);
-    if (clockTest.step != 0) return Fail("100 BPM step must not advance before its exact sample boundary");
-    MusicRender(&clockTest, timing, 1); if (clockTest.step != 1) return Fail("100 BPM step must advance on its exact sample boundary");
+    // 첫 스텝 경계는 BPM에서 나온다: 샘플마다 bpm*4를 더해 1,323,000에 닿는 순간이다 (올림).
+    MusicState clockTest; MusicInit(&clockTest);
+    int stepSamples = (1323000 + clockTest.bpm * 4 - 1) / (clockTest.bpm * 4);
+    int32_t timing[4096] = {}; MusicRender(&clockTest, timing, stepSamples - 1);
+    if (clockTest.step != 0) return Fail("the first step must not advance before its exact sample boundary");
+    MusicRender(&clockTest, timing, 1); if (clockTest.step != 1) return Fail("the first step must advance on its exact sample boundary");
     int32_t chunk[441] = {}; for (int i = 0; i < 3000; ++i) MusicRender(&clockTest, chunk, 441);
-    if (clockTest.sampleClock != 3308u + 1323000u) return Fail("long music renders must not drift or reset the sample clock");
+    if (clockTest.sampleClock != (uint32_t)stepSamples + 1323000u) return Fail("long music renders must not drift or reset the sample clock");
     return 0;
 }
 

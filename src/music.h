@@ -2,13 +2,14 @@
 #include <stdint.h>
 
 #define MUSIC_RATE 22050
-#define MUSIC_CHANNELS 5   // 베이스 · 리드 · 아르페지오 · 패드 두 성부
+#define MUSIC_CHANNELS 4   // 베이스 · 리드 · 아르페지오 · 코드(60Hz 고속 아르페지오)
 
 enum MusicScene { MUSIC_SCENE_TITLE = 0, MUSIC_SCENE_PLAY, MUSIC_SCENE_STORY, MUSIC_SCENE_GAMEOVER, MUSIC_SCENE_VICTORY };
 
 // 음 하나의 상태. env는 0~65536이고 stage 0은 어택 중, 1은 감쇠·지속이다.
 // lp는 1극 저역통과 필터의 이전 출력이다.
-struct MusicChannelState { uint32_t phase; int env; int lp; int note; int stage; int gate; };
+// held는 음이 울린 샘플 수. 리드 비브라토가 이 값을 보고 늦게 들어온다.
+struct MusicChannelState { uint32_t phase; int env; int lp; int note; int stage; int gate; int held; };
 // 타악기. 킥은 피치가 떨어지는 사인, 스네어는 노이즈와 짧은 몸통, 하이햇은 고역 노이즈.
 struct MusicDrumState { uint32_t kickPhase, bodyPhase; int kickEnv, snareEnv, hatEnv, noisePrev; };
 struct MusicState {
@@ -26,6 +27,7 @@ struct MusicState {
     int criticalGain;    // 위독 편곡으로 넘어간 정도
     int ending;
     int pendingStep;     // 1이면 다음 샘플에서 현재 스텝의 음·타악기를 트리거한다
+    int chordThird;      // 이번 마디 코드의 3도 (3 단조 / 4 장조). 코드 성부가 읽는다
 };
 
 void MusicInit(MusicState* music);
