@@ -10,6 +10,9 @@
 #define SETTINGS_SCALE_COUNT 5
 static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 
+#define SETTINGS_VOLUME_COUNT 5
+static const int VOLUME_OPTIONS[SETTINGS_VOLUME_COUNT] = {0, 25, 50, 75, 100};
+
 // 카드 0~2는 설치할 면, 마지막 카드는 면 대신 체력을 얻는 섹터 복구다.
 #define REWARD_CARD_COUNT 4
 #define REWARD_REPAIR 3
@@ -144,6 +147,7 @@ RECT SettingsCloseRect(int width);
 RECT DeckButtonRect(int width);
 RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
+RECT VolumeOptionRect(int index);
 RECT FullscreenToggleRect();
 RECT RestartButtonRect();
 RECT FxLevelRect(int index);

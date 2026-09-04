@@ -16,6 +16,9 @@ RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82,
 RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65); }
 RECT DeckCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
+// 오른쪽 열. 설정 화면은 왼쪽 364px만 쓰고 나머지가 비어 있었다. 화면 배율 행은
+// x=716까지 뻗으므로 겹치지 않게 한 행 아래(전체화면과 같은 높이)에 둔다.
+RECT VolumeOptionRect(int index) { int left = 560 + index * 100; return MakeRect(left, 380, left + 88, 422); }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
@@ -95,6 +98,20 @@ static void DrawSettings(HDC dc, int width, int height) {
         TextRect(dc, r, label, active ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     TextRect(dc, MakeRect(84, 312, panel.right - 30, 336), L"전체화면에서는 적용되지 않습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+
+    // 소리 크기. 마스터 볼륨 하나로 모든 효과음에 함께 걸린다.
+    Text(dc, 560, 348, L"소리 크기", C_YELLOW, gFontMedium);
+    for (int i = 0; i < SETTINGS_VOLUME_COUNT; ++i) {
+        RECT r = VolumeOptionRect(i); int active = AudioVolume() == VOLUME_OPTIONS[i]; int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2, active ? C_GREEN : hover ? C_BLUE : C_LINE);
+        wchar_t label[16];
+        if (VOLUME_OPTIONS[i] == 0) lstrcpyW(label, L"음소거");
+        else wsprintfW(label, L"%d%%", VOLUME_OPTIONS[i]);
+        TextRect(dc, r, label, active ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    TextRect(dc, MakeRect(560, 432, panel.right - 30, 456),
+        AudioVolume() == 0 ? L"모든 효과음을 끕니다." : L"고르면 그 크기로 소리가 한 번 납니다.",
+        C_DIM, gFontSmall, DT_SINGLELINE);
 
     Text(dc, 84, 348, L"전체화면", C_YELLOW, gFontMedium);
     RECT fs = FullscreenToggleRect(); int hoverFs = Inside(fs, gMouse.x, gMouse.y);

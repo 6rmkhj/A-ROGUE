@@ -95,6 +95,17 @@ static WAVEHDR gWaveHdr[MIX_BUFFERS];
 static short gMixBuf[MIX_BUFFERS][MIX_FRAMES];
 static int gAudioClosing;
 
+// 기본값을 최대치로 두지 않는다. 효과음이 스무 종 넘게 겹쳐 울리는 게임이라
+// 100%는 실제로 시끄럽다. 필요하면 설정에서 올린다.
+static int gAudioVolume = 50;
+
+void SetAudioVolume(int percent) {
+    if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
+    gAudioVolume = percent;
+}
+
+int AudioVolume() { return gAudioVolume; }
+
 static void MixFrames(short* out, int frames) {
     for (int i = 0; i < frames; ++i) out[i] = 0;
     for (int v = 0; v < MIX_VOICES; ++v) {
@@ -103,7 +114,7 @@ static void MixFrames(short* out, int frames) {
         int n = mv->length - mv->position;
         if (n > frames) n = frames;
         for (int i = 0; i < n; ++i) {
-            int s = out[i] + mv->data[mv->position + i];
+            int s = out[i] + mv->data[mv->position + i] * gAudioVolume / 100;
             if (s > 32767) s = 32767; else if (s < -32767) s = -32767;
             out[i] = (short)s;
         }

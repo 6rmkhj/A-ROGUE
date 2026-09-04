@@ -615,6 +615,7 @@ static int HoverId(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
+        for (int i = 0; i < SETTINGS_VOLUME_COUNT; ++i) if (Inside(VolumeOptionRect(i), x, y)) return 940 + i;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
         return -1;
@@ -682,6 +683,8 @@ static void HandleClick(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) { gFxLevel = i; PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
+        // 고른 크기로 바로 한 번 울려 준다. 숫자만 보고는 얼마나 큰지 알 수 없다.
+        for (int i = 0; i < SETTINGS_VOLUME_COUNT; ++i) if (Inside(VolumeOptionRect(i), x, y)) { SetAudioVolume(VOLUME_OPTIONS[i]); PlaySfx(SFX_CONFIRM); InvalidateRect(gWindow, 0, FALSE); return; }
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }

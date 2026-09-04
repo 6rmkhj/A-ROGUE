@@ -24,3 +24,8 @@ void AudioPump();
 void AudioClose();
 void PlaySfx(int id);
 void PlaySfxPitched(int id, int semitones);
+
+// 모든 효과음에 함께 걸리는 마스터 볼륨 (0~100). 합성 단계가 아니라 믹서에서
+// 걸리므로 이미 울리고 있는 소리에도 곧바로 적용되고, 파형을 다시 만들 필요가 없다.
+void SetAudioVolume(int percent);
+int AudioVolume();
