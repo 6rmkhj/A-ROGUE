@@ -343,6 +343,35 @@ static int ReverseFiresOn(int gimmick, int turn) {
 
 // 턴 시작: 이번 턴 잠금·오프라인·역전을 확정하고 다음 턴을 예고한다.
 // 연출 기록. 규칙 판정에는 절대 참여하지 않고 화면이 읽기만 한다.
+int LivingMinionCount(const GameState* game) {
+    int count = 0;
+    for (int i = 0; i < game->enemyCount; ++i)
+        if (game->enemies[i].alive && !IsBossKind(game->enemies[i].kind)) ++count;
+    return count;
+}
+
+// 둘 다 한참 아래에 있지만 소환 기믹이 먼저 쓴다.
+static void AddEnemy(GameState* game, int kind);
+static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex);
+
+// 탈주체 소환. AddEnemy가 층 성장과 볼륨 보정을 이미 적용하므로 그 결과를
+// hpPercent로 깎기만 한다. 보스와 같은 체력이면 졸개가 아니라 두 번째 보스가 된다.
+// 카드 번호를 돌려주어 연출이 어느 자리에 나타났는지 알 수 있게 한다.
+static int SummonMinion(GameState* game, int kind, int hpPercent, int powerPercent) {
+    int before = game->enemyCount;
+    AddEnemy(game, kind);
+    if (game->enemyCount == before) return -1;   // 자리가 없거나 데이터가 거부됨
+    int index = game->enemyCount - 1;
+    EnemyState* minion = &game->enemies[index];
+    int hp = minion->maxHp * hpPercent / 100;
+    if (hp < 1) hp = 1;
+    minion->maxHp = hp;
+    minion->hp = hp;
+    minion->power = (uint8_t)powerPercent;
+    PlanEnemy(game, minion, index);   // 나타난 턴부터 의도를 보여 준다
+    return index;
+}
+
 static void RecordFx(GameState* game, int fx, int a, int b) {
     game->boss.firedFx = (uint8_t)fx;
     game->boss.fxA = (int8_t)a;
@@ -476,13 +505,6 @@ static void AnnounceQuarantineTarget(GameState* game, int permanent) {
     }
 }
 
-static int ActiveQuarantineCount(const GameState* game) {
-    int total = 0;
-    for (int d = 0; d < 3; ++d)
-        for (int f = 0; f < 6; ++f)
-            if (game->dice[d].faces[f].quarantined != QUAR_NONE) ++total;
-    return total;
-}
 
 // mode: QUAR_COMBAT 또는 남은 턴 수. permanent가 1이면 면을 영구 EMPTY로 만든다.
 static void FireQuarantine(GameState* game, int permanent, int mode) {
@@ -644,10 +666,18 @@ static void GimmickTurnEnd(GameState* game) {
         }
         break;
     case GIMMICK_SANDBOX_BREACH:
-        if (turn >= gi->p1 && turn % gi->p1 == 0) {
-            if (ActiveQuarantineCount(game) < 2) FireQuarantine(game, 0, gi->p2);
+        // 격리 구역이 뚫린다. 면을 가두는 대신 갇혀 있던 검체가 나온다.
+        // 전투 종료 조건(LivingEnemyCount == 0)은 그대로라 탈주체도 정리해야
+        // 끝난다. 보스가 죽으면 GimmickTurnEnd 앞머리의 BossEnemy 가드에서
+        // 걸려 이 훅이 아예 돌지 않으므로 소환도 멈춘다.
+        if (turn >= gi->p1 && turn % gi->p1 == 0 && LivingMinionCount(game) < gi->p2) {
+            int card = SummonMinion(game, MOB_X_ESCAPEE, gi->p3, BREACH_MINION_POWER);
+            if (card >= 0) {
+                PushLog2(game, L"격리 해제: %s가 샌드박스를 빠져나왔습니다.",
+                    ENEMY_INFO[MOB_X_ESCAPEE].name, 0);
+                RecordFx(game, GIMMICK_SANDBOX_BREACH, card, -1);
+            }
         }
-        if ((turn + 1) % gi->p1 == 0 && ActiveQuarantineCount(game) < 2) AnnounceQuarantineTarget(game, 0);
         break;
     case GIMMICK_ZERO_DAY:
         if (boss->damageThisTurn >= gi->p2 && boss->gauge > 0) {
@@ -1317,6 +1347,11 @@ static void PlanMob(GameState* game, EnemyState* enemy, int enemyIndex) {
 static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
     if (IsBossKind(enemy->kind)) PlanBoss(game, enemy);
     else PlanMob(game, enemy, enemyIndex);
+    // 소환된 개체는 본체보다 약하다. 방어 의도는 깎지 않는다 (0으로 무너진다).
+    if (enemy->power > 0 && enemy->power < 100 && enemy->intent != INTENT_GUARD) {
+        enemy->intentValue = enemy->intentValue * enemy->power / 100;
+        if (enemy->intentValue < 1) enemy->intentValue = 1;
+    }
     // 볼륨 난이도는 오염(관통) 의도에만 걸린다. 예고 수치를 여기서 확정해 두면
     // 적 카드에 뜨는 숫자가 곧 실제로 들어올 피해가 된다.
     if (enemy->intent == INTENT_CORRUPT) enemy->intentValue = ScaleCorruptDamage(game, enemy->intentValue);
@@ -1400,6 +1435,19 @@ static int FirstLivingEnemy(const GameState* game) {
     if (game->targetEnemy >= 0 && game->targetEnemy < game->enemyCount && game->enemies[game->targetEnemy].alive) return game->targetEnemy;
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) return i;
     return -1;
+}
+
+// 연쇄가 때릴 자리. 대상이 아닌 다른 적으로 튄다.
+//
+// 적이 하나뿐이던 시절 연쇄는 같은 적을 한 번 더 때렸고, 그래서 공격 슬롯에
+// 좋은 면을 넣는 것과 역할이 겹쳐 잘 쓰이지 않았다(이슈 #31). 판에 적이
+// 여럿일 때만 갈라지므로, 적이 하나면 예전과 같은 자리를 때린다.
+static int ChainTarget(const GameState* game) {
+    int primary = FirstLivingEnemy(game);
+    if (primary < 0) return -1;
+    for (int i = 0; i < game->enemyCount; ++i)
+        if (i != primary && game->enemies[i].alive) return i;
+    return primary;
 }
 
 static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
@@ -1645,7 +1693,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
         int repeat = (game->lastDamage * (chainPower + 4)) / 13;
         if (chainKind == FACE_ECHO) repeat = game->lastDamage;
         if (chainKind == FACE_WILD) repeat += 2;
-        int chainTarget = FirstLivingEnemy(game);
+        int chainTarget = ChainTarget(game);
         int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
         int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
         DamageEnemy(game, chainTarget, repeat);

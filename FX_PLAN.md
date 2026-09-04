@@ -224,10 +224,14 @@ Vlambeer의 표현으로는 *"그게 중요했다고 말하는 아주 작은 마
 
 ```
 PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, directory routing, 48 complete runs
-BALANCE: 952/1800 total heuristic wins, 8.16 average combats
+BALANCE: 933/1800 total heuristic wins, 8.06 average combats
 ```
 
-**밸런스 표본이 952에서 움직이면 규칙에 손을 댄 것이다.** 즉시 되돌린다.
+**밸런스 표본이 933에서 움직이면 규칙에 손을 댄 것이다.** 즉시 되돌린다.
+
+> 기준선은 952 → 933으로 한 번 바뀌었다. SANDBOX.BREACH를 소환 기믹으로
+> 교체한 것(이슈 #32)이 유일한 원인이고, 그때 drive 0~4는 한 판도 움직이지
+> 않았다. 자세한 내용은 [SPAWN_PLAN.md](SPAWN_PLAN.md).
 
 ---
 

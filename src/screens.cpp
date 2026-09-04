@@ -331,7 +331,14 @@ static void FormatGimmickStatus(wchar_t* out, int size) {
         if (boss->nextTargetDie >= 0) wsprintfW(out, boss->nextTargetPermanent
             ? L"삭제 예고: 주사위 %d 면 %d" : L"격리 예고: 주사위 %d 면 %d",
             boss->nextTargetDie + 1, boss->nextTargetFace + 1);
-        else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) lstrcpynW(out, L"3턴마다 면 1개 2턴 격리", size);
+        else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) {
+            // 예고는 저장된 상태가 아니라 턴 번호에서 나온다. 규칙과 같은 식이다.
+            int loose = LivingMinionCount(&gGame), cap = gi->p2;
+            if (loose >= cap) wsprintfW(out, L"탈주체 %d · 한계", loose);
+            else if (gGame.turn % gi->p1 == 0) lstrcpynW(out, L"이번 턴 끝 탈주", size);
+            else if ((gGame.turn + 1) % gi->p1 == 0) lstrcpynW(out, L"예고: 다음 턴 탈주", size);
+            else wsprintfW(out, L"%d턴마다 탈주 %d/%d", gi->p1, loose, cap);
+        }
         else wsprintfW(out, L"오염 %d/%d", boss->gauge, boss->gaugeMax > 0 ? boss->gaugeMax : gi->p1);
         break;
     default:
@@ -1706,7 +1713,7 @@ int GimmickFxDuration(int kind, int b) {
     case GIMMICK_HEAP_OVERFLOW:  return 2000;
     case GIMMICK_OUT_OF_MEMORY:  return 2700;
     case GIMMICK_SAMPLE13:       return 1900;
-    case GIMMICK_SANDBOX_BREACH: return 1900;
+    case GIMMICK_SANDBOX_BREACH: return 2400;   // 새 적이 판에 들어오는 순간
     case GIMMICK_ZERO_DAY:       return 3800;   // 되돌릴 수 없는 유일한 기믹
     default: return 0;
     }
@@ -1730,8 +1737,8 @@ static int GimmickFxAction(int kind) {
     case GIMMICK_LEAK:           return 940;
     case GIMMICK_HEAP_OVERFLOW:  return 1080;
     case GIMMICK_OUT_OF_MEMORY:  return 1600;
-    case GIMMICK_SAMPLE13:
-    case GIMMICK_SANDBOX_BREACH: return 1080;
+    case GIMMICK_SAMPLE13:       return 1080;
+    case GIMMICK_SANDBOX_BREACH: return 1400;
     case GIMMICK_ZERO_DAY:       return 1900;
     default: return 900;
     }
@@ -1753,8 +1760,8 @@ int GimmickFxImpactAt(int kind, int b) {
     case GIMMICK_LEAK:           return 720;
     case GIMMICK_HEAP_OVERFLOW:  return 860;
     case GIMMICK_OUT_OF_MEMORY:  return 970;
-    case GIMMICK_SAMPLE13:
-    case GIMMICK_SANDBOX_BREACH: return 760;
+    case GIMMICK_SAMPLE13:       return 760;
+    case GIMMICK_SANDBOX_BREACH: return 850;
     case GIMMICK_ZERO_DAY:       return 800;
     default: return 0;                          // TAPE.LOOP · NO.MEDIA는 매턴이라 멈추지 않는다
     }
@@ -2448,9 +2455,49 @@ void DrawGimmickFx(HDC dc) {
         break;
     }
 
-    // ---- X:\ 격리 : 데이터가 잠긴다 ---------------------------------------
-    case GIMMICK_SAMPLE13:
+    // ---- X:\ 침입 : 격리가 뚫리고 검체가 나온다 ---------------------------
+    // 다른 기믹과 달리 a가 주사위가 아니라 새로 나타난 적 카드 번호다.
+    // 카드 자체는 이미 그려져 있으므로, 덮었다가 벗겨 내는 순서로 간다.
     case GIMMICK_SANDBOX_BREACH: {
+        RECT cell = (a >= 0 && a < 3) ? EnemyRect(a) : card;
+        int cx = (cell.left + cell.right) / 2, cy = (cell.top + cell.bottom) / 2;
+        RECT inner = MakeRect(cell.left + 5, cell.top + 5, cell.right - 5, cell.bottom - 5);
+        if (sinceImpact < 0) {
+            // 예비 — 격리막이 조여들고 카드가 떨린다. 안은 아직 헥스 덤프에
+            // 덮여 무엇이 버티고 있는지 보이지 않는다.
+            int squeeze = impactAt > 0 ? Track(t, 0, impactAt) : 1000;
+            DrawSealRing(dc, cell, EaseOutCubic(squeeze), fam);
+            DrawTremble(dc, cell, t, FxScale(2 + 4 * squeeze / 1000), MixColor(C_BG, fam, 70));
+            Fill(dc, inner, RGB(6, 4, 6));
+            DrawHexBlock(dc, inner, MixColor(C_BG, fam, 60 + 40 * squeeze / 1000), a * 17 + 3, GetTickCount(), 9);
+            if (squeeze > 600 && FxDecorOn())
+                DrawBandGlitch(dc, inner, t, FxScale(2 + 10 * (squeeze - 600) / 400), a * 7 + 5, 7);
+        } else {
+            // 막이 깨진다. 균열이 카드 밖으로 뻗고 파편이 층을 이뤄 튄다.
+            if (FxDecorOn()) {
+                int reach = sinceImpact < 400 ? sinceImpact : 400;
+                DrawCracks(dc, cx, cy, FxScale(150 + 130 * reach / 400), a * 23 + 9,
+                    MixColor(C_BG, RGB(255, 255, 255), 70), fam);
+                DrawFxShardsStaggered(dc, cx, cy, sinceImpact, 640, 26, a * 13 + 7, fam, 9);
+                DrawFxWave(dc, cy, sinceImpact, 640, fam);
+            }
+            // 그리고 카드가 드러난다 — 노이즈가 아래로 걷히며 검체가 나온다.
+            int reveal = Track(t, impactAt, actionMs);
+            int wipe = Lerp(inner.bottom - inner.top, 0, EaseOutCubic(reveal));
+            if (wipe > 0) {
+                RECT veil = MakeRect(inner.left, inner.bottom - wipe, inner.right, inner.bottom);
+                Fill(dc, veil, RGB(6, 4, 6));
+                DrawHexBlock(dc, veil, MixColor(C_BG, fam, 85), a * 17 + 3, GetTickCount(), 9);
+                Fill(dc, MakeRect(veil.left, veil.top, veil.right, veil.top + 2), fam);
+            }
+            // 새 카드가 자리를 주장한다. 테두리가 겹겹이 퍼져 나간다.
+            DrawPulseFrame(dc, cell, FxScale(reveal >= 1000 ? 5 + (t - actionMs) / 26 : 6), 3, fam);
+        }
+        break;
+    }
+
+    // ---- X:\ 격리 : 데이터가 잠긴다 ---------------------------------------
+    case GIMMICK_SAMPLE13: {
         if (a >= 0 && a < 3) {
             RECT r = DieRect(a);
             if (act < 420) DrawTremble(dc, r, t, FxScale(2), MixColor(C_BG, fam, 55));
@@ -2460,10 +2507,6 @@ void DrawGimmickFx(HDC dc) {
         if (a >= 0 && a < 3 && sinceImpact >= 0) {
             RECT cell = FaceStripCell(a, b);
             DrawFxShardsStaggered(dc, (cell.left + cell.right) / 2, cell.top, sinceImpact, 360, 16, a * 13 + kind, fam, 8);
-        }
-        if (kind == GIMMICK_SANDBOX_BREACH && act >= 600 && a >= 0 && a < 3) {
-            RECT r = DieRect(a);
-            TextRect(dc, MakeRect(r.left, r.top + 6, r.right, r.top + 24), L"2 TURNS", fam, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
         break;
     }

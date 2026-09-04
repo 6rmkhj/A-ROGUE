@@ -193,7 +193,7 @@ enum BossGimmickKind {
     GIMMICK_HEAP_OVERFLOW,   // 압력 3, 임계 12, 강화 공격이 방어 관통
     GIMMICK_OUT_OF_MEMORY,   // 압력 5, 임계 14 → -2
     GIMMICK_SAMPLE13,        // 3턴마다 예고 면을 전투 동안 격리 (최대 2)
-    GIMMICK_SANDBOX_BREACH,  // 3턴마다 예고 면을 2턴 격리
+    GIMMICK_SANDBOX_BREACH,  // 3턴마다 검체 1마리 탈주 (동시 최대 2)
     GIMMICK_ZERO_DAY,        // 4턴마다 예고 면 영구 삭제, 피해로 지연
     GIMMICK_COUNT
 };
@@ -206,6 +206,10 @@ struct BossGimmickInfo {
     const wchar_t* stamp;    // 발동 연출에 크게 박히는 영문 표식
     int p1, p2, p3;          // 기믹별 매개변수 (주기·임계·강도)
 };
+
+// 탈주체의 출력 비율. 체력은 기믹 매개변수 p3가, 화력은 이 값이 정한다.
+// 본체 몹은 보스와 맞먹는 피해를 내므로 소환체로 쓰려면 두 축을 함께 깎아야 한다.
+#define BREACH_MINION_POWER 45
 
 static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
     {FAM_NONE, L"-", L"-", L"-", L"-", 0, 0, 0},
@@ -225,7 +229,7 @@ static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
     {FAM_PRESSURE,   L"힙 오버플로",   L"압력이 빠르게 차고 강화 공격이 방어를 관통합니다.",           L"한 턴 12+ 피해로 압력을 1 낮추십시오.", L"HEAP OVERFLOW",               3, 12, 6},
     {FAM_PRESSURE,   L"메모리 고갈",   L"압력 상한이 높지만 가득 차면 최대 강화 공격이 옵니다.",       L"한 턴 14+ 피해로 압력을 2 낮추십시오.", L"OUT OF MEMORY",               5, 14, 12},
     {FAM_QUARANTINE, L"검체 격리",     L"오염이 차면 예고된 면 1개를 전투 동안 격리합니다(최대 2).",   L"격리 전에 처치하거나 예고 면 의존을 줄이십시오.", L"QUARANTINED",     3, 2, 0},
-    {FAM_QUARANTINE, L"샌드박스 침입", L"3턴마다 예고된 면 1개를 2턴 동안 격리합니다.",                L"격리가 풀리는 턴에 화력을 몰아치십시오.", L"SANDBOX BREACH",             3, 2, 2},
+    {FAM_QUARANTINE, L"샌드박스 침입", L"3턴마다 검체가 탈주합니다(동시 1마리).",                      L"탈주체를 정리할지 보스를 끊을지 고르십시오.", L"CONTAINMENT LOST",       3, 1, 45},
     {FAM_QUARANTINE, L"제로데이",      L"오염이 가득 차면 예고된 면 1개를 영구 삭제합니다.",           L"한 턴 15+ 피해로 오염을 1 낮추십시오.", L"DATA DESTROYED",               4, 15, 0}
 };
 

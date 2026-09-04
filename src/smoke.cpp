@@ -53,6 +53,18 @@ static int FirstOpenSlot(const GameState* game) {
 }
 
 // 주사위 0을 열린 슬롯에 놓고 턴을 넘긴다. 플레이어는 죽지 않게 유지한다.
+// 공격 슬롯에 출력이 남아 있는 주사위 하나를 넣고 턴을 넘긴다. 대상을 실제로
+// 때려야 하는 검증에서 쓴다 (PassTurn은 아무 빈 슬롯에나 넣는다).
+static int Strike(GameState* game) {
+    int attacker = -1;
+    for (int d = 0; d < 3; ++d)
+        if (FacePower(RolledFace(game, d)) > 0 && !game->dice[d].offline) { attacker = d; break; }
+    if (attacker < 0) return 0;
+    if (!AssignDieToSlot(game, attacker, SLOT_ATTACK)) return 0;
+    EndTurn(game);
+    return 1;
+}
+
 static int PassTurn(GameState* game) {
     game->playerHp = 999;
     int slot = FirstOpenSlot(game);
@@ -247,6 +259,29 @@ static int CheckCombatFxTrace() {
     if (repeat->targetEnemy != 0 || repeat->value != repeat->beforeValue - repeat->afterValue)
         return Fail("an attack chain must record its target and real hp damage");
     if (!TraceLineHas(&chain, repeat->traceLine, L"[연쇄")) return Fail("chain must point at the chain line");
+
+    // 적이 둘이면 연쇄는 대상이 아닌 쪽으로 튄다 (이슈 #31).
+    GameState spreadChain; SetupBossFight(&spreadChain, 5, 1, 0xFC00000Bu, 5);
+    spreadChain.enemies[0].hp = 999; spreadChain.enemies[0].maxHp = 999; spreadChain.enemies[0].block = 0;
+    spreadChain.enemies[0].intent = INTENT_GUARD; spreadChain.enemies[0].intentValue = 0;
+    if (spreadChain.enemyCount != 1) return Fail("the spread chain setup must open with one enemy");
+    // 두 번째 카드를 직접 세운다. 소환 턴을 기다리지 않는다 (다른 시험들과 같은 방식).
+    spreadChain.enemyCount = 2;
+    EnemyState* extra = &spreadChain.enemies[1];
+    extra->kind = (uint8_t)MOB_X_ESCAPEE; extra->alive = 1; extra->burn = 0; extra->power = 0;
+    extra->hp = 999; extra->maxHp = 999; extra->block = 0;
+    extra->intent = INTENT_GUARD; extra->intentValue = 0;
+    spreadChain.targetEnemy = 0;
+    spreadChain.playerHp = 999;
+    int bossBefore = spreadChain.enemies[0].hp, minionBefore = spreadChain.enemies[1].hp;
+    AssignDieToSlot(&spreadChain, 0, SLOT_ATTACK);
+    AssignDieToSlot(&spreadChain, 1, SLOT_CHAIN);
+    EndTurn(&spreadChain);
+    const CombatFxEvent* spread = FirstFx(&spreadChain, CFX_CHAIN);
+    if (!spread) return Fail("a chain with two enemies must still be recorded");
+    if (spread->targetEnemy != 1) return Fail("the chain must jump to the enemy that is not the target");
+    if (spreadChain.enemies[1].hp >= minionBefore) return Fail("the chain must actually damage the second enemy");
+    if (spreadChain.enemies[0].hp >= bossBefore) return Fail("the attack slot must still hit the chosen target");
 
     GameState chainBlock; SetupBossFight(&chainBlock, 0, 0, 0xFC000008u, 5);
     chainBlock.boss.gimmick = GIMMICK_NONE;
@@ -827,16 +862,53 @@ static int CheckQuarantineGimmicks() {
     if (CountQuarantined(&g) != 0) return Fail("victory must release every quarantined face");
     if (g.boss.gimmick != GIMMICK_NONE) return Fail("the boss runtime must be cleared after combat");
 
-    // SANDBOX.BREACH: 2턴 격리 후 자동 해제
+    // SANDBOX.BREACH: 3턴마다 탈주체 소환 · 동시 상한 · 보스가 죽으면 정지
     GameState s; SetupBossFight(&s, 5, 1, 0xB0B0B002u, 1);
     if (s.boss.gimmick != GIMMICK_SANDBOX_BREACH) return Fail("floor2 X boss must use SANDBOX.BREACH");
     s.enemies[0].hp = 999; s.enemies[0].maxHp = 999;
-    if (!PassTurn(&s) || !PassTurn(&s) || !PassTurn(&s)) return Fail("sandbox breach must reach its fire turn");
-    if (CountQuarantined(&s) != 1) return Fail("sandbox breach must quarantine one face at the end of turn 3");
-    if (!PassTurn(&s)) return Fail("sandbox breach hold turn must pass");
-    if (CountQuarantined(&s) != 1) return Fail("the sandbox quarantine must persist for its duration");
-    if (!PassTurn(&s)) return Fail("sandbox breach release turn must pass");
-    if (CountQuarantined(&s) != 0) return Fail("the sandbox quarantine must release after two turns");
+    if (s.enemyCount != 1 || LivingMinionCount(&s) != 0) return Fail("the breach fight must open with the boss alone");
+    const BossGimmickInfo* breach = &BOSS_GIMMICK_INFO[GIMMICK_SANDBOX_BREACH];
+    // 격리 계열은 턴 끝에 발동한다. 3턴을 끝내야 첫 탈주다.
+    if (!PassTurn(&s) || !PassTurn(&s) || !PassTurn(&s)) return Fail("sandbox breach must reach its first summon turn");
+    if (LivingMinionCount(&s) != 1 || s.enemyCount != 2) return Fail("turn 3 must release one escapee");
+    if (IsBossKind(s.enemies[1].kind)) return Fail("a summoned card must be a mob, not a second boss");
+    if (s.enemies[1].kind != MOB_X_ESCAPEE) return Fail("the breach must release the escapee mob");
+    // 이 판은 체력을 건드리는 볼륨 변조도 드라이브 특성도 없으므로 기본 성장값만 탄다.
+    const EnemyInfo* esc = &ENEMY_INFO[MOB_X_ESCAPEE];
+    {
+        int full = esc->hp + esc->hpGrowth * s.floor;
+        if (s.enemies[1].maxHp != full * breach->p3 / 100) return Fail("the escapee must enter at the reduced hp");
+        if (s.enemies[1].hp != s.enemies[1].maxHp) return Fail("the escapee must enter at full of its own hp");
+        if (s.enemies[1].power != BREACH_MINION_POWER) return Fail("the escapee must carry the summon power scale");
+        // 같은 몹을 정상 등장시킨 쪽보다 예고 피해가 낮아야 한다.
+        if (s.enemies[1].intent != INTENT_GUARD && s.enemies[1].intentValue >= esc->damage + esc->damageGrowth * s.floor)
+            return Fail("a summoned escapee must telegraph less damage than the full mob");
+    }
+    // 주기마다 한 마리씩 상한까지. 상한을 넘기려 해도 카드가 늘지 않는다.
+    for (int window = 1; window <= breach->p2; ++window) {
+        if (!PassTurn(&s) || !PassTurn(&s) || !PassTurn(&s)) return Fail("sandbox breach must reach its next summon turn");
+        int want = window + 1 < breach->p2 ? window + 1 : breach->p2;
+        if (LivingMinionCount(&s) != want) return Fail("the breach must release one escapee per window, up to the cap");
+    }
+    if (LivingMinionCount(&s) != breach->p2) return Fail("the escapee count must stop at the cap");
+    if (s.enemyCount != 1 + breach->p2) return Fail("the cap must also stop new cards from being added");
+    // 보스를 끊으면 소환 훅이 돌지 않는다. 남은 탈주체는 직접 정리해야 한다.
+    s.playerHp = 999;
+    s.targetEnemy = 0;
+    s.enemies[0].hp = 1; s.enemies[0].block = 0;
+    if (!Strike(&s)) return Fail("the boss kill turn must resolve");
+    if (s.enemies[0].alive) return Fail("a lethal strike must drop the breach boss");
+    if (s.phase != PHASE_COMBAT) return Fail("living escapees must keep the combat going");
+    int cleanup = 0;
+    while (s.phase == PHASE_COMBAT && cleanup < 6) {
+        s.playerHp = 999;
+        for (int i = 0; i < s.enemyCount; ++i) if (s.enemies[i].alive) { s.enemies[i].hp = 1; s.enemies[i].block = 0; }
+        if (!Strike(&s)) return Fail("an escapee cleanup turn must resolve");
+        ++cleanup;
+    }
+    if (s.enemyCount != 1 + breach->p2) return Fail("no escapee may spawn after the boss is gone");
+    if (s.phase != PHASE_REWARD) return Fail("clearing every escapee must end the combat");
+    if (LivingMinionCount(&s) != 0) return Fail("no escapee may survive the win");
 
     // ZERO.DAY: 영구 삭제, 출력 가능한 면 1개 보장, 전투 후 유지
     GameState z; SetupBossFight(&z, 5, 2, 0xB0B0B003u, 1);
