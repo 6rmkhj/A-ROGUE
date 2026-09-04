@@ -35,7 +35,10 @@ static int BestReward(const GameState* game) {
 // 오프라인·조각화 주사위는 실제 출력이 0이다.
 static int EffectiveDiePower(const GameState* game, int die) {
     if (game->dice[die].disabled || game->dice[die].offline) return 0;
-    return FacePower(RolledFace(game, die));
+    int power = FacePower(RolledFace(game, die));
+    if (game->selectedDrive == 5 && game->driveRule.contrabandDie == die
+        && game->driveRule.contrabandFace == game->dice[die].rolledFace && power > 0) power += 2;
+    return power;
 }
 
 // 기믹 인지 배치: 잠긴 슬롯을 피하고, 역전 턴에는 공격·방어를 우선하며,
@@ -44,10 +47,18 @@ static void AssignDice(GameState* game) {
     int order[3] = {0, 1, 2};
     for (int i = 0; i < 3; ++i) for (int j = i + 1; j < 3; ++j)
         if (EffectiveDiePower(game, order[j]) > EffectiveDiePower(game, order[i])) { int swap = order[i]; order[i] = order[j]; order[j] = swap; }
+    // D: 두 번째 턴부터 가장 낮은 번호의 반복 배치만 보정되므로 die 0을 공격에 고정한다.
+    if (game->selectedDrive == 1 && game->turn > 1) {
+        int at = 0; while (at < 3 && order[at] != 0) ++at;
+        if (at < 3) { int swap = order[0]; order[0] = order[at]; order[at] = swap; }
+    }
     int reversed = ResolveOrderReversed(game);
     // 선호 슬롯: 최강 주사위 → 공격, 다음 → 방어, 남는 것 → 증폭(정상 턴)
     int prefs[3];
-    prefs[0] = SLOT_ATTACK; prefs[1] = SLOT_DEFEND; prefs[2] = reversed ? SLOT_CHAIN : SLOT_AMPLIFY;
+    prefs[0] = SLOT_ATTACK;
+    int ramAggressive = game->selectedDrive == 4 && game->playerHp * 2 > game->playerMaxHp;
+    prefs[1] = ramAggressive ? SLOT_AMPLIFY : SLOT_DEFEND;
+    prefs[2] = game->selectedDrive == 3 || ramAggressive || reversed ? SLOT_CHAIN : SLOT_AMPLIFY;
     int used[SLOT_COUNT] = {};
     for (int i = 0; i < 3; ++i) {
         int die = order[i];
@@ -62,6 +73,16 @@ static void AssignDice(GameState* game) {
                 if (used[slot] || SlotLockedThisTurn(game, slot)) continue;
                 if (AssignDieToSlot(game, die, slot)) { used[slot] = 1; placed = 1; }
             }
+        }
+    }
+    // E: 낮은 눈은 남는 슬롯으로 한 번 옮겨 HOT SWAP을 실제 사용한다.
+    if (game->selectedDrive == 2 && !game->driveRule.hotSwapUsed) {
+        int weakest = order[2], freeSlot = -1;
+        for (int s = 0; s < SLOT_COUNT; ++s) if (!used[s] && !SlotLockedThisTurn(game, s)) { freeSlot = s; break; }
+        int oldSlot = game->dice[weakest].assignedSlot;
+        if (freeSlot >= 0 && oldSlot >= 0 && EffectiveDiePower(game, weakest) <= 2) {
+            AssignDieToSlot(game, weakest, freeSlot);
+            AssignDieToSlot(game, weakest, oldSlot);
         }
     }
 }
@@ -84,6 +105,8 @@ static int gFloorHpSamples[3];
 static long gFloorBytes[3];
 static int gFloorUsable[3];
 static int gPruneCount;
+static unsigned long gLawActivations[DRIVE_COUNT], gHotSwaps[DRIVE_COUNT], gPacketChains[DRIVE_COUNT], gContrabandUses[DRIVE_COUNT];
+static unsigned long gTurns[DRIVE_COUNT], gDamage[DRIVE_COUNT], gBlock[DRIVE_COUNT], gSlotChosen[DRIVE_COUNT][SLOT_COUNT];
 
 // 덱의 평균 출력. 위험 노드를 감당할 화력이 있는지 재는 대용치다.
 static int AverageFacePower(const GameState* game) {
@@ -157,7 +180,9 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
             for (int i = 0; i < game.enemyCount; ++i) if (game.enemies[i].alive && game.enemies[i].hp < hp) { target = i; hp = game.enemies[i].hp; }
             if (target >= 0) SelectEnemy(&game, target);
             AssignDice(&game);
+            for (int d = 0; d < 3; ++d) if (game.dice[d].assignedSlot >= 0) ++gSlotChosen[drive][game.dice[d].assignedSlot];
             EndTurn(&game);
+            ++gTurns[drive]; gDamage[drive] += (unsigned long)game.lastTurnDamageDealt; gBlock[drive] += (unsigned long)game.lastTurnBlockGained;
         } else if (game.phase == PHASE_REWARD) {
             // 체력이 절반 아래로 떨어지면 덱 강화를 한 번 포기하고 회복한다.
             if (game.playerHp * 100 < game.playerMaxHp * 55) RepairSector(&game);
@@ -167,8 +192,16 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
             ++gPruneCount;
             while (UsedBytes(&game) > EffectiveCapacity(&game)) { int face = WorstEfficiencyFace(&game); if (face < 0) break; PruneFace(&game, face / 6, face % 6); }
             ConfirmPrune(&game);
+        } else if (game.phase == PHASE_STORY) {
+            AdvanceStory(&game);
+        } else if (game.phase == PHASE_ENDING_CHOICE) {
+            SelectEnding(&game, seed & 1u);
         }
     }
+    gLawActivations[drive] += game.driveRule.activations;
+    gHotSwaps[drive] += game.driveRule.hotSwapCount;
+    gPacketChains[drive] += game.driveRule.packetChainCount;
+    gContrabandUses[drive] += game.driveRule.contrabandUses;
     *combats = game.combatsWon;
     int won = game.phase == PHASE_VICTORY;
     if (won) for (int k = 0; k < DIR_NODE_COUNT; ++k) if (runChosen[k]) ++gChosenWins[k];
@@ -181,6 +214,7 @@ int main() {
     double totalAvg = 0.0;
     // 난이도는 카드마다 무작위로 붙으므로 등급별 표본이 저절로 쌓인다.
     int gradeRuns[DIFFICULTY_COUNT] = {}, gradeWins[DIFFICULTY_COUNT] = {};
+    int driveWins[DRIVE_COUNT] = {};
     printf("BALANCE per-drive (%d seeds each)\n", runsPerDrive);
     for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
         int wins = 0, totalCombats = 0;
@@ -204,10 +238,20 @@ int main() {
             bossReached[0], bossReached[1], bossReached[2],
             bossKilled[0], bossKilled[1], bossKilled[2]);
         totalWins += wins;
+        driveWins[drive] = wins;
         // 게이트: 어떤 드라이브도 0승이면 안 되고, 1층 보스 도달률이 바닥이면 실패
-        if (wins == 0) { printf("  GATE FAIL: drive %d has zero wins\n", drive); failed = 1; }
+        if (wins < runsPerDrive * 20 / 100 || wins > runsPerDrive * 80 / 100) { printf("  GATE FAIL: drive %d must stay within 20-80%% wins\n", drive); failed = 1; }
         if (bossReached[0] < runsPerDrive / 10) { printf("  GATE FAIL: drive %d rarely reaches boss 1\n", drive); failed = 1; }
+        printf("    turns %lu, avg damage %.2f, avg block %.2f, law %lu, hot swap %lu, packet %lu, contraband %lu\n",
+            gTurns[drive], gTurns[drive] ? (double)gDamage[drive] / gTurns[drive] : 0.0,
+            gTurns[drive] ? (double)gBlock[drive] / gTurns[drive] : 0.0,
+            gLawActivations[drive], gHotSwaps[drive], gPacketChains[drive], gContrabandUses[drive]);
+        printf("    slots attack %lu defend %lu amplify %lu chain %lu\n", gSlotChosen[drive][0], gSlotChosen[drive][1], gSlotChosen[drive][2], gSlotChosen[drive][3]);
+        if (gLawActivations[drive] == 0) { printf("  GATE FAIL: drive %d law never activates\n", drive); failed = 1; }
     }
+    int minWins = driveWins[0], maxWins = driveWins[0];
+    for (int d = 1; d < DRIVE_COUNT; ++d) { if (driveWins[d] < minWins) minWins = driveWins[d]; if (driveWins[d] > maxWins) maxWins = driveWins[d]; }
+    if (maxWins - minWins > runsPerDrive * 30 / 100) { printf("  GATE FAIL: drive win spread is %d points (limit %d)\n", maxWins - minWins, runsPerDrive * 30 / 100); failed = 1; }
     for (int g = 0; g < DIFFICULTY_COUNT; ++g) {
         printf("  difficulty %d (corrupt %d%%): wins %d/%d\n",
             g, DIFFICULTY_INFO[g].corruptPercent, gradeWins[g], gradeRuns[g]);

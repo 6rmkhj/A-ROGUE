@@ -5,13 +5,39 @@
 
 enum GamePhase {
     PHASE_TITLE = 0,
+    PHASE_STORY,
     PHASE_DRIVE_SELECT,
     PHASE_DIRECTORY,
     PHASE_COMBAT,
     PHASE_REWARD,
     PHASE_PRUNE,
+    PHASE_ENDING_CHOICE,
     PHASE_GAMEOVER,
     PHASE_VICTORY
+};
+
+struct DriveRuleRuntime {
+    uint32_t rng;
+    int8_t previousSlot[3];
+    uint8_t hotSwapUsed;
+    int8_t contrabandDie;
+    int8_t contrabandFace;
+    int8_t boostedDie;
+    int8_t boostedSlot;
+    uint8_t packetChainActive;
+    uint32_t activations;
+    uint32_t hotSwapCount;
+    uint32_t packetChainCount;
+    uint32_t contrabandUses;
+};
+
+struct StoryRuntime {
+    uint8_t kind;
+    uint8_t fragment;
+    uint8_t page;
+    uint8_t selectedEnding;
+    GamePhase returnPhase;
+    uint8_t optionalLogsSeen;
 };
 
 // X:\ 격리 상태. FaceCost와 kind·value·damaged는 그대로 두고 출력만 0이 된다.
@@ -225,6 +251,8 @@ struct GameState {
     int tsrsInstalled;
     int pendingContinuation;      // PendingContinuation — 정리 후 복귀 지점
     DirectoryRuntime directory;
+    DriveRuleRuntime driveRule;
+    StoryRuntime story;
     int rewardChoiceCount;        // 이번 면 보상의 후보 수 (TEMP면 2)
     int rewardTier;               // 0 = 표준, 1 = 강화
     wchar_t logs[5][96];
@@ -245,6 +273,11 @@ struct TurnPreview {
     int uncertain;                // 읽기 오류로 확정할 수 없음
 };
 void PreviewTurn(const GameState* game, TurnPreview* out);
+
+void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase);
+void AdvanceStory(GameState* game);
+void SelectEnding(GameState* game, int ending);
+const StoryFragment* CurrentStoryFragment(const GameState* game);
 
 void InitTitle(GameState* game);
 void NewRun(GameState* game, uint32_t seed);

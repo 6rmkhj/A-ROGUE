@@ -152,6 +152,7 @@ RECT VolumeSliderRect();
 RECT VolumeHandleRect(int volume);
 int VolumeFromX(int x);          // 슬라이더 위 x좌표를 0~100으로
 RECT FullscreenToggleRect();
+RECT BgmToggleRect();
 RECT RestartButtonRect();
 RECT FxLevelRect(int index);
 RECT StartButtonRect(int width, int height);
@@ -165,6 +166,7 @@ RECT ReadButtonRect();
 RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
+RECT EndingChoiceRect(int index);
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
 RECT TurnTracePanelRect();

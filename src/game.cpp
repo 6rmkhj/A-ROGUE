@@ -22,6 +22,70 @@ static int ClampInt(int value, int low, int high) {
     return value;
 }
 
+static uint32_t NextDriveRuleRandom(GameState* game) {
+    uint32_t x = game->driveRule.rng ? game->driveRule.rng : 0x6D2B79F5u;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    game->driveRule.rng = x;
+    return x;
+}
+
+static void DriveRuleOnFaceReplaced(GameState* game, int die, int face) {
+    if (game->driveRule.contrabandDie == die && game->driveRule.contrabandFace == face) {
+        game->driveRule.contrabandDie = -1;
+        game->driveRule.contrabandFace = -1;
+    }
+}
+
+const StoryFragment* CurrentStoryFragment(const GameState* game) {
+    if (!game) return 0;
+    switch (game->story.kind) {
+    case STORY_INTRO: return &STORY_INTRO_DATA;
+    case STORY_BOSS:
+        if (game->selectedDrive >= 0 && game->selectedDrive < DRIVE_COUNT && game->story.fragment < 3)
+            return &STORY_BOSS_DATA[game->selectedDrive][game->story.fragment];
+        break;
+    case STORY_LOGS:
+        if (game->selectedDrive >= 0 && game->selectedDrive < DRIVE_COUNT && game->story.fragment < 3)
+            return &STORY_LOGS_DATA[game->selectedDrive][game->story.fragment];
+        break;
+    case STORY_TRUTH: return &STORY_TRUTH_DATA;
+    case STORY_ENDING_RESTORE: return &STORY_ENDING_DATA[0];
+    case STORY_ENDING_ROGUE: return &STORY_ENDING_DATA[1];
+    default: break;
+    }
+    return 0;
+}
+
+void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase) {
+    if (!game) return;
+    game->story.kind = (uint8_t)kind;
+    game->story.fragment = (uint8_t)ClampInt(fragment, 0, 255);
+    game->story.page = 0;
+    game->story.returnPhase = returnPhase;
+    game->phase = PHASE_STORY;
+}
+
+void AdvanceStory(GameState* game) {
+    if (!game || game->phase != PHASE_STORY) return;
+    if (game->story.kind == STORY_BOSS && game->story.fragment == 2) {
+        BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
+        return;
+    }
+    if (game->story.kind == STORY_TRUTH) {
+        game->phase = PHASE_ENDING_CHOICE;
+        return;
+    }
+    GamePhase next = game->story.returnPhase;
+    game->story.kind = STORY_NONE;
+    game->phase = next;
+}
+
+void SelectEnding(GameState* game, int ending) {
+    if (!game || game->phase != PHASE_ENDING_CHOICE || ending < 0 || ending > 1) return;
+    game->story.selectedEnding = (uint8_t)ending;
+    BeginStory(game, ending == 0 ? STORY_ENDING_RESTORE : STORY_ENDING_ROGUE, 0, PHASE_VICTORY);
+}
+
 static void PushLog(GameState* game, const wchar_t* text) {
     for (int i = 4; i > 0; --i) lstrcpynW(game->logs[i], game->logs[i - 1], 96);
     lstrcpynW(game->logs[0], text, 96);
@@ -275,6 +339,10 @@ static void GimmickCombatEnd(GameState* game) {
     game->boss.bestSlotLastTurn = -1;
     game->boss.nextTargetDie = -1;
     game->boss.nextTargetFace = -1;
+    for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
+    game->driveRule.boostedDie = -1;
+    game->driveRule.boostedSlot = -1;
+    game->driveRule.packetChainActive = 0;
 }
 
 // 전투 시작 시 보스 기믹 런타임을 초기화한다.
@@ -527,6 +595,7 @@ static void FireQuarantine(GameState* game, int permanent, int mode) {
     RecordFx(game, boss->gimmick, boss->nextTargetDie, boss->nextTargetFace);
     wchar_t buffer[96];
     if (permanent) {
+        DriveRuleOnFaceReplaced(game, boss->nextTargetDie, boss->nextTargetFace);
         face->kind = FACE_EMPTY;
         face->value = 0;
         face->damaged = 0;
@@ -714,6 +783,11 @@ void InitTitle(GameState* game) {
     game->boss.bestSlotLastTurn = -1;
     game->boss.nextTargetDie = -1;
     game->boss.nextTargetFace = -1;
+    game->driveRule.contrabandDie = -1;
+    game->driveRule.contrabandFace = -1;
+    game->driveRule.boostedDie = -1;
+    game->driveRule.boostedSlot = -1;
+    for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
 }
 
 static void SetupStartingDice(GameState* game) {
@@ -781,11 +855,17 @@ void NewRun(GameState* game, uint32_t seed) {
     game->rng = seed ? seed : 0xC0FFEE11u;
     // 경로 전용 난수는 런 seed에서 고정 salt로 파생한다. 드라이브는 마운트 시 섞인다.
     game->directory.rng = game->rng ^ 0x4B1D5A17u;
+    game->driveRule.rng = game->rng ^ 0xD1A7E5A1u;
+    game->driveRule.contrabandDie = -1;
+    game->driveRule.contrabandFace = -1;
+    game->driveRule.boostedDie = -1;
+    game->driveRule.boostedSlot = -1;
+    for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
     game->directory.previousKind = DIR_NODE_NONE;
     game->pendingContinuation = CONTINUE_NONE;
     game->rewardChoiceCount = 3;
     game->rewardTier = 0;
-    game->phase = PHASE_DRIVE_SELECT;
+    game->phase = PHASE_STORY;
     game->floor = 0;
     game->encounter = 0;
     game->playerMaxHp = 40;
@@ -802,6 +882,7 @@ void NewRun(GameState* game, uint32_t seed) {
     SetupStartingDice(game);
     PickDriveChoices(game);
     PickDriveDifficulties(game, game->rng ^ 0x9E3779B9u);
+    BeginStory(game, STORY_INTRO, 0, PHASE_DRIVE_SELECT);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
 }
 
@@ -809,10 +890,14 @@ void NewRun(GameState* game, uint32_t seed) {
 static void MixDirectoryDrive(GameState* game);
 
 void SelectDrive(GameState* game, int choiceIndex) {
+    // 자동 러너와 기존 호출자는 인트로를 입력 없이 건너뛸 수 있다. 실제 UI에서는
+    // STORY 입력이 먼저 처리되므로 플레이어에게는 정상적으로 표시된다.
+    if (game && game->phase == PHASE_STORY && game->story.kind == STORY_INTRO) AdvanceStory(game);
     if (game->phase != PHASE_DRIVE_SELECT || choiceIndex < 0 || choiceIndex >= 3) return;
     game->selectedDrive = game->driveChoices[choiceIndex];
     game->difficulty = game->driveDifficulty[choiceIndex];
     const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
+    game->driveRule.rng ^= (uint32_t)(game->selectedDrive + 1) * 0x9E3779B9u;
     game->modifierA = drive->modifierA;
     game->modifierB = drive->modifierB;
     if (drive->perk == PERK_MAX_HP) {
@@ -823,9 +908,13 @@ void SelectDrive(GameState* game, int choiceIndex) {
         game->playerHp = ClampInt(game->playerHp, 1, game->playerMaxHp);
     } else if (drive->perk == PERK_BONUS_FACE) {
         int kind = FACE_FIRE + RandomRange(game, FACE_ECHO - FACE_FIRE + 1);
-        Face* face = &game->dice[RandomRange(game, 3)].faces[RandomRange(game, 6)];
+        int die = RandomRange(game, 3);
+        int faceIndex = RandomRange(game, 6);
+        Face* face = &game->dice[die].faces[faceIndex];
         face->kind = (uint8_t)kind;
         face->value = (uint8_t)FACE_INFO[kind].power;
+        game->driveRule.contrabandDie = (int8_t)die;
+        game->driveRule.contrabandFace = (int8_t)faceIndex;
         PushLog2(game, L"격리 데이터 회수: %s 면 설치 (%dB).", FACE_INFO[kind].name, FaceCost(face));
     }
     BuildMobSchedule(game, NextRandom(game));
@@ -846,6 +935,7 @@ void SelectDrive(GameState* game, int choiceIndex) {
 void ConfigureDriveForTest(GameState* game, int drive, uint32_t scheduleSeed, int preserveModifiers) {
     if (drive < 0 || drive >= DRIVE_COUNT) return;
     game->selectedDrive = drive;
+    game->driveRule.rng ^= (uint32_t)(drive + 1) * 0x9E3779B9u;
     if (!preserveModifiers) {
         game->modifierA = DRIVE_INFO[drive].modifierA;
         game->modifierB = DRIVE_INFO[drive].modifierB;
@@ -1148,6 +1238,13 @@ void SelectDirectoryChoice(GameState* game, int index) {
     if (kind <= DIR_NODE_NONE || kind >= DIR_NODE_COUNT) return;
     ApplyDirectoryChoice(game, index);
     StartCombat(game);
+    if (kind == DIR_NODE_LOGS && game->phase == PHASE_COMBAT) {
+        int bit = 1 << ClampInt(game->floor, 0, 2);
+        if ((game->story.optionalLogsSeen & bit) == 0) {
+            game->story.optionalLogsSeen = (uint8_t)(game->story.optionalLogsSeen | bit);
+            BeginStory(game, STORY_LOGS, game->floor, PHASE_COMBAT);
+        }
+    }
 }
 
 // 경로 문자열은 상태에 저장하지 않고 층 경로 + 방문한 노드 segment로 조합한다.
@@ -1188,6 +1285,7 @@ static void AddEnemy(GameState* game, int kind) {
     if (IsModifierActive(game, MOD_OVERALLOC)) hp = (hp * 130 + 99) / 100;
     int weaken = DrivePerkValue(game, PERK_ENEMY_HP_DOWN);
     if (weaken > 0) hp = ClampInt(hp * (100 - weaken) / 100, 1, hp);
+    else if (weaken < 0) hp = hp * (100 - weaken) / 100;
     enemy->hp = hp;
     enemy->maxHp = hp;
 }
@@ -1210,6 +1308,10 @@ int StartCombat(GameState* game) {
     game->turn = 1;
     game->enemyCount = 0;
     game->targetEnemy = 0;
+    for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
+    game->driveRule.boostedDie = -1;
+    game->driveRule.boostedSlot = -1;
+    game->driveRule.packetChainActive = 0;
     ZeroMemory(game->enemies, sizeof(game->enemies));
     int floor = ClampInt(game->floor, 0, 2);
     if (game->encounter == 2) {
@@ -1386,6 +1488,10 @@ static void BeginTurn(GameState* game) {
     game->lastDamage = 0;
     game->lastBlock = 0;
     game->keybUsedThisTurn = 0;
+    game->driveRule.hotSwapUsed = 0;
+    game->driveRule.boostedDie = -1;
+    game->driveRule.boostedSlot = -1;
+    game->driveRule.packetChainActive = 0;
     game->boss.damageThisTurn = 0;
     if (game->turn == 1 && IsTsrInstalled(game, TSR_SMARTDRV)) {
         game->playerBlock = TSR_INFO[TSR_SMARTDRV].value;
@@ -1409,9 +1515,21 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
         PushLog2(game, L"권한 거부: %s 슬롯은 이번 턴 잠겨 있습니다.", SLOT_NAMES[slotIndex], 0);
         return 0;
     }
+    int oldSlot = game->dice[dieIndex].assignedSlot;
     for (int d = 0; d < 3; ++d) if (d != dieIndex && game->dice[d].assignedSlot == slotIndex) game->dice[d].assignedSlot = -1;
-    if (game->dice[dieIndex].assignedSlot == slotIndex) game->dice[dieIndex].assignedSlot = -1;
-    else game->dice[dieIndex].assignedSlot = (int8_t)slotIndex;
+    if (oldSlot == slotIndex) game->dice[dieIndex].assignedSlot = -1;
+    else {
+        game->dice[dieIndex].assignedSlot = (int8_t)slotIndex;
+        if (game->selectedDrive == 2 && oldSlot >= 0 && !game->driveRule.hotSwapUsed) {
+            game->dice[dieIndex].rolledFace = (uint8_t)(NextDriveRuleRandom(game) % 6u);
+            game->driveRule.hotSwapUsed = 1;
+            ++game->driveRule.hotSwapCount;
+            ++game->driveRule.activations;
+            ApplyFragmentationIfAllowed(game);
+            wchar_t trace[96]; wsprintfW(trace, L"HOT SWAP: 주사위 %d 재굴림 → 출력 %d", dieIndex + 1, FacePower(RolledFace(game, dieIndex)));
+            PushLog(game, trace);
+        }
+    }
     game->selectedDie = dieIndex;
     return 1;
 }
@@ -1513,7 +1631,60 @@ static int SlotPower(const GameState* game, int slot, int* kindOut) {
     const Face* face = RolledFace(game, die);
     if (!face) return 0;
     if (kindOut) *kindOut = face->kind;
-    return FacePower(face);
+    int power = FacePower(face);
+    if (power > 0 && game->driveRule.boostedSlot == slot && game->driveRule.boostedDie == die) {
+        if (game->selectedDrive == 1 || game->selectedDrive == 5) power += 2;
+        else power += 1;
+    }
+    if (power > 0 && game->selectedDrive == 4 && (slot == SLOT_ATTACK || slot == SLOT_AMPLIFY)) ++power;
+    return power;
+}
+
+static void DriveRulePrepareResolve(GameState* game) {
+    DriveRuleRuntime* rule = &game->driveRule;
+    rule->boostedDie = -1; rule->boostedSlot = -1; rule->packetChainActive = 0;
+    if (game->selectedDrive == 0) {
+        int bestPower = 0x7fffffff, bestSlot = -1, bestDie = -1;
+        for (int s = 0; s < SLOT_COUNT; ++s) {
+            int d = DieForSlot(game, s);
+            if (d < 0 || game->boss.lockedSlot[s] || game->dice[d].disabled || game->dice[d].offline) continue;
+            int p = FacePower(RolledFace(game, d));
+            if (p > 0 && p < bestPower) { bestPower = p; bestSlot = s; bestDie = d; }
+        }
+        if (bestSlot >= 0) { rule->boostedSlot = (int8_t)bestSlot; rule->boostedDie = (int8_t)bestDie; }
+    } else if (game->selectedDrive == 1 && game->turn > 1) {
+        for (int d = 0; d < 3; ++d) {
+            int s = game->dice[d].assignedSlot;
+            if (s >= 0 && rule->previousSlot[d] == s && !game->boss.lockedSlot[s]
+                && !game->dice[d].disabled && !game->dice[d].offline && FacePower(RolledFace(game, d)) > 0) {
+                rule->boostedDie = (int8_t)d; rule->boostedSlot = (int8_t)s; break;
+            }
+        }
+    } else if (game->selectedDrive == 5) {
+        int d = rule->contrabandDie, f = rule->contrabandFace;
+        if (d >= 0 && d < 3 && f >= 0 && f < 6 && game->dice[d].rolledFace == f) {
+            int s = game->dice[d].assignedSlot;
+            if (s >= 0 && !game->boss.lockedSlot[s] && !game->dice[d].disabled && !game->dice[d].offline
+                && FacePower(&game->dice[d].faces[f]) > 0) { rule->boostedDie = (int8_t)d; rule->boostedSlot = (int8_t)s; }
+        }
+    }
+    if (rule->boostedSlot >= 0) {
+        ++rule->activations;
+        wchar_t line[96];
+        if (game->selectedDrive == 0) wsprintfW(line, L"[SYSTEM VERIFY] %s 기본 출력 +1", SLOT_NAMES[rule->boostedSlot]);
+        else if (game->selectedDrive == 1) wsprintfW(line, L"[SNAPSHOT] 주사위 %d 반복 배치 → 기본 출력 +2", rule->boostedDie + 1);
+        else wsprintfW(line, L"[CONTRABAND] 주사위 %d 압수 면 → 기본 출력 +2", rule->boostedDie + 1);
+        PushTurnTrace(game, line);
+        PushLog(game, line);
+    }
+    if (game->selectedDrive == 3) {
+        int active = 0;
+        for (int s = 0; s < SLOT_COUNT; ++s) if (s != SLOT_CHAIN) {
+            int d = DieForSlot(game, s);
+            if (d >= 0 && !game->boss.lockedSlot[s] && !game->dice[d].disabled && !game->dice[d].offline && FacePower(RolledFace(game, d)) > 0) ++active;
+        }
+        rule->packetChainActive = (uint8_t)(active >= 2 && SlotPower(game, SLOT_CHAIN, 0) > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1681,7 +1852,9 @@ static void ResolveDefend(GameState* game, ResolveContext* ctx) {
     PushTurnTrace(game, trace);
 }
 
-static void ResolveChain(GameState* game, ResolveContext* ctx) {
+// forcedMode: -1 자동, 0 공격, 1 방어. PACKET CHAIN은 첫 연쇄의 종류를 고정해
+// 대상 소멸 뒤 방어 연쇄로 바뀌는 일을 막는다.
+static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
     wchar_t trace[96];
     int chainKind = FACE_EMPTY;
     int chainPower = SlotPower(game, SLOT_CHAIN, &chainKind);
@@ -1689,7 +1862,9 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
         PushTurnTrace(game, L"[연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음");
         return;
     }
-    if (game->lastDamage > 0 && LivingEnemyCount(game) > 0) {
+    int attackMode = forcedMode == 0 || (forcedMode < 0 && game->lastDamage > 0 && LivingEnemyCount(game) > 0);
+    int defendMode = forcedMode == 1 || (forcedMode < 0 && !attackMode && game->lastBlock > 0);
+    if (attackMode && game->lastDamage > 0 && LivingEnemyCount(game) > 0) {
         int repeat = (game->lastDamage * (chainPower + 4)) / 13;
         if (chainKind == FACE_ECHO) repeat = game->lastDamage;
         if (chainKind == FACE_WILD) repeat += 2;
@@ -1716,7 +1891,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx) {
             }
         }
         PushTurnTrace(game, trace);
-    } else if (game->lastBlock > 0) {
+    } else if (defendMode && game->lastBlock > 0) {
         int repeat = (game->lastBlock * (chainPower + 4)) / 13;
         if (chainKind == FACE_ECHO) repeat = game->lastBlock;
         game->playerBlock += repeat;
@@ -1745,7 +1920,7 @@ static void ResolvePlayer(GameState* game) {
     game->lastTurnReversed = reversed;
     if (reversed) {
         PushTurnTrace(game, L"[역전] 해결 순서: 연쇄 → 방어 → 공격 → 증폭");
-        ResolveChain(game, &ctx);
+        ResolveChain(game, &ctx, -1);
         ResolveDefend(game, &ctx);
         ResolveAttack(game, &ctx);
         ResolveAmplify(game, &ctx, 1);
@@ -1753,7 +1928,17 @@ static void ResolvePlayer(GameState* game) {
         ResolveAmplify(game, &ctx, 0);
         ResolveAttack(game, &ctx);
         ResolveDefend(game, &ctx);
-        ResolveChain(game, &ctx);
+        int chainMode = game->lastDamage > 0 ? 0 : game->lastBlock > 0 ? 1 : -1;
+        ResolveChain(game, &ctx, chainMode);
+        if (game->driveRule.packetChainActive && chainMode >= 0) {
+            int firstChainOutput = ctx.slotOutput[SLOT_CHAIN];
+            PushTurnTrace(game, L"[PACKET CHAIN] 동일 연쇄를 한 번 더 전송");
+            PushLog(game, L"PACKET CHAIN: 동일 연쇄를 한 번 더 전송했습니다.");
+            ResolveChain(game, &ctx, chainMode);
+            ctx.slotOutput[SLOT_CHAIN] += firstChainOutput;
+            ++game->driveRule.packetChainCount;
+            ++game->driveRule.activations;
+        }
     }
     // KERNEL.PANIC: 이번 턴 출력이 가장 컸던 슬롯이 다음 턴 잠금 대상이 된다.
     int best = -1, bestValue = 0;
@@ -1954,8 +2139,8 @@ static void CombatWon(GameState* game) {
     GimmickCombatEnd(game);
     ++game->combatsWon;
     if (game->floor == 2 && game->encounter == 2) {
-        game->phase = PHASE_VICTORY;
-        PushLog(game, L"침입 프로세스 전멸. 디스크가 복구되었습니다.");
+        BeginStory(game, STORY_BOSS, 2, PHASE_ENDING_CHOICE);
+        PushLog(game, L"코어가 열렸습니다. 마지막 복구 기록을 확인하십시오.");
         return;
     }
     int heal = DrivePerkValue(game, PERK_HEAL_ON_WIN);
@@ -1971,7 +2156,7 @@ static void CombatWon(GameState* game) {
     }
     if (game->encounter == 2) {
         GenerateTsrRewards(game);
-        game->phase = PHASE_REWARD;
+        BeginStory(game, STORY_BOSS, game->floor, PHASE_REWARD);
         PushLog(game, L"보스 전리품: 상주 프로그램 하나를 설치할 수 있습니다.");
         return;
     }
@@ -2021,11 +2206,32 @@ void EndTurn(GameState* game) {
         wsprintfW(trace, L"[오프라인] 주사위 %d 연결 끊김 → 이번 턴 출력 0", game->boss.offlineDie + 1);
         PushTurnTrace(game, trace);
     }
+    DriveRulePrepareResolve(game);
     int enemyHpBefore = 0;
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpBefore += game->enemies[i].hp;
     int playerHpBefore = game->playerHp;
     ResolvePlayer(game);
     game->lastTurnBlockGained = game->playerBlock;
+    if (game->selectedDrive == 4 && game->playerBlock > 0) {
+        int before = game->playerBlock;
+        game->playerBlock /= 2;
+        if (before != game->playerBlock) {
+            wchar_t trace[96]; wsprintfW(trace, L"[VOLATILE MEMORY] 방어도 %d → %d (적 행동 전 휘발)", before, game->playerBlock);
+            PushTurnTrace(game, trace);
+            PushLog(game, trace);
+            ++game->driveRule.activations;
+        }
+    }
+    if (game->selectedDrive == 5 && game->driveRule.boostedDie >= 0) {
+        int d = game->driveRule.contrabandDie, f = game->driveRule.contrabandFace;
+        if (d >= 0 && d < 3 && f >= 0 && f < 6) {
+            Face* face = &game->dice[d].faces[f];
+            if (face->quarantined < 2) face->quarantined = 2;
+            ++game->driveRule.contrabandUses;
+            PushLog(game, L"CONTRABAND: 사용한 압수 면을 다음 턴 동안 격리합니다.");
+        }
+    }
+    for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = game->dice[d].assignedSlot;
     int enemyHpAfterPlayer = 0;
     for (int i = 0; i < game->enemyCount; ++i) if (game->enemies[i].alive) enemyHpAfterPlayer += game->enemies[i].hp;
     if (LivingEnemyCount(game) == 0) {
@@ -2131,6 +2337,7 @@ void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex) {
     if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return;
     int reward = game->selectedReward;
     Face* face = &game->dice[dieIndex].faces[faceIndex];
+    DriveRuleOnFaceReplaced(game, dieIndex, faceIndex);
     face->kind = (uint8_t)game->rewardKinds[reward];
     face->value = (uint8_t)game->rewardValues[reward];
     ++game->facesInstalled;
@@ -2174,6 +2381,7 @@ void PruneFace(GameState* game, int dieIndex, int faceIndex) {
     if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return;
     Face* face = &game->dice[dieIndex].faces[faceIndex];
     if (face->kind == FACE_EMPTY) return;
+    DriveRuleOnFaceReplaced(game, dieIndex, faceIndex);
     face->kind = FACE_EMPTY;
     face->value = 0;
     face->damaged = 0;

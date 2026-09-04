@@ -2,6 +2,7 @@
 #include <mmsystem.h>
 #include <stdint.h>
 #include "audio.h"
+#include "music.h"
 
 // ---- procedural sound -----------------------------------------------------
 // No sound files: every effect is synthesised into memory and mixed into the
@@ -94,6 +95,9 @@ static HWND gAudioWindow;     // 펌프 타이머를 다는 창. 오디오가 �
 static WAVEHDR gWaveHdr[MIX_BUFFERS];
 static short gMixBuf[MIX_BUFFERS][MIX_FRAMES];
 static int gAudioClosing;
+static MusicState gMusic;
+static int gMusicEnabled = 1;
+static int gDuckFrames;
 
 // 기본값을 최대치로 두지 않는다. 효과음이 스무 종 넘게 겹쳐 울리는 게임이라
 // 100%는 실제로 시끄럽다. 필요하면 설정에서 올린다.
@@ -106,24 +110,41 @@ void SetAudioVolume(int percent) {
 
 int AudioVolume() { return gAudioVolume; }
 
+void AudioSetScene(int scene) { MusicSetScene(&gMusic, scene); }
+void AudioSetDrive(int drive) { MusicSetDrive(&gMusic, drive); }
+void AudioSetIntensity(int intensity) { MusicSetIntensity(&gMusic, intensity); }
+void AudioSetCritical(int critical) { MusicSetCritical(&gMusic, critical); }
+void AudioSetMusicEnabled(int enabled) { gMusicEnabled = enabled != 0; MusicSetEnabled(&gMusic, gMusicEnabled); }
+int AudioMusicEnabled() { return gMusicEnabled; }
+void AudioSetEnding(int ending) { MusicSetEnding(&gMusic, ending); }
+
 static void MixFrames(short* out, int frames) {
-    for (int i = 0; i < frames; ++i) out[i] = 0;
+    int32_t accumulator[MIX_FRAMES] = {};
+    int32_t music[MIX_FRAMES] = {};
+    MusicRender(&gMusic, music, frames);
     for (int v = 0; v < MIX_VOICES; ++v) {
         MixVoice* mv = &gVoice[v];
         if (mv->length <= 0) continue;
         int n = mv->length - mv->position;
         if (n > frames) n = frames;
         for (int i = 0; i < n; ++i) {
-            int s = out[i] + mv->data[mv->position + i] * gAudioVolume / 100;
-            if (s > 32767) s = 32767; else if (s < -32767) s = -32767;
-            out[i] = (short)s;
+            accumulator[i] += mv->data[mv->position + i];
         }
         mv->position += n;
         if (mv->position >= mv->length) mv->length = 0;
     }
+    for (int i = 0; i < frames; ++i) {
+        int musicDuck = gDuckFrames > 0 ? 65 : 100;
+        accumulator[i] += music[i] * 26 / 100 * musicDuck / 100;
+        int s = accumulator[i] * gAudioVolume / 100;
+        if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+        out[i] = (short)s;
+        if (gDuckFrames > 0) --gDuckFrames;
+    }
 }
 
 void AudioOpen(HWND window) {
+    MusicInit(&gMusic);
     WAVEFORMATEX format;
     ZeroMemory(&format, sizeof(format));
     format.wFormatTag = WAVE_FORMAT_PCM; format.nChannels = 1;
@@ -170,6 +191,9 @@ void AudioClose() {
 void PlaySfxPitched(int id, int semitones) {
     if (id < 0 || id >= SFX_COUNT || !gWaveOut) return;
     const SfxSpec* s = &SFX[id];
+    if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER
+        || id == SFX_PLAYER_HIT || id == SFX_CRASH || id >= SFX_FX_LOCK)
+        gDuckFrames = SFX_RATE * 160 / 1000;
     if (semitones < 0) semitones = 0; else if (semitones > 7) semitones = 7;
     int shift = SEMITONE[semitones];
 

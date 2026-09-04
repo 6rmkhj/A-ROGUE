@@ -3,6 +3,7 @@
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
+#include "music.h"
 
 // 게임 상태와 창·입력을 담당한다. 그리기는 screens.cpp, 소리는 audio.cpp가 맡는다.
 GameState gGame;
@@ -510,6 +511,25 @@ void SyncIdleAnimation() {
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
 }
 
+static void SyncAudioScene() {
+    AudioSetDrive(gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive);
+    int scene = MUSIC_SCENE_PLAY, intensity = 0;
+    if (gGame.phase == PHASE_TITLE || gGame.phase == PHASE_DRIVE_SELECT) scene = MUSIC_SCENE_TITLE;
+    else if (gGame.phase == PHASE_STORY || gGame.phase == PHASE_ENDING_CHOICE) scene = MUSIC_SCENE_STORY;
+    else if (gGame.phase == PHASE_GAMEOVER) scene = MUSIC_SCENE_GAMEOVER;
+    else if (gGame.phase == PHASE_VICTORY) scene = MUSIC_SCENE_VICTORY;
+    if (gGame.phase == PHASE_COMBAT) {
+        intensity = 1;
+        for (int i = 0; i < gGame.enemyCount; ++i) if (gGame.enemies[i].alive && IsBossKind(gGame.enemies[i].kind)) {
+            intensity = gGame.enemies[i].hp * 2 <= gGame.enemies[i].maxHp ? 3 : 2;
+            break;
+        }
+    }
+    AudioSetScene(scene); AudioSetIntensity(intensity);
+    AudioSetCritical(gGame.playerHp > 0 && gGame.playerHp <= CRITICAL_HP);
+    AudioSetEnding(gGame.story.selectedEnding);
+}
+
 static void BeginNewRun() {
     FinishDeath();
     FinishDirectoryEnter();
@@ -524,7 +544,7 @@ static void ExecuteCombatTurn() {
     GamePhase before = gGame.phase;
     EndTurn(&gGame);
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
-    int cleared = gGame.phase == PHASE_REWARD || gGame.phase == PHASE_VICTORY;
+    int cleared = LivingEnemyCount(&gGame) == 0;
     if (resolved) BeginTurnTrace(floor, encounter, cleared);
     // 정지음과 화면 붕괴는 계산 재생이 끝난 뒤 BeginDeath가 맡는다.
     if (gGame.phase == PHASE_GAMEOVER) { if (!resolved) BeginDeath(); }
@@ -566,7 +586,7 @@ static void TakeDirectory(int index) {
     if (index < 0 || index >= DirectoryChoiceCount(&gGame)) return;
     int kind = gGame.directory.choices[index].kind;
     SelectDirectoryChoice(&gGame, index);
-    if (gGame.phase == PHASE_COMBAT) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind); }
+    if (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_STORY) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind); }
 }
 
 static void ClickDirectory(int x, int y) {
@@ -617,6 +637,7 @@ static int HoverId(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
+        if (Inside(BgmToggleRect(), x, y)) return 941;
         if (Inside(VolumeSliderRect(), x, y)) return 940;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
@@ -635,6 +656,10 @@ static int HoverId(int x, int y) {
     }
     if (gGame.phase == PHASE_DRIVE_SELECT) {
         for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
+        return -1;
+    }
+    if (gGame.phase == PHASE_ENDING_CHOICE) {
+        for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
         return -1;
     }
     if (gGame.phase == PHASE_DIRECTORY) {
@@ -685,6 +710,7 @@ static void HandleClick(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) { gFxLevel = i; PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
+        if (Inside(BgmToggleRect(), x, y)) { AudioSetMusicEnabled(!AudioMusicEnabled()); PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
         // 슬라이더는 누른 순간 값이 따라오고, 놓을 때까지 커서를 붙잡는다.
         // 미리듣기는 놓는 순간에만 울린다. 끄는 동안 계속 울리면 시끄럽다.
         if (Inside(VolumeSliderRect(), x, y)) {
@@ -707,10 +733,14 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
+    else if (gGame.phase == PHASE_STORY) AdvanceStory(&gGame);
+    else if (gGame.phase == PHASE_ENDING_CHOICE) {
+        for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
+    }
     else if (gGame.phase == PHASE_DRIVE_SELECT) ClickDriveSelect(x, y);
     else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
-    else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y); else BeginNewRun();
+    else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
     SyncRollAnimation();
@@ -837,6 +867,8 @@ static void HandleKey(WPARAM key) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
+    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStory(&gGame); }
+    else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key == '1' || key == '2') { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {
             SelectDrive(&gGame, (int)(key - '1'));
@@ -862,7 +894,7 @@ static void HandleKey(WPARAM key) {
         else if (key == '4') { if (CanRepairSector()) { RepairSector(&gGame); PlaySfx(SFX_REWARD_SET); } }
         else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
-    else if (key == 'R' || key == VK_RETURN) BeginNewRun();
+    else if (gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY) { if (key == 'R' || key == VK_RETURN) BeginNewRun(); }
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
@@ -892,7 +924,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
     case WM_TIMER:
-        if (wParam == AUDIO_TIMER_ID) { AudioPump(); return 0; }
+        if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); AudioPump(); return 0; }
         if (wParam == 1u) TickRollAnimation();
         else if (wParam == 2u) InvalidateRect(window, 0, FALSE);
         else if (wParam == 3u) {

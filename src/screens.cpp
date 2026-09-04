@@ -37,6 +37,7 @@ int VolumeFromX(int x) {
     return v < 0 ? 0 : v > 100 ? 100 : v;
 }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
+RECT BgmToggleRect() { return MakeRect(560, 468, 780, 510); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
 
@@ -151,6 +152,12 @@ static void DrawSettings(HDC dc, int width, int height) {
     }
     TextRect(dc, MakeRect(560, 434, panel.right - 30, 458),
         L"끌거나 좌우 방향키로 조절합니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+    Text(dc, 560, 446, L"배경 음악", C_YELLOW, gFontMedium);
+    RECT bgm = BgmToggleRect(); int hoverBgm = Inside(bgm, gMouse.x, gMouse.y);
+    Panel(dc, bgm, AudioMusicEnabled() ? RGB(28, 70, 57) : hoverBgm ? RGB(28, 39, 48) : C_PANEL_2,
+        AudioMusicEnabled() ? C_GREEN : hoverBgm ? C_BLUE : C_LINE);
+    TextRect(dc, bgm, AudioMusicEnabled() ? L"BGM ON" : L"BGM OFF", AudioMusicEnabled() ? C_GREEN : C_DIM,
+        gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     Text(dc, 84, 348, L"전체화면", C_YELLOW, gFontMedium);
     RECT fs = FullscreenToggleRect(); int hoverFs = Inside(fs, gMouse.x, gMouse.y);
@@ -885,11 +892,13 @@ static void DrawSidebar(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"증폭 > 공격 > 방어 > 연쇄\n다음 턴 역전 예고", C_YELLOW, gFontSmall, DT_WORDBREAK);
     else
         TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"증폭 > 공격 > 방어 > 연쇄", C_TEXT, gFontSmall, DT_WORDBREAK);
-    const Face* selectedFace = gGame.selectedDie >= 0 ? RolledFace(&gGame, gGame.selectedDie) : 0;
-    if (selectedFace) {
-        Text(dc, side.left + 12, side.top + 340, FACE_INFO[selectedFace->kind].name, FaceColor(selectedFace), gFontMedium);
-        TextRect(dc, MakeRect(side.left + 12, side.top + 372, side.right - 10, side.top + 430), FACE_INFO[selectedFace->kind].description, C_DIM, gFontSmall, DT_WORDBREAK);
-    }
+    const DriveLawInfo* law = &DRIVE_LAW_INFO[gGame.selectedDrive >= 0 && gGame.selectedDrive < DRIVE_COUNT ? gGame.selectedDrive : 0];
+    Text(dc, side.left + 12, side.top + 340, L"VOLUME LAW", C_GREEN, gFontSmall);
+    wchar_t lawState[96];
+    if (gGame.selectedDrive == 2) wsprintfW(lawState, L"%s · %s", law->name, gGame.driveRule.hotSwapUsed ? L"USED" : L"READY");
+    else lstrcpynW(lawState, law->name, 96);
+    TextRect(dc, MakeRect(side.left + 12, side.top + 364, side.right - 10, side.top + 392), lawState, C_YELLOW, gFontSmall, DT_WORDBREAK);
+    TextRect(dc, MakeRect(side.left + 12, side.top + 396, side.right - 10, side.top + 436), law->brief, C_TEXT, gFontSmall, DT_WORDBREAK);
     const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
     if (difficulty) {
         Text(dc, side.left + 12, side.top + 448, L"볼륨 난이도", (COLORREF)difficulty->color, gFontSmall);
@@ -1011,8 +1020,9 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         Fill(dc, MakeRect(r.left + 12, r.top + 342, r.right - 12, r.top + 343), C_LINE);
         Text(dc, r.left + 16, r.top + 352, L"볼륨 특성", C_GREEN, gFontSmall);
         TextRect(dc, MakeRect(r.left + 16, r.top + 374, r.right - 14, r.top + 414), drive->perkText, C_TEXT, gFontSmall, DT_WORDBREAK);
-        Text(dc, r.left + 16, r.top + 420, L"탐색 경로", C_BLUE, gFontSmall);
-        TextRect(dc, MakeRect(r.left + 16, r.top + 442, r.right - 14, r.top + 466), drive->pathPreview, C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
+        const DriveLawInfo* law = &DRIVE_LAW_INFO[gGame.driveChoices[i]];
+        Text(dc, r.left + 16, r.top + 420, L"VOLUME LAW", C_BLUE, gFontSmall);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 442, r.right - 14, r.top + 482), law->brief, C_TEXT, gFontSmall, DT_WORDBREAK);
         TextRect(dc, MakeRect(r.left + 8, r.bottom - 34, r.right - 8, r.bottom - 10), hover ? L"클릭하여 마운트" : L"클릭 또는 숫자 키", hover ? (COLORREF)drive->color : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"카드마다 서로 다른 난이도가 배정됩니다 · 난이도는 오염(관통) 피해 배율이며, 방어도는 관통을 절반만 막습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -1427,6 +1437,39 @@ RECT RewardRect(int i, int width) {
 int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 RECT FaceGridRect(int die, int face) { int left = 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
+RECT EndingChoiceRect(int index) { int left = 124 + index * 500; return MakeRect(left, 300, left + 420, 520); }
+
+static void DrawStory(HDC dc, int width, int height) {
+    (void)height;
+    const StoryFragment* story = CurrentStoryFragment(&gGame);
+    if (!story) return;
+    RECT panel = MakeRect(120, 120, width - 120, height - 100);
+    Panel(dc, panel, C_PANEL, C_GREEN);
+    Text(dc, panel.left + 28, panel.top + 24, story->title, C_GREEN, gFontLarge);
+    TextRect(dc, MakeRect(panel.left + 28, panel.top + 72, panel.right - 28, panel.top + 100), story->path, C_BLUE, gFontSmall, DT_SINGLELINE);
+    TextRect(dc, MakeRect(panel.right - 310, panel.top + 28, panel.right - 28, panel.top + 52), L"1998-11-19  03:14:07  RECOVERED", C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    // 파일 복구 진행 바
+    Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
+    Fill(dc, MakeRect(panel.left + 30, panel.top + 118, panel.right - 30, panel.top + 130), C_GREEN);
+    const wchar_t* lines[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
+    int y = panel.top + 164;
+    for (int i = 0; i < 5; ++i) if (lines[i]) { TextRect(dc, MakeRect(panel.left + 36, y, panel.right - 36, y + 42), lines[i], i == 4 ? C_YELLOW : C_TEXT, gFontMedium, DT_WORDBREAK); y += 54; }
+    TextRect(dc, MakeRect(panel.left, panel.bottom - 54, panel.right, panel.bottom - 20), L"[ENTER] CONTINUE", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+static void DrawEndingChoice(HDC dc, int width, int height) {
+    (void)height;
+    TextRect(dc, MakeRect(0, 130, width, 180), L"FINAL COMMAND", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(0, 205, width, 244), L"복구할 대상을 선택하십시오.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    static const wchar_t* title[2] = {L"[1] RESTORE HOST", L"[2] EXEC ROGUE"};
+    static const wchar_t* desc[2] = {L"호스트를 복원합니다.\nA:\\ROGUE 프로세스는 종료됩니다.", L"자신을 외부 경로에 실행합니다.\n호스트의 마지막 이미지는 닫힙니다."};
+    for (int i = 0; i < 2; ++i) {
+        RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, hover ? RGB(28, 55, 48) : C_PANEL, hover ? C_GREEN : C_LINE);
+        TextRect(dc, MakeRect(r.left + 20, r.top + 30, r.right - 20, r.top + 70), title[i], i ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(r.left + 34, r.top + 100, r.right - 34, r.bottom - 24), desc[i], C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
+    }
+}
 
 static void DrawFaceGrid(HDC dc, int mode) {
     for (int d = 0; d < 3; ++d) {
@@ -1517,8 +1560,12 @@ static void DrawPrune(HDC dc, int width, int height) {
 }
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
-    TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), victory ? L"디스크 복구 완료" : L"시스템 정지", victory ? C_GREEN : C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    wchar_t b[192]; wsprintfW(b, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
+    const wchar_t* endingTitle = gGame.story.selectedEnding ? L"EXEC ROGUE" : L"RESTORE HOST";
+    const wchar_t* endingSummary = gGame.story.selectedEnding ? L"자율 프로세스가 외부 경로에서 시작됐습니다." : L"호스트 heartbeat가 복구됐습니다.";
+    TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), victory ? endingTitle : L"시스템 정지", victory ? C_GREEN : C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    wchar_t b[256];
+    if (victory) wsprintfW(b, L"%s\n\n전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", endingSummary, gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
+    else wsprintfW(b, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB\n\nR 또는 엔터 키로 새 게임", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
     TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 110), b, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
 }
 
@@ -1631,7 +1678,7 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
         }
     }
     TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
-        L"일반전 6회 동안 세 몹이 각각 두 번씩, 시드로 정해진 순서로 등장합니다.", C_DIM, gFontSmall, DT_WORDBREAK);
+        DRIVE_LAW_INFO[gGame.selectedDrive].description, C_GREEN, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top + 40, L"층별 보스와 기믹", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) {
@@ -2577,10 +2624,10 @@ void PaintGame(HWND window) {
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
     if (gTurnTraceActive || gDeathActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
-    else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_STORY) DrawStory(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_DIRECTORY) DrawDirectorySelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
-    else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_ENDING_CHOICE) DrawEndingChoice(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0); else if (gGame.phase == PHASE_VICTORY) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);

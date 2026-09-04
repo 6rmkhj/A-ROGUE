@@ -29,3 +29,11 @@ void PlaySfxPitched(int id, int semitones);
 // 걸리므로 이미 울리고 있는 소리에도 곧바로 적용되고, 파형을 다시 만들 필요가 없다.
 void SetAudioVolume(int percent);
 int AudioVolume();
+
+void AudioSetScene(int scene);
+void AudioSetDrive(int drive);
+void AudioSetIntensity(int intensity);
+void AudioSetCritical(int critical);
+void AudioSetMusicEnabled(int enabled);
+int AudioMusicEnabled();
+void AudioSetEnding(int ending);

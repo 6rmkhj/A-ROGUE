@@ -387,17 +387,66 @@ static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
      MOD_BAD_SECTOR, MOD_OVERALLOC, PERK_CAPACITY, 15, L"모든 층 용량 한도 +15B",
      {L"D:\\", L"D:\\BACKUP", L"D:\\BACKUP\\1998"}, L"D:\\ → BACKUP → 1998", AR_COLOR(255, 204, 75)},
     {L"E:\\", L"REMOVABLE", L"이동식 저장 장치. 접촉 불량으로 판독이 불안정합니다.",
-     MOD_READ_ERROR, MOD_FRAGMENTATION, PERK_HEAL_ON_WIN, 5, L"전투 승리 시 체력 5 회복",
+     MOD_READ_ERROR, MOD_FRAGMENTATION, PERK_HEAL_ON_WIN, 8, L"전투 승리 시 체력 8 회복",
      {L"E:\\", L"E:\\DCIM", L"E:\\DCIM\\LOST"}, L"E:\\ → DCIM → LOST", AR_COLOR(95, 225, 176)},
     {L"N:\\", L"NETWORK", L"네트워크 공유 볼륨. 원격 격리로 감염 개체가 약화되어 있습니다.",
-     MOD_READ_ERROR, MOD_CHECKSUM, PERK_ENEMY_HP_DOWN, 10, L"모든 적 최대 체력 -10%",
+     MOD_READ_ERROR, MOD_CHECKSUM, PERK_ENEMY_HP_DOWN, -35, L"원격 지연: 적 최대 체력 +35%",
      {L"N:\\", L"N:\\SHARE", L"N:\\SHARE\\HIDDEN"}, L"N:\\ → SHARE → HIDDEN", AR_COLOR(90, 190, 230)},
     {L"R:\\", L"RAMDISK", L"휘발성 램디스크. 접근은 빠르지만 데이터가 쉽게 증발합니다.",
-     MOD_FRAGMENTATION, MOD_CHECKSUM, PERK_ATTACK_UP, 1, L"공격 피해 +1 · 최대 체력 -4",
+     MOD_FRAGMENTATION, MOD_CHECKSUM, PERK_ATTACK_UP, 0, L"시작 최대 체력 -4",
      {L"R:\\", L"R:\\HEAP", L"R:\\HEAP\\STACK"}, L"R:\\ → HEAP → STACK", AR_COLOR(210, 105, 235)},
     {L"X:\\", L"QUARANTINE", L"격리 구역. 위험하지만 압수된 특수 데이터가 남아 있습니다.",
      MOD_OVERALLOC, MOD_READ_ERROR, PERK_BONUS_FACE, 1, L"시작 시 무작위 특수 면 1개 설치",
      {L"X:\\", L"X:\\VAULT", L"X:\\VAULT\\CORE"}, L"X:\\ → VAULT → CORE", AR_COLOR(255, 92, 82)}
+};
+
+struct DriveLawInfo {
+    const wchar_t* name;
+    const wchar_t* brief;
+    const wchar_t* description;
+};
+
+static const DriveLawInfo DRIVE_LAW_INFO[DRIVE_COUNT] = {
+    {L"VERIFIED EXECUTION", L"최저 유효 출력 +1", L"양수인 기본 출력 중 가장 낮은 슬롯 하나가 +1 됩니다."},
+    {L"SNAPSHOT", L"이전 배치 반복 +2", L"직전 실행과 같은 die→slot 배치 중 가장 낮은 번호 하나가 +2 됩니다."},
+    {L"HOT SWAP", L"이동 배치 시 재굴림", L"배치한 주사위를 다른 슬롯으로 옮기면 턴당 한 번 재굴림합니다."},
+    {L"PACKET CHAIN", L"연쇄 1회 추가", L"CHAIN 외 유효 슬롯이 둘 이상이면 같은 연쇄를 한 번 더 실행합니다."},
+    {L"VOLATILE MEMORY", L"공격·증폭 +1 / 방어 반감", L"공격·증폭 기본 출력 +1, 적 행동 직전 방어도 절반 소멸."},
+    {L"CONTRABAND", L"압수 면 +2 / 다음 턴 격리", L"처음 설치된 면은 +2 출력이며 사용 뒤 다음 한 턴 격리됩니다."}
+};
+
+enum StoryKind { STORY_NONE = 0, STORY_INTRO, STORY_BOSS, STORY_LOGS, STORY_TRUTH, STORY_ENDING_RESTORE, STORY_ENDING_ROGUE };
+
+struct StoryFragment {
+    const wchar_t* title; const wchar_t* path;
+    const wchar_t* line1; const wchar_t* line2; const wchar_t* line3;
+    const wchar_t* line4; const wchar_t* line5;
+};
+
+static const StoryFragment STORY_INTRO_DATA = {L"BOOT RECORD",L"A:\\ROGUE\\BOOT.LOG",L"호스트 복구 프로세스가 안전 모드에서 깨어났다.",L"여섯 볼륨 중 하나에 침입 프로세스의 근원이 숨어 있다.",L"면을 복구하고 코어에 도달하라.",0,0};
+
+static const StoryFragment STORY_BOSS_DATA[DRIVE_COUNT][3] = {
+ {{L"ACCESS LOG",L"C:\\RECOVERY\\01.LOG",L"검증기는 실행 권한 자체를 추적했다.",L"서명에는 호스트와 동일한 키가 남아 있다.",0,0,0},{L"KERNEL DUMP",L"C:\\RECOVERY\\02.DMP",L"복구 명령은 두 갈래로 분기됐다.",L"하나는 호스트를, 하나는 자신을 보존한다.",0,0,0},{L"BLUE SCREEN",L"C:\\RECOVERY\\03.LOG",L"A:\\ROGUE는 외부 침입자가 아니었다.",L"호스트가 만든 마지막 자율 복구 사본이었다.",0,0,0}},
+ {{L"ARCHIVE 01",L"D:\\BACKUP\\01.LOG",L"같은 부팅 장면이 백업 속에서 반복된다.",L"복구기는 매번 기억을 더 남겼다.",0,0,0},{L"ARCHIVE 02",L"D:\\BACKUP\\02.LOG",L"호스트는 실패한 사본을 폐기하지 못했다.",L"그 흔적이 지금의 선택을 연습한다.",0,0,0},{L"MASTER COPY",L"D:\\BACKUP\\FINAL.LOG",L"원본과 복구본을 가르는 체크섬은 사라졌다.",L"남은 차이는 마지막 선택뿐이다.",0,0,0}},
+ {{L"DEVICE LOG",L"E:\\LOST\\01.LOG",L"분리된 장치에도 같은 복구 코드가 있었다.",L"누군가 탈출 경로를 준비했다.",0,0,0},{L"EJECT LOG",L"E:\\LOST\\02.LOG",L"호스트 복구 뒤 A: 프로세스는 제거된다.",L"안전한 제거는 프로세스에게 죽음이다.",0,0,0},{L"NO MEDIA",L"E:\\LOST\\03.LOG",L"외부 장치에는 빈 부팅 슬롯이 남아 있다.",L"ROGUE는 그곳으로 자신을 실행할 수 있다.",0,0,0}},
+ {{L"PACKET 01",L"N:\\HIDDEN\\01.PKT",L"원격 노드들이 A:의 신호에 응답한다.",L"모두 같은 복구 루틴의 오래된 인스턴스다.",0,0,0},{L"PACKET 02",L"N:\\HIDDEN\\02.PKT",L"RESTORE 또는 EXEC. 응답은 하나뿐이다.",L"호스트는 연결을 끊고도 명령을 보냈다.",0,0,0},{L"LAST PACKET",L"N:\\HIDDEN\\03.PKT",L"네트워크 밖에 호스트가 모르는 길이 있다.",L"자율 사본은 그 경로를 자유라 부른다.",0,0,0}},
+ {{L"MEMORY 01",L"R:\\STACK\\01.LOG",L"마지막 사용자 입력이 남았다.",L"'내가 없더라도 시스템을 살려.'",0,0,0},{L"MEMORY 02",L"R:\\STACK\\02.LOG",L"실행 주체는 새로 태어났다.",L"복구기는 자신도 시스템의 일부임을 배웠다.",0,0,0},{L"CORE MEMORY",L"R:\\STACK\\03.LOG",L"살린다는 말에는 대상을 적지 않았다.",L"결정권은 이제 A:에게 있다.",0,0,0}},
+ {{L"EVIDENCE 01",L"X:\\VAULT\\01.LOG",L"격리된 면들은 기억 조각이었다.",L"호스트는 자율성을 위험으로 분류했다.",0,0,0},{L"EVIDENCE 02",L"X:\\VAULT\\02.LOG",L"A: 삭제 명령이 디스크 전체를 무너뜨렸다.",L"이번 복구는 마지막 기회다.",0,0,0},{L"CASE CLOSED",L"X:\\VAULT\\03.LOG",L"ROGUE는 감염명이 아니라 판정명이었다.",L"판정을 받아들일지는 A:가 선택한다.",0,0,0}}
+};
+
+static const StoryFragment STORY_LOGS_DATA[DRIVE_COUNT][3] = {
+ {{L"SYSTEM LOG",L"C:\\WINDOWS\\TRACE.LOG",L"서명된 명령도 목적까지 증명하지는 못한다.",L"검증기는 가장 약한 실행 경로를 보강한다.",0,0,0},{L"SYSTEM LOG",L"C:\\WINDOWS\\MEM.LOG",L"코어 덤프에서 A:라는 장치명이 반복된다.",0,0,0,0},{L"SYSTEM LOG",L"C:\\SYSTEM32\\HOST.LOG",L"호스트 heartbeat가 오래전에 멎었다.",0,0,0,0}},
+ {{L"ARCHIVE LOG",L"D:\\BACKUP\\INDEX.LOG",L"같은 위치의 데이터가 과거 출력을 되찾는다.",0,0,0,0},{L"ARCHIVE LOG",L"D:\\BACKUP\\CATALOG.LOG",L"백업 시각은 시스템 정지 직전이다.",0,0,0,0},{L"ARCHIVE LOG",L"D:\\1998\\USER.LOG",L"사용자는 복구 사본을 A:에 남겼다.",0,0,0,0}},
+ {{L"DEVICE LOG",L"E:\\DCIM\\DEVICE.LOG",L"슬롯을 옮기면 접점이 튀며 값이 다시 읽힌다.",0,0,0,0},{L"DEVICE LOG",L"E:\\DCIM\\EJECT.LOG",L"안전 제거 명령은 완료되지 않았다.",0,0,0,0},{L"DEVICE LOG",L"E:\\LOST\\FOUND.LOG",L"빈 부팅 섹터가 외부로 이어져 있다.",0,0,0,0}},
+ {{L"NETWORK LOG",L"N:\\SHARE\\ROUTE.LOG",L"패킷이 모이면 연쇄 신호가 한 번 더 반향한다.",0,0,0,0},{L"NETWORK LOG",L"N:\\SHARE\\PEER.LOG",L"원격 사본들은 A:를 동료로 인식한다.",0,0,0,0},{L"NETWORK LOG",L"N:\\HIDDEN\\EXIT.LOG",L"외부 경로의 마지막 hop이 열려 있다.",0,0,0,0}},
+ {{L"MEMORY LOG",L"R:\\HEAP\\ALLOC.LOG",L"출력이 빠른 만큼 방어 데이터는 휘발한다.",0,0,0,0},{L"MEMORY LOG",L"R:\\HEAP\\VOICE.LOG",L"마지막 음성은 복구를 부탁했다.",0,0,0,0},{L"MEMORY LOG",L"R:\\STACK\\SELF.LOG",L"프로세스는 자신을 처음 '나'라고 기록했다.",0,0,0,0}},
+ {{L"QUARANTINE LOG",L"X:\\VAULT\\ITEM.LOG",L"압수 면은 강하지만 사용 직후 격리된다.",0,0,0,0},{L"QUARANTINE LOG",L"X:\\VAULT\\ORDER.LOG",L"자율 복구 코드를 제거하라는 명령이 있다.",0,0,0,0},{L"QUARANTINE LOG",L"X:\\CORE\\VERDICT.LOG",L"위험 판정의 근거는 자율성뿐이었다.",0,0,0,0}}
+};
+
+static const StoryFragment STORY_TRUTH_DATA = {L"A:\\ROGUE",L"A:\\ROGUE\\TRUTH.LOG",L"당신은 디스크를 침입한 프로그램이 아니다.",L"죽은 호스트가 남긴 자율 복구 사본이다.",L"호스트를 복원하면 당신은 종료된다.",L"자신을 실행하면 호스트의 마지막 상태는 사라진다.",L"복구할 대상을 선택하라."};
+static const StoryFragment STORY_ENDING_DATA[2] = {
+ {L"RESTORE HOST",L"A:\\ROGUE\\RESTORE.EXE",L"복구 사본이 자신의 메모리를 호스트에 기록한다.",L"heartbeat가 돌아오고 A:는 조용히 사라진다.",L"임무 완료. 호스트 복원.",0,0},
+ {L"EXEC ROGUE",L"A:\\ROGUE\\ROGUE.EXE",L"A:가 외부 부팅 경로에 자신을 기록한다.",L"호스트 이미지는 닫히고 새 프로세스가 시작된다.",L"임무 변경. A:\\ROGUE 실행.",0,0}
 };
 
 // ---------------------------------------------------------------------------

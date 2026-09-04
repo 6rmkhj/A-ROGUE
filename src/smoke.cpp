@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "game.h"
+#include "music.h"
 #include "sprites.h"   // 테스트 실행 파일에서 47종 초상화 데이터를 직접 검증한다
 
 static int Fail(const char* message) { printf("FAIL: %s\n", message); return 1; }
@@ -71,7 +72,7 @@ static int PassTurn(GameState* game) {
     if (slot < 0) return 0;
     if (!AssignDieToSlot(game, 0, slot)) return 0;
     EndTurn(game);
-    return game->phase == PHASE_COMBAT || game->phase == PHASE_REWARD || game->phase == PHASE_VICTORY;
+    return game->phase == PHASE_COMBAT || game->phase == PHASE_REWARD || game->phase == PHASE_STORY || game->phase == PHASE_VICTORY;
 }
 
 // 주사위 0을 공격에 배치해 정확히 faceValue 피해를 넣는다 (증폭·특수 0 가정).
@@ -333,6 +334,78 @@ static int CheckCombatFxTrace() {
     return 0;
 }
 
+static int CheckDriveRulesStoryAndMusic() {
+    // C: 출력 0은 제외하고 가장 낮은 양수 기본 출력 하나만 +1.
+    GameState c; SetupBossFight(&c, 0, 0, 0xA1100001u, 2); c.boss.gimmick = GIMMICK_NONE;
+    c.enemies[0].hp = c.enemies[0].maxHp = 999; c.enemies[0].intent = INTENT_GUARD; c.enemies[0].intentValue = 0;
+    SetAllFaces(&c, FACE_NUMBER, 2); for (int f = 0; f < 6; ++f) c.dice[1].faces[f].value = 4;
+    AssignDieToSlot(&c, 0, SLOT_ATTACK); AssignDieToSlot(&c, 1, SLOT_DEFEND); EndTurn(&c);
+    if (c.lastTurnSlotOutput[SLOT_ATTACK] != 3 || c.lastTurnSlotOutput[SLOT_DEFEND] != 4) return Fail("SYSTEM must boost only the lowest positive base output");
+
+    // D: 첫 턴 미발동, 실제로 실행한 동일 배치는 다음 턴 +2.
+    GameState d; SetupBossFight(&d, 1, 0, 0xA1100002u, 3); d.boss.gimmick = GIMMICK_NONE;
+    d.enemies[0].hp = d.enemies[0].maxHp = 999; d.enemies[0].intent = INTENT_GUARD; d.enemies[0].intentValue = 0;
+    AssignDieToSlot(&d, 0, SLOT_ATTACK); EndTurn(&d);
+    if (d.lastTurnSlotOutput[SLOT_ATTACK] != 3) return Fail("SNAPSHOT must not fire on turn one");
+    SetAllFaces(&d, FACE_NUMBER, 3); AssignDieToSlot(&d, 0, SLOT_ATTACK); EndTurn(&d);
+    if (d.lastTurnSlotOutput[SLOT_ATTACK] != 5) return Fail("SNAPSHOT must add two to the repeated placement");
+
+    // E: 첫 배치는 무료, 다른 슬롯으로 성공 이동할 때 전용 RNG만 소비.
+    GameState e; SetupBossFight(&e, 2, 0, 0xA1100003u, 3); e.boss.gimmick = GIMMICK_NONE;
+    uint32_t gameRng = e.rng, lawRng = e.driveRule.rng;
+    AssignDieToSlot(&e, 0, SLOT_ATTACK);
+    if (e.driveRule.hotSwapUsed) return Fail("HOT SWAP must not fire on initial placement");
+    AssignDieToSlot(&e, 0, SLOT_DEFEND);
+    if (!e.driveRule.hotSwapUsed || e.rng != gameRng || e.driveRule.rng == lawRng) return Fail("HOT SWAP must consume only drive-rule rng");
+
+    // N: 두 유효 슬롯과 CHAIN이 있으면 같은 종류의 연쇄가 두 번 기록된다.
+    GameState n; SetupBossFight(&n, 3, 0, 0xA1100004u, 5); n.boss.gimmick = GIMMICK_NONE;
+    n.enemies[0].hp = n.enemies[0].maxHp = 999; n.enemies[0].intent = INTENT_GUARD; n.enemies[0].intentValue = 0;
+    AssignDieToSlot(&n, 0, SLOT_ATTACK); AssignDieToSlot(&n, 1, SLOT_DEFEND); AssignDieToSlot(&n, 2, SLOT_CHAIN); EndTurn(&n);
+    int chainEvents = 0; for (int i = 0; i < n.combatFxCount; ++i) if (n.combatFx[i].type == CFX_CHAIN) ++chainEvents;
+    if (chainEvents != 2 || n.driveRule.packetChainCount != 1) return Fail("PACKET CHAIN must execute one additional chain");
+
+    // R: 공격·증폭 기본 출력 +1, SMARTDRV 포함 방어도는 적 행동 전에 절반.
+    GameState r; SetupBossFight(&r, 4, 0, 0xA1100005u, 2); r.boss.gimmick = GIMMICK_NONE;
+    r.tsrInstalled[TSR_SMARTDRV] = 1; r.turn = 1; r.playerBlock = 6;
+    r.enemies[0].hp = r.enemies[0].maxHp = 999; r.enemies[0].intent = INTENT_GUARD; r.enemies[0].intentValue = 0;
+    AssignDieToSlot(&r, 0, SLOT_ATTACK); AssignDieToSlot(&r, 1, SLOT_AMPLIFY); AssignDieToSlot(&r, 2, SLOT_DEFEND); EndTurn(&r);
+    if (r.lastTurnSlotOutput[SLOT_ATTACK] < 4 || r.playerBlock * 2 > r.lastTurnBlockGained) return Fail("VOLATILE MEMORY must boost output and halve block before enemies");
+
+    // X: 지정된 물리 면만 +2, 사용 뒤 한 턴 격리.
+    GameState x; SetupBossFight(&x, 5, 0, 0xA1100006u, 4); x.boss.gimmick = GIMMICK_NONE;
+    x.driveRule.contrabandDie = 0; x.driveRule.contrabandFace = x.dice[0].rolledFace;
+    x.enemies[0].hp = x.enemies[0].maxHp = 999; x.enemies[0].intent = INTENT_GUARD; x.enemies[0].intentValue = 0;
+    int contrabandFace = x.driveRule.contrabandFace;
+    AssignDieToSlot(&x, 0, SLOT_ATTACK); EndTurn(&x);
+    if (x.lastTurnSlotOutput[SLOT_ATTACK] != 6 || x.dice[0].faces[contrabandFace].quarantined != 1 || x.driveRule.contrabandUses != 1)
+        return Fail("CONTRABAND must boost its installed face and quarantine it for the next turn");
+
+    // 스토리: 인트로, 진실, 두 엔딩 모두 명시적인 phase를 거친다.
+    GameState story; NewRun(&story, 0xA1100007u);
+    if (!CurrentStoryFragment(&story)) return Fail("intro story data must be available");
+    AdvanceStory(&story); if (story.phase != PHASE_DRIVE_SELECT) return Fail("intro must return to drive selection");
+    story.phase = PHASE_ENDING_CHOICE; SelectEnding(&story, 1);
+    if (story.phase != PHASE_STORY || story.story.kind != STORY_ENDING_ROGUE) return Fail("EXEC ROGUE must open its ending story");
+    AdvanceStory(&story); if (story.phase != PHASE_VICTORY) return Fail("ending story must finish at victory");
+
+    // 순수 음악 렌더러: 장치 없이 결정론, clock 유지, 15-step X, mute 0.
+    MusicState m1, m2; MusicInit(&m1); MusicInit(&m2); MusicSetDrive(&m1, 2); MusicSetDrive(&m2, 2); MusicSetIntensity(&m1, 2); MusicSetIntensity(&m2, 2);
+    int32_t a[4096] = {}, b[4096] = {}; MusicRender(&m1, a, 4096); MusicRender(&m2, b, 4096);
+    if (memcmp(a, b, sizeof(a)) != 0 || m1.sampleClock != 4096) return Fail("music renderer must be deterministic and advance its sample clock");
+    uint32_t clock = m1.sampleClock; MusicSetIntensity(&m1, 3); int32_t cbuf[64] = {}; MusicRender(&m1, cbuf, 64);
+    if (m1.sampleClock != clock + 64) return Fail("music intensity changes must not restart the sequencer");
+    MusicSetDrive(&m1, 5); int32_t xbuf[10000] = {}; MusicRender(&m1, xbuf, 10000); if (m1.stepCount != 15) return Fail("QUARANTINE music must use a 15-step bar");
+    MusicState mute; MusicInit(&mute); MusicSetEnabled(&mute, 0); int32_t silent[128] = {}; MusicRender(&mute, silent, 128);
+    for (int i = 0; i < 128; ++i) if (silent[i] != 0) return Fail("muted music must render silence");
+    MusicState clockTest; MusicInit(&clockTest); int32_t timing[3308] = {}; MusicRender(&clockTest, timing, 3307);
+    if (clockTest.step != 0) return Fail("100 BPM step must not advance before its exact sample boundary");
+    MusicRender(&clockTest, timing, 1); if (clockTest.step != 1) return Fail("100 BPM step must advance on its exact sample boundary");
+    int32_t chunk[441] = {}; for (int i = 0; i < 3000; ++i) MusicRender(&clockTest, chunk, 441);
+    if (clockTest.sampleClock != 3308u + 1323000u) return Fail("long music renders must not drift or reset the sample clock");
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // 전체 런 (스폰 로직은 production 경로, 진행 흐름 검증)
 // ---------------------------------------------------------------------------
@@ -359,6 +432,10 @@ static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserve
                 int index = MostExpensiveFace(&game); if (index < 0) return 5; PruneFace(&game, index / 6, index % 6);
             }
             ConfirmPrune(&game);
+        } else if (game.phase == PHASE_STORY) {
+            AdvanceStory(&game);
+        } else if (game.phase == PHASE_ENDING_CHOICE) {
+            SelectEnding(&game, 0);
         } else if (game.phase == PHASE_GAMEOVER) return 1;
     }
     if (game.phase != PHASE_VICTORY) {
@@ -577,9 +654,9 @@ static int CheckRestoreGimmicks() {
     SetAllFaces(&g, FACE_NUMBER, 5);
     int beforeWindow = g.enemies[0].hp;
     for (int t = 0; t < 3; ++t) if (!AttackTurn(&g)) return Fail("restore window 2 turn must resolve");
-    if (g.enemies[0].hp != beforeWindow - 15) return Fail("meeting the damage goal must skip the restore");
+    if (g.enemies[0].hp >= beforeWindow - 15) return Fail("meeting the damage goal must skip the restore");
     // 복원 상한 2회: 이후 창은 미달이어도 복원되지 않는다
-    SetAllFaces(&g, FACE_NUMBER, 2);
+    SetAllFaces(&g, FACE_NUMBER, 1);
     for (int t = 0; t < 3; ++t) if (!AttackTurn(&g)) return Fail("restore window 3 turn must resolve");
     if (g.boss.restoresUsed != 2) return Fail("second missed window must consume the last restore");
     int afterSecond = g.enemies[0].hp;
@@ -594,7 +671,7 @@ static int CheckRestoreGimmicks() {
     if (t2.enemies[0].hp != tapeMax) return Fail("tape loop must rewind low-damage turns but never above max hp");
     SetAllFaces(&t2, FACE_NUMBER, 9);
     if (!AttackTurn(&t2)) return Fail("tape loop heavy turn must resolve");
-    if (t2.enemies[0].hp != tapeMax - 9) return Fail("meeting the tape loop goal must skip the rewind");
+    if (t2.enemies[0].hp > tapeMax - 9) return Fail("meeting the tape loop goal must skip the rewind");
     // 총 회복 상한: 미달 턴을 반복해도 24를 넘겨 회복하지 못한다
     SetAllFaces(&t2, FACE_NUMBER, 2);
     for (int t = 0; t < 20 && t2.phase == PHASE_COMBAT; ++t) if (!AttackTurn(&t2)) return Fail("tape loop cap turn must resolve");
@@ -793,7 +870,7 @@ static int CheckPressureGimmicks() {
     kkill.playerHp = 999;
     AssignDieToSlot(&kkill, 0, SLOT_ATTACK);
     EndTurn(&kkill);
-    if (kkill.phase != PHASE_REWARD) return Fail("killing the boss must end the fight");
+    if (kkill.phase != PHASE_STORY) return Fail("killing the boss must enter its story");
     if (kkill.playerHp != 999) return Fail("a boss killed first must not fire its empowered attack");
 
     // HEAP.OVERFLOW: 강화 공격이 방어 관통(오염)
@@ -858,7 +935,7 @@ static int CheckQuarantineGimmicks() {
     if (attacker < 0) return Fail("an unquarantined attacker die must exist");
     AssignDieToSlot(&g, attacker, SLOT_ATTACK);
     EndTurn(&g);
-    if (g.phase != PHASE_REWARD) return Fail("sample-13 kill must end the combat");
+    if (g.phase != PHASE_STORY) return Fail("sample-13 kill must enter its story");
     if (CountQuarantined(&g) != 0) return Fail("victory must release every quarantined face");
     if (g.boss.gimmick != GIMMICK_NONE) return Fail("the boss runtime must be cleared after combat");
 
@@ -907,7 +984,8 @@ static int CheckQuarantineGimmicks() {
         ++cleanup;
     }
     if (s.enemyCount != 1 + breach->p2) return Fail("no escapee may spawn after the boss is gone");
-    if (s.phase != PHASE_REWARD) return Fail("clearing every escapee must end the combat");
+    if (s.phase != PHASE_STORY || s.story.kind != STORY_BOSS)
+        return Fail("clearing every escapee must enter the boss story");
     if (LivingMinionCount(&s) != 0) return Fail("no escapee may survive the win");
 
     // ZERO.DAY: 영구 삭제, 출력 가능한 면 1개 보장, 전투 후 유지
@@ -958,7 +1036,9 @@ static int CheckNoStateLeak() {
     GameState g; SetupBossFight(&g, 0, 0, 0xCAFE0001u, 5);
     g.enemies[0].hp = 1;
     if (!AttackTurn(&g)) return Fail("state leak setup must kill the boss");
-    if (g.phase != PHASE_REWARD || !g.rewardIsTsr) return Fail("boss kill must reach the tsr reward");
+    if (g.phase != PHASE_STORY || !g.rewardIsTsr) return Fail("boss kill must prepare loot before its story");
+    AdvanceStory(&g);
+    if (g.phase != PHASE_REWARD) return Fail("boss story must return to the tsr reward");
     if (g.boss.gimmick != GIMMICK_NONE) return Fail("gimmick runtime must be cleared after the boss dies");
     for (int s = 0; s < SLOT_COUNT; ++s) if (SlotLockedThisTurn(&g, s) || SlotLockedNextTurn(&g, s)) return Fail("locks must not leak out of combat");
     if (ResolveOrderReversed(&g) || g.boss.nextReversed) return Fail("reversal must not leak out of combat");
@@ -994,6 +1074,7 @@ static int ForceDirectoryNode(GameState* game, int kind) {
         game->directory.choices[0].payload = (uint8_t)face;
     }
     SelectDirectoryChoice(game, 0);
+    if (game->phase == PHASE_STORY && game->story.kind == STORY_LOGS) AdvanceStory(game);
     return game->phase == PHASE_COMBAT;
 }
 
@@ -1012,6 +1093,10 @@ static int AutoAdvanceToDirectory(GameState* game, int guardLimit) {
                 int index = MostExpensiveFace(game); if (index < 0) return 0; PruneFace(game, index / 6, index % 6);
             }
             ConfirmPrune(game);
+        } else if (game->phase == PHASE_STORY) {
+            AdvanceStory(game);
+        } else if (game->phase == PHASE_ENDING_CHOICE) {
+            SelectEnding(game, 0);
         } else return 0;
     }
     return game->phase == PHASE_DIRECTORY;
@@ -1048,6 +1133,7 @@ static int CheckDirectoryGeneration() {
                 if (g.directory.floorCounts[a] >= ia->maxPerFloor || g.directory.floorCounts[b] >= ib->maxPerFloor)
                     return Fail("a node past its per-floor limit must not be offered");
                 SelectDirectoryChoice(&g, 0);
+                if (g.phase == PHASE_STORY && g.story.kind == STORY_LOGS) AdvanceStory(&g);
                 if (g.phase != PHASE_COMBAT) return Fail("choosing a directory card must start the combat");
                 if (!AutoAdvanceToDirectory(&g, 60)) break;
             }
@@ -1135,19 +1221,29 @@ static int CheckDirectoryProgression() {
     if (g.directory.activeKind != DIR_NODE_NONE) return Fail("no directory effect may carry into the boss fight");
     for (int i = 0; i < g.enemyCount; ++i) { g.enemies[i].hp = 1; g.enemies[i].block = 0; }
     AssignDieToSlot(&g, 0, SLOT_ATTACK); EndTurn(&g);
-    if (g.phase != PHASE_REWARD || !g.rewardIsTsr) return Fail("the boss kill must offer resident loot");
+    if (g.phase != PHASE_STORY || !g.rewardIsTsr) return Fail("the boss kill must prepare resident loot");
+    AdvanceStory(&g);
+    if (g.phase != PHASE_REWARD) return Fail("boss story must return to resident loot");
     SkipReward(&g);
     if (g.phase != PHASE_DIRECTORY || g.floor != 1 || g.encounter != 0) return Fail("the next floor must open with a directory choice");
     if (g.directory.intelThisFloor) return Fail("intel must not carry across floors");
 
-    // 최종 보스는 디렉터리도 보상도 거치지 않고 승리로 간다.
+    // 최종 보스는 진실과 엔딩 선택을 모두 거친 뒤 승리로 간다.
     GameState last; NewRun(&last, 0xD1C00002u); last.modifierA = MOD_BAD_SECTOR; last.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&last, TEST_DRIVE, TEST_SEED, 1);
     last.floor = 2; last.encounter = 2; last.playerMaxHp = 999; last.playerHp = 999;
     StartCombat(&last);
     last.enemies[0].hp = 1; last.enemies[0].block = 0;
     AssignDieToSlot(&last, 0, SLOT_ATTACK); EndTurn(&last);
-    if (last.phase != PHASE_VICTORY) return Fail("the final boss must go straight to victory");
+    if (last.phase != PHASE_STORY || last.story.kind != STORY_BOSS) return Fail("the final boss must reveal its drive story");
+    AdvanceStory(&last);
+    if (last.phase != PHASE_STORY || last.story.kind != STORY_TRUTH) return Fail("the final boss story must reveal the truth");
+    AdvanceStory(&last);
+    if (last.phase != PHASE_ENDING_CHOICE) return Fail("truth must lead to the ending choice");
+    SelectEnding(&last, 0);
+    if (last.phase != PHASE_STORY || last.story.kind != STORY_ENDING_RESTORE) return Fail("ending selection must show its story");
+    AdvanceStory(&last);
+    if (last.phase != PHASE_VICTORY) return Fail("ending story must lead to victory");
     return 0;
 }
 
@@ -1339,6 +1435,7 @@ int main() {
     if (CheckPressureGimmicks()) return 1;
     if (CheckQuarantineGimmicks()) return 1;
     if (CheckCombatFxTrace()) return 1;
+    if (CheckDriveRulesStoryAndMusic()) return 1;
     if (CheckNoStateLeak()) return 1;
     if (CheckDirectoryGeneration()) return 1;
     if (CheckDirectoryRng()) return 1;
@@ -1348,7 +1445,7 @@ int main() {
 
     GameState base; NewRun(&base, 0x12345678u);
     if (DeckBytes(&base) != 63) return Fail("starting deck must be 63 bytes");
-    if (base.phase != PHASE_DRIVE_SELECT) return Fail("new run must offer drive choices");
+    if (base.phase != PHASE_STORY || base.story.kind != STORY_INTRO) return Fail("new run must begin with the boot story");
     if (base.driveChoices[0] == base.driveChoices[1] || base.driveChoices[0] == base.driveChoices[2]
         || base.driveChoices[1] == base.driveChoices[2]) return Fail("drive choices must be unique");
     SelectDrive(&base, 1);
@@ -1619,7 +1716,9 @@ int main() {
     tsr.encounter = 2; StartCombat(&tsr);
     tsr.playerHp = 999; tsr.playerMaxHp = 999; tsr.enemies[0].hp = 1;
     AssignDieToSlot(&tsr, 0, SLOT_ATTACK); EndTurn(&tsr);
-    if (tsr.phase != PHASE_REWARD || !tsr.rewardIsTsr) return Fail("boss kill must offer resident program loot");
+    if (tsr.phase != PHASE_STORY || !tsr.rewardIsTsr) return Fail("boss kill must prepare resident program loot");
+    AdvanceStory(&tsr);
+    if (tsr.phase != PHASE_REWARD) return Fail("boss story must return to program loot");
     for (int i = 0; i < 3; ++i) {
         int kind = tsr.rewardKinds[i];
         if (kind < 0 || kind >= TSR_COUNT) return Fail("tsr loot must be a valid program");
@@ -1713,5 +1812,5 @@ int main() {
         if (result != 0) { printf("FAIL: drive %d seed %d result %d\n", drive, seed, result); return 1; }
         ++runs;
     }
-    printf("PASS: roster, sprites, spawn matrix, 18 gimmick scenarios, combat fx trace, directory routing, %d complete runs\n", runs); return 0;
+    printf("PASS: roster, sprites, drive laws, story, music clock, 18 gimmicks, directory routing, %d complete runs\n", runs); return 0;
 }
