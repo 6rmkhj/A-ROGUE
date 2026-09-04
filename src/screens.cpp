@@ -3008,6 +3008,13 @@ static HDC gCanvasDc;
 static HBITMAP gCanvasBmp, gCanvasOld;
 static int gCanvasW, gCanvasH;
 
+// 입력 처리 직전에 마지막 완성 프레임을 붙잡는다. 보상 함수는 곧바로 다음
+// 페이즈로 넘어가지만, 이 복사본 덕분에 설치 경로가 끝날 때까지 보상 화면이 남는다.
+void CaptureUiFxSnapshot() {
+    if (gCanvasDc && gCanvasW > 0 && gCanvasH > 0)
+        FxSnapshotCapture(gCanvasDc, gCanvasW, gCanvasH);
+}
+
 static HDC AcquireBuffer(HDC screen, HDC* dcSlot, HBITMAP* bmpSlot, HBITMAP* oldSlot, int* wSlot, int* hSlot, int w, int h) {
     if (*dcSlot && (*wSlot != w || *hSlot != h)) {
         SelectObject(*dcSlot, *oldSlot); DeleteObject(*bmpSlot); DeleteDC(*dcSlot);
@@ -3026,6 +3033,151 @@ static int gPaintLastMs, gPaintMaxMs, gPaintCount;
 int PaintLastMs() { return gPaintLastMs; }
 int PaintMaxMs() { return gPaintMaxMs; }
 int PaintCount() { return gPaintCount; }
+
+static POINT UiFxCenter(const RECT& r) {
+    POINT p = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+    return p;
+}
+
+static void DrawUiFxFace(HDC dc, const RECT& r, const Face* face, COLORREF accent) {
+    Panel(dc, r, RGB(12, 22, 28), accent);
+    wchar_t value[24]; FormatFace(face, value);
+    TextRect(dc, MakeRect(r.left + 4, r.top + 7, r.right - 4, r.top + 37),
+        value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
+    wchar_t bytes[24]; wsprintfW(bytes, L"%dB", FaceCost(face));
+    TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4),
+        bytes, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 직접 조작의 마지막 사건 하나를 그린다. 어떤 프레임을 건너뛰어도 t만 같으면
+// 같은 그림이 나오며, 게임 상태와 난수에는 손대지 않는다.
+void DrawUiInteractionFx(HDC dc) {
+    int kind = gUiFx.kind;
+    if (kind == UIFX_NONE || gFxLevel == FX_OFF) return;
+    int t = UiFxElapsed();
+
+    if (kind == UIFX_DIE_PLACE || kind == UIFX_DIE_MOVE || kind == UIFX_DIE_REMOVE) {
+        if (gGame.phase != PHASE_COMBAT || gUiFx.die < 0 || gUiFx.die >= 3) return;
+        RECT die = DieRect(gUiFx.die);
+        POINT dieTop = {(die.left + die.right) / 2, die.top - 2};
+        int removing = kind == UIFX_DIE_REMOVE;
+        int slotIndex = removing ? gUiFx.fromSlot : gUiFx.toSlot;
+        if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return;
+        RECT slot = SlotRect(slotIndex);
+        POINT slotBottom = {(slot.left + slot.right) / 2, slot.bottom + 2};
+        COLORREF tone = removing ? C_RED : SlotAccent(slotIndex);
+
+        if (kind == UIFX_DIE_MOVE && gUiFx.fromSlot >= 0 && gUiFx.fromSlot < SLOT_COUNT) {
+            RECT old = SlotRect(gUiFx.fromSlot);
+            int fade = 1000 - Track(t, 0, 100);
+            DrawPulseFrame(dc, old, FxScale(1 + 5 * fade / 1000), 2, C_RED);
+            POINT cut = {(old.left + old.right) / 2, old.bottom + 2};
+            int arm = FxScale(3 + 4 * fade / 1000);
+            Fill(dc, MakeRect(cut.x - arm, cut.y - 1, cut.x + arm, cut.y + 1), C_RED);
+            Fill(dc, MakeRect(cut.x - 1, cut.y - arm, cut.x + 1, cut.y + arm), C_RED);
+        }
+
+        // 이미 차 있던 슬롯에 놓았다면 밀려난 주사위 쪽으로 연결이 되감긴다.
+        if (!removing && gUiFx.displacedDie >= 0 && gUiFx.displacedDie < 3) {
+            RECT displaced = DieRect(gUiFx.displacedDie);
+            POINT displacedTop = {(displaced.left + displaced.right) / 2, displaced.top - 2};
+            int retract = EaseOutCubic(Track(t, 0, 105));
+            DrawSignalPath(dc, slotBottom, displacedTop, CFX_SLOT_ROUTE_Y, retract, 2, C_RED, 9, 0);
+            if (t < 150) DrawPulseFrame(dc, displaced, FxScale(Lerp(7, 1, Track(t, 20, 150))), 2, C_RED);
+        }
+
+        int travel = EaseOutCubic(Track(t, 20, 175));
+        DrawSignalPath(dc, removing ? slotBottom : dieTop, removing ? dieTop : slotBottom,
+            CFX_SLOT_ROUTE_Y, travel, 3, tone, 9, 0);
+        if (t < 100) DrawPulseFrame(dc, removing ? slot : die, FxScale(2 + (100 - t) / 18), 2, tone);
+        // E:\ HOT SWAP처럼 재배치와 동시에 굴림이 바뀌면 카드 자체가 한 번 찢긴다.
+        if (!removing && gUiFx.valueBefore != gUiFx.valueAfter && t < 170 && FxDecorOn()) {
+            DrawBandGlitch(dc, die, t, FxScale(3 + 7 * t / 170), gUiFx.die * 19 + 7, 6);
+            TextRect(dc, MakeRect(die.left, die.top - 21, die.right, die.top - 1),
+                L"HOT SWAP", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        }
+        int land = Track(t, 135, 300);
+        if (land > 0) {
+            RECT target = removing ? die : slot;
+            DrawPulseFrame(dc, target, FxScale(Lerp(8, 1, EaseOutCubic(land))), 3, tone);
+            if (FxDecorOn()) {
+                POINT p = UiFxCenter(target);
+                DrawPixelBurst(dc, p.x, p.y, t - 150, 150, FxScale(8), gUiFx.die * 17 + slotIndex, tone);
+            }
+        }
+        return;
+    }
+
+    if (kind == UIFX_REWARD_FACE || kind == UIFX_REWARD_TSR || kind == UIFX_REWARD_REPAIR) {
+        // 340ms까지는 보상 화면을 온전히 유지하고, 이후 성긴 주사선만 남겨 다음
+        // 화면을 드러낸다. 알파 블렌딩 없이도 CRT 신호가 교체되는 느낌이 난다.
+        int keep = t < 340 ? 100 : Lerp(100, 0, Track(t, 340, 520));
+        if (FxSnapshotHeld() && keep > 0)
+            FxSnapshotBlit(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), 0, 0, keep);
+
+        RECT source = RewardRect(gUiFx.rewardIndex, BASE_WIDTH);
+        POINT from = {(source.left + source.right) / 2, source.bottom + 2};
+        POINT to;
+        COLORREF tone = C_GREEN;
+        RECT target = MakeRect(0, 0, 0, 0);
+        if (kind == UIFX_REWARD_FACE) {
+            target = FaceGridRect(gUiFx.die, gUiFx.face);
+            to.x = (target.left + target.right) / 2; to.y = target.top - 2;
+            tone = FaceColor(&gUiFx.shownFace);
+        } else if (kind == UIFX_REWARD_REPAIR) {
+            target = MakeRect(BASE_WIDTH - 452, 7, BASE_WIDTH - 318, 44);
+            to = UiFxCenter(target); tone = C_GREEN;
+        } else {
+            target = MakeRect(BASE_WIDTH - 310, 7, BASE_WIDTH - 160, 44);
+            to = UiFxCenter(target); tone = C_BLUE;
+        }
+
+        int travel = EaseOutCubic(Track(t, 45, 250));
+        DrawSignalPath(dc, from, to, (from.y + to.y) / 2, travel, 4, tone, 10, FxScale(5));
+        DrawPulseFrame(dc, source, FxScale(Lerp(5, 1, Track(t, 0, 180))), 2, tone);
+        int land = Track(t, 220, 500);
+        if (land > 0) {
+            DrawPulseFrame(dc, target, FxScale(Lerp(10, 1, EaseOutCubic(land))), 3, tone);
+            if (FxDecorOn()) DrawPixelBurst(dc, to.x, to.y, t - 220, 260,
+                FxScale(kind == UIFX_REWARD_FACE ? 18 : 13), gUiFx.rewardIndex * 29 + kind, tone);
+        }
+        if (kind == UIFX_REWARD_FACE && t >= 220) {
+            int p = EaseOutBack(Track(t, 220, 350));
+            POINT c = UiFxCenter(target);
+            RECT reveal = MakeRect(Lerp(c.x, target.left, p), Lerp(c.y, target.top, p),
+                                   Lerp(c.x, target.right, p), Lerp(c.y, target.bottom, p));
+            if (reveal.right > reveal.left + 8 && reveal.bottom > reveal.top + 8)
+                DrawUiFxFace(dc, reveal, &gUiFx.shownFace, tone);
+        } else if (kind == UIFX_REWARD_REPAIR && t >= 230) {
+            wchar_t gain[32]; wsprintfW(gain, L"HP +%d", gUiFx.valueAfter - gUiFx.valueBefore);
+            TextRect(dc, target, gain, C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else if (kind == UIFX_REWARD_TSR && t >= 230) {
+            TextRect(dc, target, L"RESIDENT", C_BLUE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        return;
+    }
+
+    if (kind == UIFX_PRUNE_DELETE || kind == UIFX_PRUNE_RESTORE) {
+        if (gGame.phase != PHASE_PRUNE || gUiFx.die < 0 || gUiFx.face < 0) return;
+        RECT cell = FaceGridRect(gUiFx.die, gUiFx.face);
+        POINT c = UiFxCenter(cell);
+        int deleting = kind == UIFX_PRUNE_DELETE;
+        COLORREF tone = deleting ? C_RED : C_GREEN;
+        if (deleting && t < 190) {
+            DrawUiFxFace(dc, cell, &gUiFx.shownFace, MixColor(C_LINE, C_RED, 35 + t * 60 / 190));
+            if (FxDecorOn()) DrawBandGlitch(dc, cell, t, FxScale(2 + t * 8 / 190), gUiFx.die * 11 + gUiFx.face, 5);
+        } else if (!deleting) {
+            int p = EaseOutBack(Track(t, 0, 150));
+            RECT reveal = MakeRect(Lerp(c.x, cell.left, p), Lerp(c.y, cell.top, p),
+                                   Lerp(c.x, cell.right, p), Lerp(c.y, cell.bottom, p));
+            if (reveal.right > reveal.left + 8 && reveal.bottom > reveal.top + 8)
+                DrawUiFxFace(dc, reveal, &gUiFx.shownFace, C_GREEN);
+        }
+        DrawPulseFrame(dc, cell, FxScale(Lerp(8, 1, Track(t, 80, 340))), 3, tone);
+        if (FxDecorOn()) DrawPixelBurst(dc, c.x, c.y, deleting ? t - 90 : t,
+            260, FxScale(14), gUiFx.die * 23 + gUiFx.face, tone);
+    }
+}
 
 void PaintGame(HWND window) {
     LARGE_INTEGER qpcFreq, qpcStart; QueryPerformanceFrequency(&qpcFreq); QueryPerformanceCounter(&qpcStart);
@@ -3076,7 +3228,8 @@ void PaintGame(HWND window) {
         if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawGimmickFx(canvas);
     }
-    if (GimmickFxKind() <= 0 && !gBootActive && FxSnapshotHeld()) FxSnapshotRelease();
+    if (GimmickFxKind() <= 0 && !gBootActive && !UiFxSnapshotActive() && FxSnapshotHeld()) FxSnapshotRelease();
+    DrawUiInteractionFx(canvas);
 
     // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
     // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.

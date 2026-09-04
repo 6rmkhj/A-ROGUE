@@ -59,6 +59,39 @@ extern int gFxLevel;
 int FxScale(int amount);   // 장식 강도를 현재 모드로 줄인다 (REDUCED 50%, OFF 0)
 int FxDecorOn();           // 움직이는 장식을 그려도 되는가
 
+// ---- 직접 조작 피드백 ------------------------------------------------------
+// 클릭 결과는 게임 상태에 즉시 반영하고, 그 직전/직후 위치만 짧게 기록해 화면이
+// 경과 시간의 순수 함수로 재생한다. 보상은 처리 직후 화면이 바뀌므로 마지막 보상
+// 화면 스냅샷을 잠깐 유지하고, 주사위 배치·정리는 현재 화면 위에서 바로 재생한다.
+enum UiFxKind {
+    UIFX_NONE = 0,
+    UIFX_DIE_PLACE,
+    UIFX_DIE_MOVE,
+    UIFX_DIE_REMOVE,
+    UIFX_REWARD_FACE,
+    UIFX_REWARD_TSR,
+    UIFX_REWARD_REPAIR,
+    UIFX_PRUNE_DELETE,
+    UIFX_PRUNE_RESTORE
+};
+
+struct UiFxState {
+    int kind;
+    DWORD start;
+    int die, face;
+    int displacedDie;
+    int fromSlot, toSlot;
+    int rewardIndex;
+    int valueBefore, valueAfter;
+    Face shownFace;
+};
+
+extern UiFxState gUiFx;
+int UiFxElapsed();
+int UiFxSnapshotActive();
+void CaptureUiFxSnapshot();
+void DrawUiInteractionFx(HDC dc);
+
 // ---- 공유 상태 (main.cpp가 소유한다) --------------------------------------
 extern GameState gGame;
 extern HWND gWindow;
