@@ -55,6 +55,10 @@ int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
 void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH);
 int  FxSnapshotHeld();
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
+// 붙잡아 둔 판을 돌리면서 줄여 다시 얹는다 (돌리줌). 중심은 논리 좌표, 배율은
+// 천분율, 각도는 1/10도다. 회전은 장치 픽셀로 해야 어긋나지 않으므로 캔버스의
+// 실제 크기를 함께 받는다. 늘리거나 줄이는 자리는 호출자가 클립으로 정한다.
+void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy, int scaleMille, int angleDeci);
 void FxSnapshotRelease();
 void FxSnapshotDestroy();
 

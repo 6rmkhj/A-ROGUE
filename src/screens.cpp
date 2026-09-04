@@ -1488,6 +1488,219 @@ static void DrawDescent(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// ---- 새 게임 삽입 연출 -----------------------------------------------------
+// 새 게임을 누르면 지금 화면이 두 바퀴 돌면서 줄어들어 플로피 한 장의 라벨이
+// 되고, 그 디스크가 컴퓨터의 A: 드라이브에 꽂힌다. 드라이브가 읽고 모니터가
+// 켜지면 그 화면이 캔버스를 삼키며 런으로 넘어간다.
+//
+// 판은 아직 누르기 직전 그대로다. 여기서 돌리는 그림은 연출이 시작될 때 붙잡아
+// 둔 스냅샷이고, 런은 main.cpp의 FinishBootInsert가 끝에서 만든다. 모든 값이
+// 경과 ms의 순수 함수라 리페인트가 겹쳐도 같은 프레임이 나온다.
+#define BOOT_DISK_W 200
+#define BOOT_DISK_H 206
+#define BOOT_HOLD_CY 210         // 디스크를 들고 있는 높이
+#define BOOT_TOUCH_CY 325        // 셔터가 슬롯 입구에 닿는 높이
+#define BOOT_IN_CY 539           // 다 들어가 보이지 않는 높이
+#define BOOT_LABEL_FILL 153      // 라벨을 가득 채우는 스냅샷 배율 (천분율)
+
+// 슬롯은 캔버스 한가운데(560)를 지난다. 디스크도 같은 축으로 내려오므로 둘의
+// 중심이 어긋나면 안 된다.
+static RECT BootMonitorRect(int dy) { return MakeRect(400, 120 + dy, 720, 364 + dy); }
+static RECT BootScreenRect(int dy)  { return MakeRect(420, 140 + dy, 700, 330 + dy); }
+static RECT BootCaseRect(int dy)    { return MakeRect(396, 386 + dy, 724, 554 + dy); }
+static RECT BootDriveRect(int dy)   { return MakeRect(440, 412 + dy, 704, 500 + dy); }
+static RECT BootSlotRect(int dy)    { return MakeRect(454, 428 + dy, 666, 462 + dy); }
+
+static RECT LerpRect(const RECT& a, const RECT& b, int p) {
+    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
+                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
+}
+
+// 플로피 한 장의 자리. 배율(천분율)이 몸통·라벨·셔터에 같은 비율로 걸리므로
+// 그리기와 라벨 클립이 언제나 같은 사각형을 본다.
+struct BootDisk { RECT body, label, shutter; };
+
+static BootDisk BootDiskAt(int cx, int cy, int scaleMille) {
+    int w = BOOT_DISK_W * scaleMille / 1000, h = BOOT_DISK_H * scaleMille / 1000;
+    BootDisk disk;
+    disk.body = MakeRect(cx - w / 2, cy - h / 2, cx - w / 2 + w, cy - h / 2 + h);
+    disk.label = MakeRect(disk.body.left + 14 * scaleMille / 1000, disk.body.top + 16 * scaleMille / 1000,
+                          disk.body.right - 14 * scaleMille / 1000, disk.body.top + 104 * scaleMille / 1000);
+    int sw = 88 * scaleMille / 1000;
+    disk.shutter = MakeRect(cx - sw / 2, disk.body.bottom - 44 * scaleMille / 1000,
+                            cx - sw / 2 + sw, disk.body.bottom - 8 * scaleMille / 1000);
+    return disk;
+}
+
+// 셔터가 아래에 있다. 슬롯에 먼저 들어가는 쪽이라 그렇게 들고 있는 것이 맞다.
+static void DrawBootFloppy(HDC dc, const BootDisk& disk) {
+    int w = disk.body.right - disk.body.left;
+    if (w < 8) return;
+    // 기계 앞을 지날 때 디스크가 묻히지 않도록 그림자를 깔고 몸통을 한 단 밝게 쓴다.
+    Fill(dc, MakeRect(disk.body.left + 9, disk.body.top + 11, disk.body.right + 9, disk.body.bottom + 11), RGB(3, 5, 8));
+    Panel(dc, disk.body, RGB(30, 38, 48), RGB(96, 116, 132));
+    Fill(dc, MakeRect(disk.body.left + 3, disk.body.top + 3, disk.body.right - 3, disk.body.top + 4), RGB(54, 68, 82));
+    Fill(dc, MakeRect(disk.body.left + 3, disk.body.bottom - 4, disk.body.right - 3, disk.body.bottom - 3), RGB(11, 15, 20));
+    Fill(dc, disk.shutter, RGB(146, 158, 170));
+    Fill(dc, MakeRect(disk.shutter.left + 3, disk.shutter.top + 3,
+                      (disk.shutter.left + disk.shutter.right) / 2, disk.shutter.bottom - 3), RGB(26, 32, 40));
+    if (w >= 120) {
+        // 쓰기 방지 구멍 두 개. 아래 모서리에서 셔터를 사이에 둔다.
+        Fill(dc, MakeRect(disk.body.left + 10, disk.body.bottom - 28, disk.body.left + 24, disk.body.bottom - 14), RGB(5, 8, 11));
+        Fill(dc, MakeRect(disk.body.right - 24, disk.body.bottom - 28, disk.body.right - 10, disk.body.bottom - 14), RGB(5, 8, 11));
+    }
+    Panel(dc, disk.label, RGB(10, 15, 20), RGB(158, 176, 188));
+    if (w >= 150) {
+        Text(dc, disk.label.left + 2, disk.label.bottom + 8, L"A:\\ROGUE", C_GREEN, gFontSmall);
+        Text(dc, disk.label.left + 2, disk.label.bottom + 28, L"1.44 MB  ·  2HD", C_DIM, gFontSmall);
+    }
+}
+
+// 모니터와 본체. dy는 아래에서 올라오는 동안의 남은 거리다.
+static void DrawBootMachine(HDC dc, int dy, int inserted, int t) {
+    RECT monitor = BootMonitorRect(dy), screen = BootScreenRect(dy);
+    RECT machine = BootCaseRect(dy), drive = BootDriveRect(dy), slot = BootSlotRect(dy);
+    Panel(dc, monitor, RGB(19, 25, 32), RGB(60, 76, 90));
+    Outline(dc, MakeRect(screen.left - 4, screen.top - 4, screen.right + 4, screen.bottom + 4), RGB(38, 50, 60), 2);
+    Fill(dc, screen, RGB(5, 9, 12));
+    // 꺼진 브라운관에도 빛은 조금 비친다. 사선으로 흐르는 점이 유리라는 것을 알려 준다.
+    if (!inserted)
+        for (int i = 0; i < 30; ++i) {
+            int x = screen.left + 20 + i * 5, y = screen.top + 22 + i * 5;
+            Fill(dc, MakeRect(x, y, x + 3, y + 3), RGB(12, 18, 24));
+        }
+    Fill(dc, MakeRect(528, 364 + dy, 592, 386 + dy), RGB(24, 31, 39));
+    Panel(dc, machine, RGB(19, 25, 32), RGB(60, 76, 90));
+    Fill(dc, MakeRect(machine.left + 8, machine.top + 8, machine.right - 8, machine.top + 9), RGB(34, 44, 54));
+    for (int x = drive.left; x < drive.right - 6; x += 8)
+        Fill(dc, MakeRect(x, drive.bottom + 12, x + 3, machine.bottom - 16), RGB(13, 18, 24));
+    // 3.5인치 드라이브. 슬롯은 안이 보이지 않는 검은 틈이라 디스크가 그리로 사라진다.
+    Panel(dc, drive, RGB(26, 33, 41), RGB(46, 60, 72));
+    Fill(dc, slot, RGB(3, 5, 7));
+    Outline(dc, slot, RGB(72, 90, 106), 1);
+    Fill(dc, MakeRect(slot.left + 4, slot.top + 3, slot.right - 4, slot.top + 6), RGB(14, 20, 26));
+    // 꺼냄 단추는 디스크가 물리는 순간 튀어나온다.
+    Fill(dc, MakeRect(slot.right + 8, slot.top + 6, slot.right + 30 + (inserted ? 6 : 0), slot.bottom - 6), RGB(52, 66, 78));
+    int led = inserted && ((t / 90) & 1);
+    Fill(dc, MakeRect(slot.left + 6, slot.bottom + 16, slot.left + 24, slot.bottom + 26), led ? C_GREEN : RGB(26, 40, 36));
+    Text(dc, slot.left + 32, slot.bottom + 12, L"A:", led ? C_GREEN : C_DIM, gFontSmall);
+}
+
+// 디스크가 물린 뒤의 모니터. 판독이 진행될수록 노이즈가 걷히고 줄이 하나씩 는다.
+static void DrawBootScreenText(HDC dc, const RECT& screen, int t) {
+    static const wchar_t* const BOOT_LINES[4] = {
+        L"A:\\> DIR",
+        L"ROGUE    EXE      1,440,000",
+        L"A:\\> ROGUE",
+        L"메모리 검사 완료 · 부팅"
+    };
+    int seek = Track(t, BOOT_CLUNK_AT, BOOT_SEEK_END);
+    Fill(dc, screen, RGB(6, 13, 11));
+    DrawSectorStatic(dc, screen, 7, t / NOISE_CHURN_MS, 340 - seek * 280 / 1000);
+    int shown = seek / 240 + 1;
+    if (shown > 4) shown = 4;
+    for (int i = 0; i < shown; ++i)
+        Text(dc, screen.left + 14, screen.top + 16 + i * 22, BOOT_LINES[i], i == 3 ? C_GREEN : C_TEXT, gFontSmall);
+    Bar(dc, MakeRect(screen.left + 14, screen.bottom - 32, screen.right - 14, screen.bottom - 18), seek, 1000, C_GREEN);
+    DrawScanlines(dc, screen);
+}
+
+void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
+    int t = (int)(GetTickCount() - gBootStart);
+    if (t < 0) t = 0;
+    if (t > BOOT_INSERT_MS) t = BOOT_INSERT_MS;
+    RECT full = MakeRect(0, 0, width, height);
+    Fill(dc, full, RGB(4, 7, 10));
+    for (int y = 0; y < height; y += 4) Fill(dc, MakeRect(0, y, width, y + 1), RGB(7, 11, 15));
+
+    int suck = Track(t, 0, BOOT_SUCK_MS);
+    int e = EaseInCubic(suck);                 // 빨려 들어가는 힘은 끝으로 갈수록 세진다
+    int inserted = t >= BOOT_CLUNK_AT;
+
+    // 기계는 화면이 빨려 들어가는 동안 아래에서 올라와 자리를 잡는다.
+    int rise = EaseOutCubic(Track(t, 200, BOOT_SUCK_MS + 220));
+    int dy = Lerp(170, 0, rise);
+    if (rise > 0) {
+        DrawBootMachine(dc, dy, inserted, t);
+        if (inserted) DrawBootScreenText(dc, BootScreenRect(dy), t);
+    }
+
+    // 디스크 몸통이 자라는 동안 스냅샷은 그 라벨을 겨누고 줄어든다. 둘이 같은
+    // 배율을 보므로 다 줄어든 순간 판은 라벨에 정확히 얹힌다.
+    int grow = Track(t, BOOT_SUCK_MS * 55 / 100, BOOT_SUCK_MS);
+    int diskScale = grow <= 0 ? 240 : Lerp(240, 1000, EaseOutCubic(grow));
+    int cx = width / 2, cy;
+    if (t < BOOT_FLY_AT) cy = BOOT_HOLD_CY;
+    else if (t < BOOT_PUSH_AT) cy = Lerp(BOOT_HOLD_CY, BOOT_TOUCH_CY, EaseInCubic(Track(t, BOOT_FLY_AT, BOOT_PUSH_AT)));
+    else cy = Lerp(BOOT_TOUCH_CY, BOOT_IN_CY, Track(t, BOOT_PUSH_AT, BOOT_CLUNK_AT));
+    BootDisk disk = BootDiskAt(cx, cy, diskScale);
+    int labelCx = (disk.label.left + disk.label.right) / 2;
+    int labelCy = (disk.label.top + disk.label.bottom) / 2;
+
+    if (!inserted) {
+        RECT slot = BootSlotRect(0);
+        SaveDC(dc);
+        // 슬롯에 들어간 부분은 기계 앞판 뒤로 사라진다.
+        if (t >= BOOT_PUSH_AT) IntersectClipRect(dc, 0, 0, width, slot.top + 5);
+        if (grow > 0) DrawBootFloppy(dc, disk);
+        // 판이 보이는 창은 화면 전체에서 라벨로 좁혀지고, 그 안에서 판은 두 바퀴
+        // 돌아(7200 = 720도) 제자리에서 멈춘다.
+        SaveDC(dc);
+        RECT hole = LerpRect(full, disk.label, e);
+        IntersectClipRect(dc, hole.left, hole.top, hole.right, hole.bottom);
+        int target = BOOT_LABEL_FILL * diskScale / 1000;
+        // 회전 잔상. 조금 전 각도의 판을 먼저 얹으면 도는 방향으로 번져 보인다.
+        if (FxDecorOn() && suck > 40 && suck < 1000)
+            for (int ghost = 2; ghost >= 1; --ghost) {
+                int lag = suck - ghost * 40;
+                if (lag <= 0) continue;
+                int ge = EaseInCubic(lag);
+                FxSnapshotSpin(dc, deviceW, deviceH, Lerp(width / 2, labelCx, ge), Lerp(height / 2, labelCy, ge),
+                               Lerp(1000, target, ge), ge * 7200 / 1000);
+            }
+        FxSnapshotSpin(dc, deviceW, deviceH, Lerp(width / 2, labelCx, e), Lerp(height / 2, labelCy, e),
+                       Lerp(1000, target, e), e * 7200 / 1000);
+        RestoreDC(dc, -1);
+        RestoreDC(dc, -1);
+    }
+
+    // 빨려 들어가는 부스러기. 화면 밖에서 라벨 쪽으로 끌려와 사라진다.
+    if (FxDecorOn() && suck > 0 && suck < 1000) {
+        for (int i = 0; i < 30; ++i) {
+            uint32_t h = Hash3(i, 21, 7);
+            int local = suck + (int)(h % 260u);          // 조각마다 시차를 준다
+            if (local >= 1000) continue;
+            int side = (int)((h >> 7) % 4u), along = (int)((h >> 11) % 1000u);
+            int sx = side < 2 ? Lerp(0, width, along) : side == 2 ? -24 : width + 24;
+            int sy = side == 0 ? -24 : side == 1 ? height + 24 : Lerp(0, height, along);
+            int p = EaseInCubic(local);
+            int x = Lerp(sx, labelCx, p), y = Lerp(sy, labelCy, p), size = 5 - p * 4 / 1000;
+            Fill(dc, MakeRect(x, y, x + size, y + size), MixColor(C_GREEN, C_BG, p / 12));
+        }
+    }
+
+    const wchar_t* caption =
+        t < BOOT_FLY_AT ? L"화면을 디스크에 기록하는 중" :
+        t < BOOT_CLUNK_AT ? L"A: 드라이브에 디스크 삽입" :
+        t < BOOT_SEEK_END ? L"부팅 중  ·  A:\\ROGUE.EXE" : L"";
+    if (caption[0]) TextRect(dc, MakeRect(0, 600, width, 632), caption, C_GREEN, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    if (t < BOOT_SEEK_END)
+        TextRect(dc, MakeRect(0, height - 60, width, height - 34), L"클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+
+    // 마지막에는 모니터 화면이 캔버스를 삼킨다. 다 삼키면 런의 첫 화면이 그 자리에 있다.
+    int zoom = Track(t, BOOT_SEEK_END, BOOT_INSERT_MS);
+    if (zoom > 0) {
+        RECT grown = LerpRect(BootScreenRect(0), full, EaseInCubic(zoom));
+        Fill(dc, grown, RGB(6, 13, 11));
+        DrawSectorStatic(dc, grown, 9, t / NOISE_CHURN_MS, 120 + zoom * 420 / 1000);
+        DrawScanlines(dc, grown);
+        Outline(dc, grown, MixColor(RGB(6, 13, 11), C_GREEN, 40), 2);
+        TextRect(dc, grown, L"A:\\ROGUE", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        int flash = Track(t, BOOT_INSERT_MS - 90, BOOT_INSERT_MS);
+        if (flash > 0) Fill(dc, full, MixColor(RGB(6, 13, 11), C_GREEN, flash / 22));
+    }
+}
+
 // 전투 종료는 곧장 결과 패널로 넘어가지 않는다. 마지막 전투판과 적의 붕괴를
 // 먼저 보여 주고, 종료 도장을 찍고, 전장이 어두워진 뒤에야 결과가 올라온다.
 // 화면 선택은 PaintGame이 맡는다 (재생 중에는 보상 화면 대신 전투판을 그린다).
@@ -2851,16 +3064,25 @@ void PaintGame(HWND window) {
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
 
-    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive) {
+    // 새 게임 삽입 연출도 같은 스냅샷을 쓴다. 첫 프레임에 붙잡히는 판이 곧
+    // 디스크 라벨에 실릴 "누르기 직전의 화면"이다.
+    if (gBootActive) {
+        if (!FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
+        DrawBootInsert(canvas, BASE_WIDTH, BASE_HEIGHT, deviceW, deviceH);
+    }
+
+    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive) {
         // 연출이 시작되는 첫 프레임의 판을 붙잡아 둔다. 잔상·트레일이 여기서 나온다.
         if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawGimmickFx(canvas);
     }
-    if (GimmickFxKind() <= 0 && FxSnapshotHeld()) FxSnapshotRelease();
+    if (GimmickFxKind() <= 0 && !gBootActive && FxSnapshotHeld()) FxSnapshotRelease();
 
     // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
     // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.
-    int creep = DeathCreepAmount();
+    // 삽입 연출이 도는 동안에는 아직 지난 판의 상태가 남아 있다. 그 위독 노이즈를
+    // 새 게임 화면 위에 얹으면 방금 버린 런의 흔적이 따라 들어온다.
+    int creep = gBootActive ? 0 : DeathCreepAmount();
     if (creep > 0) {
         DrawCreepStatic(canvas, canvasRect, NoiseFrameStep(), creep);
         if (creep >= 700) DrawScanlines(canvas, canvasRect);
@@ -2869,12 +3091,12 @@ void PaintGame(HWND window) {
             DrawTornValue(canvas, MakeRect(0, BASE_HEIGHT / 2 - 40, BASE_WIDTH, BASE_HEIGHT / 2 + 40),
                 L"SYSTEM HALTED", C_RED, 0, NoiseFrameStep(), 1000);
     } else {
-        int edge = AmbientNoiseLevel();
+        int edge = gBootActive ? 0 : AmbientNoiseLevel();
         if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
     }
-    int hitFlash = PlayerHitFlash();
+    int hitFlash = gBootActive ? 0 : PlayerHitFlash();
     if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
-    else if (!gDeathActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
+    else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
 
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);

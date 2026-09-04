@@ -198,6 +198,58 @@ void FxSnapshotDestroy() {
     if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
     gSnapHeld = 0; gSnapW = 0; gSnapH = 0;
 }
+// 정수 사인. 각도는 1/10도, 결과는 천분율(-1000~1000)이다. 0~90도를 1도 간격으로
+// 두고 그 사이는 선형으로 잇는다. 부동소수를 들이지 않으려는 것이지 정밀도가
+// 모자라서가 아니다 - 이 값은 눈으로만 본다.
+static const short SIN_TABLE[91] = {
+       0,   17,   35,   52,   70,   87,  105,  122,  139,  156,
+     174,  191,  208,  225,  242,  259,  276,  292,  309,  326,
+     342,  358,  375,  391,  407,  423,  438,  454,  469,  485,
+     500,  515,  530,  545,  559,  574,  588,  602,  616,  629,
+     643,  656,  669,  682,  695,  707,  719,  731,  743,  755,
+     766,  777,  788,  799,  809,  819,  829,  839,  848,  857,
+     866,  875,  883,  891,  899,  906,  914,  921,  927,  934,
+     940,  946,  951,  956,  961,  966,  970,  974,  978,  982,
+     985,  988,  990,  993,  995,  996,  998,  999,  999, 1000,
+    1000
+};
+
+static int SinMille(int deci) {
+    deci %= 3600; if (deci < 0) deci += 3600;
+    int sign = 1;
+    if (deci >= 1800) { sign = -1; deci -= 1800; }
+    if (deci > 900) deci = 1800 - deci;
+    int index = deci / 10, rest = deci % 10;
+    int a = SIN_TABLE[index], b = SIN_TABLE[index < 90 ? index + 1 : 90];
+    return sign * (a + (b - a) * rest / 10);
+}
+static int CosMille(int deci) { return SinMille(deci + 900); }
+
+// PlgBlt는 평행사변형 세 꼭짓점(좌상·우상·좌하)을 받는다. 두 DC의 매핑 모드를
+// 잠시 MM_TEXT로 되돌려 장치 픽셀로 셈하고, 끝나면 원래 논리 좌표계를 돌려준다.
+void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy, int scaleMille, int angleDeci) {
+    if (!gSnapHeld || !gSnapDc || scaleMille <= 0 || deviceW <= 0 || deviceH <= 0) return;
+    int px = cx * deviceW / BASE_WIDTH, py = cy * deviceH / BASE_HEIGHT;
+    // 배율 1000은 캔버스를 가득 채운다. 창 크기가 바뀌어도(스냅샷은 그때 크기 그대로)
+    // 지금 캔버스를 기준으로 잡아야 화면과 어긋나지 않는다.
+    int hw = deviceW * scaleMille / 2000, hh = deviceH * scaleMille / 2000;
+    if (hw <= 0 || hh <= 0) return;
+    int ca = CosMille(angleDeci), sa = SinMille(angleDeci);
+    POINT corner[3];
+    corner[0].x = px + (-hw * ca + hh * sa) / 1000; corner[0].y = py + (-hw * sa - hh * ca) / 1000;
+    corner[1].x = px + ( hw * ca + hh * sa) / 1000; corner[1].y = py + ( hw * sa - hh * ca) / 1000;
+    corner[2].x = px + (-hw * ca - hh * sa) / 1000; corner[2].y = py + (-hw * sa + hh * ca) / 1000;
+    SetMapMode(dc, MM_TEXT);
+    SetMapMode(gSnapDc, MM_TEXT);
+    PlgBlt(dc, corner, gSnapDc, 0, 0, gSnapW, gSnapH, 0, 0, 0);
+    SetMapMode(gSnapDc, MM_ANISOTROPIC);
+    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(gSnapDc, gSnapW, gSnapH, 0);
+    SetMapMode(dc, MM_ANISOTROPIC);
+    SetWindowExtEx(dc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(dc, deviceW, deviceH, 0);
+}
+
 // keepPercent가 낮을수록 줄을 성기게 가져와 옅어진다. 알파 없이 줄 간격으로 낸다.
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent) {
     if (!gSnapHeld || !gSnapDc || keepPercent <= 0) return;

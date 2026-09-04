@@ -181,9 +181,12 @@ int PlayerHitFlash() {
 int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
 
 static int GimmickShakeAmplitude();
+static int BootShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
+    int boot = BootShakeAmplitude();
+    if (boot > fx) fx = boot;
     if (!gPlayerHitAt) return fx;
     int since = (int)(GetTickCount() - gPlayerHitAt);
     if (since < 0 || since >= SHAKE_MS) return fx;
@@ -439,6 +442,45 @@ static void BeginDirectoryEnter(int kind, int choiceIndex) {
     SetTimer(gWindow, 9, 16, 0);
 }
 
+// ---- 새 게임 삽입 연출 -----------------------------------------------------
+// 새 게임은 즉시 넘어가지 않는다. 지금 화면이 돌면서 줄어들어 플로피 한 장의
+// 라벨이 되고, 그 디스크가 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤 드라이브가 읽고
+// 나서야 런이 만들어진다. 런을 끝에서 만드는 이유는 두 가지다. 연출이 붙잡는
+// 스냅샷이 "누르기 직전의 화면"이어야 하고, 건너뛰어도 결과가 같아야 한다.
+int gBootActive;
+DWORD gBootStart;
+static uint32_t gBootSeed;
+static int gBootClunkPlayed, gBootSeekPlayed;
+
+static void FinishBootInsert() {
+    if (!gBootActive) return;
+    gBootActive = 0;
+    KillTimer(gWindow, 10);
+    FxSnapshotRelease();
+    NewRun(&gGame, gBootSeed);
+    PlaySfx(SFX_BOOT);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static void BeginBootInsert() {
+    if (gBootActive) return;
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
+    gBootClunkPlayed = 0; gBootSeekPlayed = 0;
+    gBootStart = GetTickCount();
+    gBootActive = 1;
+    PlaySfx(SFX_PRUNE);            // 화면이 디스크로 빨려 들어가는 소리
+    SetTimer(gWindow, 10, 16, 0);
+}
+
+// 다 들어간 순간의 철컥. 흔들림도 그 시점에서만 나오고 240ms에 걸쳐 잦아든다.
+static int BootShakeAmplitude() {
+    if (!gBootActive) return 0;
+    int since = (int)(GetTickCount() - gBootStart) - BOOT_CLUNK_AT;
+    if (since < 0 || since >= 240) return 0;
+    return FxScale(7 * (240 - since) / 240);
+}
+
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
 static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
 int DieSettled(int die) { return !gReadActive || ReadElapsed() >= DieReadEnd(die); }
@@ -540,7 +582,8 @@ static void BeginNewRun() {
     FinishDirectoryEnter();
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
-    NewRun(&gGame, GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow); PlaySfx(SFX_BOOT); InvalidateRect(gWindow, 0, FALSE);
+    // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
+    BeginBootInsert(); InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void ExecuteCombatTurn() {
@@ -702,6 +745,7 @@ static int HoverId(int x, int y) {
 
 static void HandleClick(int x, int y) {
     if (gDeathActive) return;
+    if (gBootActive) { FinishBootInsert(); return; }
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
@@ -769,7 +813,7 @@ static void TermPrint(const wchar_t* line) {
 // 연출이 도는 중에 판을 갈아엎으면 재생과 결과가 어긋난다. 그동안은 막는다.
 static int TermBusy() {
     return gTurnTraceActive || gDeathActive || gCombatClearActive
-        || gDescentActive || gDirEnterActive || GimmickFxKind() > 0;
+        || gDescentActive || gDirEnterActive || gBootActive || GimmickFxKind() > 0;
 }
 
 static void TermRun() {
@@ -864,6 +908,7 @@ static void HandleKey(WPARAM key) {
         return;
     }
     if (gDeathActive) return;
+    if (gBootActive) { FinishBootInsert(); return; }
     if (gTurnTraceActive) return;
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
@@ -995,12 +1040,22 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if (dirElapsed >= DIR_ENTER_MS) FinishDirectoryEnter();
             else InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == 10u) {
+            // 디스크가 물리는 철컥과 그 뒤의 판독음. 그림은 경과 시간만 보고 그려지므로
+            // 타이머가 할 일은 한 번씩만 울려야 하는 소리와 리페인트뿐이다.
+            int bootElapsed = (int)(GetTickCount() - gBootStart);
+            if (!gBootClunkPlayed && bootElapsed >= BOOT_CLUNK_AT) { gBootClunkPlayed = 1; PlaySfxPitched(SFX_DIE_LOCK, 0); }
+            if (!gBootSeekPlayed && bootElapsed >= BOOT_CLUNK_AT + 140) { gBootSeekPlayed = 1; PlaySfx(SFX_READ_START); }
+            if (bootElapsed >= BOOT_INSERT_MS) FinishBootInsert();
+            else InvalidateRect(window, 0, FALSE);
+        }
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
+        KillTimer(window, 10);
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }

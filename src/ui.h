@@ -26,6 +26,21 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define DIR_ENTER_MS 1460      // 카드 잠금 + 디렉터리 라우팅/진입 전체 길이
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
+// ---- 새 게임 삽입 연출 -----------------------------------------------------
+// 새 게임을 누르면 지금 화면이 돌면서 빨려 들어가 플로피 한 장이 되고, 그 디스크가
+// 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤에야 런이 만들어진다. 구간 경계는 그리기와
+// 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
+#define BOOT_SUCK_MS  640      // 화면이 회전·축소되어 디스크 라벨로 빨려 들어간다
+#define BOOT_FLY_MS   380      // 디스크가 슬롯 앞으로 내려온다
+#define BOOT_PUSH_MS  360      // 슬롯 안으로 밀려 들어간다
+#define BOOT_SEEK_MS  520      // 드라이브가 읽는다 (LED 점멸)
+#define BOOT_ZOOM_MS  300      // 모니터 화면이 커지며 런으로 넘어간다
+#define BOOT_FLY_AT   BOOT_SUCK_MS
+#define BOOT_PUSH_AT  (BOOT_FLY_AT + BOOT_FLY_MS)
+#define BOOT_CLUNK_AT (BOOT_PUSH_AT + BOOT_PUSH_MS)    // 다 들어가 철컥 물리는 순간
+#define BOOT_SEEK_END (BOOT_CLUNK_AT + BOOT_SEEK_MS)
+#define BOOT_INSERT_MS (BOOT_SEEK_END + BOOT_ZOOM_MS)
+
 // ---- 피격·위독·정지 연출 --------------------------------------------------
 #define CRITICAL_HP 10         // 이 체력 이하부터 화면이 노이즈에 잠식된다
 #define STRIKE_MS 440          // 적이 달려들었다가 제자리로 돌아오는 시간
@@ -65,6 +80,10 @@ extern int gDescentChoiceIndex; // 최초 마운트 때 고른 카드 (층 하�
 // 디렉터리 진입: 고른 경로 조각이 타이핑되는 짧은 오버레이
 extern int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 extern DWORD gDirEnterStart;
+// 새 게임: 화면이 디스크로 빨려 들어가 드라이브에 꽂힐 때까지. 이 연출이 도는
+// 동안 판은 아직 누르기 직전 그대로다 (런은 연출이 끝날 때 만들어진다).
+extern int gBootActive;
+extern DWORD gBootStart;
 // 체력 0 이후의 정지 연출 (노이즈가 화면을 삼키고 나면 재시작 화면으로 넘어간다)
 extern int gDeathActive;
 extern DWORD gDeathStart;
@@ -144,6 +163,9 @@ extern int gTermLogCount;
 extern wchar_t gTermInput[TERM_INPUT_MAX + 1];
 extern int gTermInputLen;
 void DrawTerminal(HDC dc, int width, int height);
+
+// 새 게임 삽입 연출. 붙잡아 둔 판을 돌려 얹으므로 캔버스의 실제 픽셀 크기가 필요하다.
+void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH);
 
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);
