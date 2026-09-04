@@ -10,6 +10,10 @@
 #define SETTINGS_SCALE_COUNT 5
 static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 
+// 소리 크기 슬라이더. 손잡이 너비만큼 이동 구간이 줄어들므로 값↔좌표 변환을
+// 한 곳에 모아 두고 그리기와 클릭 판정이 같은 식을 보게 한다.
+#define VOL_HANDLE_W 16
+
 // 카드 0~2는 설치할 면, 마지막 카드는 면 대신 체력을 얻는 섹터 복구다.
 #define REWARD_CARD_COUNT 4
 #define REWARD_REPAIR 3
@@ -144,6 +148,9 @@ RECT SettingsCloseRect(int width);
 RECT DeckButtonRect(int width);
 RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
+RECT VolumeSliderRect();
+RECT VolumeHandleRect(int volume);
+int VolumeFromX(int x);          // 슬라이더 위 x좌표를 0~100으로
 RECT FullscreenToggleRect();
 RECT RestartButtonRect();
 RECT FxLevelRect(int index);

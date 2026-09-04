@@ -14,6 +14,8 @@ wchar_t gTermLog[TERM_LOG_LINES][TERM_LOG_CAP];
 int gTermLogCount;
 wchar_t gTermInput[TERM_INPUT_MAX + 1];
 int gTermInputLen;
+// 소리 슬라이더를 붙잡고 있는 동안 1. 커서가 슬라이더 밖으로 나가도 계속 따라온다.
+static int gVolumeDragging;
 int gGuidePage;
 int gRestartArmed;
 int gFxLevel = FX_FULL;
@@ -615,6 +617,7 @@ static int HoverId(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
+        if (Inside(VolumeSliderRect(), x, y)) return 940;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
         return -1;
@@ -682,6 +685,14 @@ static void HandleClick(int x, int y) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) { gFxLevel = i; PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
+        // 슬라이더는 누른 순간 값이 따라오고, 놓을 때까지 커서를 붙잡는다.
+        // 미리듣기는 놓는 순간에만 울린다. 끄는 동안 계속 울리면 시끄럽다.
+        if (Inside(VolumeSliderRect(), x, y)) {
+            gVolumeDragging = 1;
+            SetCapture(gWindow);
+            SetAudioVolume(VolumeFromX(x));
+            InvalidateRect(gWindow, 0, FALSE); return;
+        }
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
@@ -809,7 +820,13 @@ static void HandleKey(WPARAM key) {
     if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (gSettingsOpen) { if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; } InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gSettingsOpen) {
+        if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; }
+        // 마우스로 정확히 맞추기 어려운 값을 위해 5씩 움직인다.
+        else if (key == VK_LEFT)  { SetAudioVolume(AudioVolume() - 5); PlaySfx(SFX_UI_CLICK); }
+        else if (key == VK_RIGHT) { SetAudioVolume(AudioVolume() + 5); PlaySfx(SFX_UI_CLICK); }
+        InvalidateRect(gWindow, 0, FALSE); return;
+    }
     if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; gRestartArmed = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (key == VK_ESCAPE) gGuideOpen = 0;
@@ -858,10 +875,20 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        if (gVolumeDragging) { SetAudioVolume(VolumeFromX(gMouse.x)); InvalidateRect(window, 0, FALSE); return 0; }
         int hover = HoverId(gMouse.x, gMouse.y);
         if (hover != gHoverId) { gHoverId = hover; InvalidateRect(window, 0, FALSE); }
         return 0;
     }
+    case WM_LBUTTONUP:
+        if (gVolumeDragging) {
+            gVolumeDragging = 0;
+            ReleaseCapture();
+            PlaySfx(SFX_CONFIRM);          // 맞춘 크기를 귀로 확인시킨다
+            InvalidateRect(window, 0, FALSE);
+        }
+        return 0;
+    case WM_CAPTURECHANGED: gVolumeDragging = 0; return 0;
     case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
     case WM_TIMER:
