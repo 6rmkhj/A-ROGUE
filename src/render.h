@@ -44,6 +44,10 @@ int Lerp(int a, int b, int p);
 int EaseOutCubic(int p);
 int EaseInCubic(int p);
 int ShutterFall(int p);                   // 가속 낙하 뒤 두 번 작게 튀는 셔터 곡선
+// 정수 삼각함수. 각도는 1/10도, 결과는 천분율(-1000~1000)이다. 회전·소용돌이처럼
+// 각도가 필요한 연출이 부동소수 없이 쓸 수 있게 한다.
+int SinMille(int deci);
+int CosMille(int deci);
 int EaseOutBack(int p);                   // 목표를 지나쳤다 되돌아온다
 int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
 
@@ -55,10 +59,12 @@ int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
 void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH);
 int  FxSnapshotHeld();
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
-// 붙잡아 둔 판을 돌리면서 줄여 다시 얹는다 (돌리줌). 중심은 논리 좌표, 배율은
-// 천분율, 각도는 1/10도다. 회전은 장치 픽셀로 해야 어긋나지 않으므로 캔버스의
-// 실제 크기를 함께 받는다. 늘리거나 줄이는 자리는 호출자가 클립으로 정한다.
-void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy, int scaleMille, int angleDeci);
+// 붙잡아 둔 판을 돌리면서 줄여 다시 얹는다 (돌리줌). 중심은 논리 좌표, 각도는
+// 1/10도, 배율은 천분율이고 가로·세로를 따로 주면 눌린다 (디스크가 뒤집힐 때 쓴다).
+// 회전은 장치 픽셀로 해야 어긋나지 않으므로 캔버스의 실제 크기를 함께 받는다.
+// 보이는 자리를 좁히는 것은 호출자의 클립이 맡는다.
+void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
+                    int scaleXMille, int scaleYMille, int angleDeci);
 void FxSnapshotRelease();
 void FxSnapshotDestroy();
 

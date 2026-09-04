@@ -27,18 +27,22 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
-// 새 게임을 누르면 지금 화면이 돌면서 빨려 들어가 플로피 한 장이 되고, 그 디스크가
-// 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤에야 런이 만들어진다. 구간 경계는 그리기와
-// 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
-#define BOOT_SUCK_MS  640      // 화면이 회전·축소되어 디스크 라벨로 빨려 들어간다
-#define BOOT_FLY_MS   380      // 디스크가 슬롯 앞으로 내려온다
-#define BOOT_PUSH_MS  360      // 슬롯 안으로 밀려 들어간다
-#define BOOT_SEEK_MS  520      // 드라이브가 읽는다 (LED 점멸)
-#define BOOT_ZOOM_MS  300      // 모니터 화면이 커지며 런으로 넘어간다
-#define BOOT_FLY_AT   BOOT_SUCK_MS
-#define BOOT_PUSH_AT  (BOOT_FLY_AT + BOOT_FLY_MS)
-#define BOOT_CLUNK_AT (BOOT_PUSH_AT + BOOT_PUSH_MS)    // 다 들어가 철컥 물리는 순간
-#define BOOT_SEEK_END (BOOT_CLUNK_AT + BOOT_SEEK_MS)
+// 새 게임을 누르면 지금 화면이 먼저 갈라지고, 돌면서 빨려 들어가 플로피 한 장이
+// 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 컴퓨터의 3.5인치 드라이브에 꽂힌다.
+// 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
+#define BOOT_GLITCH_MS 420     // 판이 띠로 어긋나고 노이즈가 차오른다
+#define BOOT_SUCK_MS   860     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
+#define BOOT_FLIP_MS   520     // 만들어진 디스크가 공중에서 한 바퀴 뒤집힌다
+#define BOOT_FLY_MS    340     // 디스크가 슬롯 앞으로 내려온다
+#define BOOT_PUSH_MS   340     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
+#define BOOT_SEEK_MS   720     // 드라이브가 읽는다 (LED 점멸·신호 전송)
+#define BOOT_ZOOM_MS   340     // 모니터 화면이 커지며 런으로 넘어간다
+#define BOOT_SUCK_AT   BOOT_GLITCH_MS
+#define BOOT_FLIP_AT   (BOOT_SUCK_AT + BOOT_SUCK_MS)   // 디스크 한 장이 완성되는 순간
+#define BOOT_FLY_AT    (BOOT_FLIP_AT + BOOT_FLIP_MS)
+#define BOOT_PUSH_AT   (BOOT_FLY_AT + BOOT_FLY_MS)
+#define BOOT_CLUNK_AT  (BOOT_PUSH_AT + BOOT_PUSH_MS)   // 다 들어가 철컥 물리는 순간
+#define BOOT_SEEK_END  (BOOT_CLUNK_AT + BOOT_SEEK_MS)
 #define BOOT_INSERT_MS (BOOT_SEEK_END + BOOT_ZOOM_MS)
 
 // ---- 피격·위독·정지 연출 --------------------------------------------------

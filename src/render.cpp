@@ -214,7 +214,7 @@ static const short SIN_TABLE[91] = {
     1000
 };
 
-static int SinMille(int deci) {
+int SinMille(int deci) {
     deci %= 3600; if (deci < 0) deci += 3600;
     int sign = 1;
     if (deci >= 1800) { sign = -1; deci -= 1800; }
@@ -223,16 +223,18 @@ static int SinMille(int deci) {
     int a = SIN_TABLE[index], b = SIN_TABLE[index < 90 ? index + 1 : 90];
     return sign * (a + (b - a) * rest / 10);
 }
-static int CosMille(int deci) { return SinMille(deci + 900); }
+int CosMille(int deci) { return SinMille(deci + 900); }
 
 // PlgBlt는 평행사변형 세 꼭짓점(좌상·우상·좌하)을 받는다. 두 DC의 매핑 모드를
 // 잠시 MM_TEXT로 되돌려 장치 픽셀로 셈하고, 끝나면 원래 논리 좌표계를 돌려준다.
-void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy, int scaleMille, int angleDeci) {
-    if (!gSnapHeld || !gSnapDc || scaleMille <= 0 || deviceW <= 0 || deviceH <= 0) return;
+void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
+                    int scaleXMille, int scaleYMille, int angleDeci) {
+    if (!gSnapHeld || !gSnapDc || scaleXMille <= 0 || scaleYMille <= 0) return;
+    if (deviceW <= 0 || deviceH <= 0) return;
     int px = cx * deviceW / BASE_WIDTH, py = cy * deviceH / BASE_HEIGHT;
     // 배율 1000은 캔버스를 가득 채운다. 창 크기가 바뀌어도(스냅샷은 그때 크기 그대로)
     // 지금 캔버스를 기준으로 잡아야 화면과 어긋나지 않는다.
-    int hw = deviceW * scaleMille / 2000, hh = deviceH * scaleMille / 2000;
+    int hw = deviceW * scaleXMille / 2000, hh = deviceH * scaleYMille / 2000;
     if (hw <= 0 || hh <= 0) return;
     int ca = CosMille(angleDeci), sa = SinMille(angleDeci);
     POINT corner[3];

@@ -505,7 +505,21 @@ static void BeginDirectoryEnter(int kind, int choiceIndex) {
 int gBootActive;
 DWORD gBootStart;
 static uint32_t gBootSeed;
-static int gBootClunkPlayed, gBootSeekPlayed;
+
+// 구간이 바뀌는 시점마다 한 번씩 울린다. 그림은 경과 시간만 보고 그려지므로
+// 타이머가 할 일은 이 소리와 리페인트뿐이다.
+static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
+    { BOOT_SUCK_AT,        SFX_READ_START, 0 },   // 판이 빨려 들어가기 시작한다
+    { BOOT_FLIP_AT - 140,  SFX_REWARD_SET, 0 },   // 디스크 한 장이 만들어진다
+    { BOOT_FLY_AT,         SFX_DIE_PICK,   2 },   // 뒤집힌 디스크를 잡는다
+    { BOOT_PUSH_AT,        SFX_SLOT_SET,   1 },   // 슬롯에 밀어 넣는다
+    { BOOT_PUSH_AT + 200,  SFX_UI_CLICK,   0 },   // 중간에 한 번 걸린다
+    { BOOT_CLUNK_AT,       SFX_DIE_LOCK,   0 },   // 철컥
+    { BOOT_CLUNK_AT + 150, SFX_READ_START, 0 },
+    { BOOT_CLUNK_AT + 380, SFX_DIE_LOCK,   3 },   // 헤드가 트랙을 옮긴다
+    { BOOT_CLUNK_AT + 570, SFX_DIE_LOCK,   5 },
+};
+static int gBootCue;
 
 static void FinishBootInsert() {
     if (!gBootActive) return;
@@ -520,20 +534,25 @@ static void FinishBootInsert() {
 static void BeginBootInsert() {
     if (gBootActive) return;
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    // 다른 연출이 붙잡아 둔 판이 남아 있으면 삽입 연출이 그 낡은 그림을 디스크에
+    // 싣게 된다. 놓아 주고 첫 프레임에서 지금 화면을 새로 잡는다.
+    if (FxSnapshotHeld()) FxSnapshotRelease();
     gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
-    gBootClunkPlayed = 0; gBootSeekPlayed = 0;
+    gBootCue = 0;
     gBootStart = GetTickCount();
     gBootActive = 1;
     PlaySfx(SFX_PRUNE);            // 화면이 디스크로 빨려 들어가는 소리
     SetTimer(gWindow, 10, 16, 0);
 }
 
-// 다 들어간 순간의 철컥. 흔들림도 그 시점에서만 나오고 240ms에 걸쳐 잦아든다.
+// 화면이 갈라지는 동안 조금씩 세지고, 디스크가 물리는 철컥에서 한 번 크게 튄다.
 static int BootShakeAmplitude() {
     if (!gBootActive) return 0;
-    int since = (int)(GetTickCount() - gBootStart) - BOOT_CLUNK_AT;
-    if (since < 0 || since >= 240) return 0;
-    return FxScale(7 * (240 - since) / 240);
+    int elapsed = (int)(GetTickCount() - gBootStart);
+    if (elapsed < BOOT_SUCK_AT) return FxScale(1 + elapsed * 5 / BOOT_GLITCH_MS);
+    int since = elapsed - BOOT_CLUNK_AT;
+    if (since >= 0 && since < 260) return FxScale(9 * (260 - since) / 260);
+    return 0;
 }
 
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
@@ -1169,11 +1188,12 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 10u) {
-            // 디스크가 물리는 철컥과 그 뒤의 판독음. 그림은 경과 시간만 보고 그려지므로
-            // 타이머가 할 일은 한 번씩만 울려야 하는 소리와 리페인트뿐이다.
             int bootElapsed = (int)(GetTickCount() - gBootStart);
-            if (!gBootClunkPlayed && bootElapsed >= BOOT_CLUNK_AT) { gBootClunkPlayed = 1; PlaySfxPitched(SFX_DIE_LOCK, 0); }
-            if (!gBootSeekPlayed && bootElapsed >= BOOT_CLUNK_AT + 140) { gBootSeekPlayed = 1; PlaySfx(SFX_READ_START); }
+            int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
+            while (gBootCue < cueCount && bootElapsed >= BOOT_CUES[gBootCue].at) {
+                PlaySfxPitched(BOOT_CUES[gBootCue].sfx, BOOT_CUES[gBootCue].pitch);
+                ++gBootCue;
+            }
             if (bootElapsed >= BOOT_INSERT_MS) FinishBootInsert();
             else InvalidateRect(window, 0, FALSE);
         }
