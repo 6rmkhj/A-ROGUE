@@ -1634,10 +1634,15 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
     if (t > BOOT_INSERT_MS) t = BOOT_INSERT_MS;
     int step = NoiseFrameStep();
     RECT full = MakeRect(0, 0, width, height);
-    Fill(dc, full, RGB(4, 7, 10));
-    for (int y = 0; y < height; y += 4) Fill(dc, MakeRect(0, y, width, y + 1), RGB(7, 11, 15));
-
     int glitch = Track(t, 0, BOOT_GLITCH_MS);
+    // 붕괴 구간은 바닥을 새로 깔지 않는다. 화면에는 이미 방금 그려진 판이 있고,
+    // 그 위에서 어긋나야 "지금 이 화면이 무너진다"가 된다. 큰 창에서 판을 통째로
+    // 다시 얹지 않아도 되므로 그만큼 프레임도 가벼워진다.
+    if (t >= BOOT_SUCK_AT) {
+        Fill(dc, full, RGB(4, 7, 10));
+        for (int y = 0; y < height; y += 4) Fill(dc, MakeRect(0, y, width, y + 1), RGB(7, 11, 15));
+    }
+
     int suck = Track(t, BOOT_SUCK_AT, BOOT_FLIP_AT);
     int e = EaseInCubic(suck);                 // 빨려 들어가는 힘은 끝으로 갈수록 세진다
     int inserted = t >= BOOT_CLUNK_AT;
@@ -1681,7 +1686,6 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
 
     if (t < BOOT_SUCK_AT) {
         // 붕괴. 판이 가로 띠로 어긋나고 노이즈가 차오르며 제목이 찢어진다.
-        FxSnapshotSpin(dc, deviceW, deviceH, width / 2, height / 2, 1000, 1000, 0);
         if (FxDecorOn()) DrawBandGlitch(dc, full, t, FxScale(1 + glitch * 30 / 1000), 71, 16);
         DrawScreenStatic(dc, full, step, FxScale(40 + glitch * 260 / 1000));
         DrawEdgeStatic(dc, full, step + 3, 200 + glitch * 480 / 1000, 30 + glitch * 90 / 1000);
@@ -1706,8 +1710,11 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
             IntersectClipRect(dc, hole.left, hole.top, hole.right, hole.bottom);
             int target = BOOT_LABEL_FILL * diskScale / 1000;
             // 회전 잔상. 조금 전 각도의 판을 먼저 얹으면 도는 방향으로 번져 보인다.
+            // 한 장이 곧 판 하나를 통째로 다시 돌리는 일이라, 큰 창에서는 장수를
+            // 줄인다. 프레임이 끊기면 잔상이 있어도 번져 보이지 않는다.
+            int ghosts = deviceW > 1700 ? 1 : deviceW > 1300 ? 2 : 4;
             if (FxDecorOn() && suck > 40 && suck < 1000)
-                for (int ghost = 4; ghost >= 1; --ghost) {
+                for (int ghost = ghosts; ghost >= 1; --ghost) {
                     int lag = suck - ghost * 32;
                     if (lag <= 0) continue;
                     int ge = EaseInCubic(lag), gs = Lerp(1000, target, ge);

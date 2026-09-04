@@ -167,6 +167,12 @@ int EaseOutBounce(int p) {
 // ---- 프레임 스냅샷 ---------------------------------------------------------
 static HDC gSnapDc; static HBITMAP gSnapBmp, gSnapOld; static int gSnapHeld;
 static int gSnapW, gSnapH;
+// 판이 새로 잡힐 때마다 하나씩 오른다. 회전용 축소본이 자기가 어느 판에서
+// 나왔는지 이 번호로 안다.
+static unsigned gSnapSerial;
+// 회전 원본. 창이 크면 PlgBlt 비용이 픽셀 수만큼 그대로 늘고, 도는 판은 대개
+// 작게 줄어 있어 원본 해상도가 필요 없다. 논리 해상도로 한 번만 줄여 둔다.
+static HDC gSpinDc; static HBITMAP gSpinBmp, gSpinOld; static unsigned gSpinSerial;
 
 void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH) {
     if (deviceW <= 0 || deviceH <= 0) return;
@@ -180,15 +186,21 @@ void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH) {
         gSnapOld = (HBITMAP)SelectObject(gSnapDc, gSnapBmp);
         gSnapW = deviceW; gSnapH = deviceH;
     }
-    // 논리 좌표로 읽고 쓰도록 캔버스와 같은 변환을 건다.
-    SetMapMode(gSnapDc, MM_ANISOTROPIC);
-    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
-    SetViewportExtEx(gSnapDc, deviceW, deviceH, 0);
+    // 복사하는 동안에는 두 DC를 모두 장치 좌표로 맞춘다. 한쪽만 MM_TEXT로 두면
+    // BitBlt이 폭·높이를 각 DC의 논리 단위로 서로 다르게 읽어, 창 배율이 1이
+    // 아닐 때 판이 한쪽 귀퉁이에만 담긴다 (배율 2에서는 정확히 반쪽만 담겼다).
     SetMapMode(gSnapDc, MM_TEXT);
+    SetMapMode(canvas, MM_TEXT);
     BitBlt(gSnapDc, 0, 0, deviceW, deviceH, canvas, 0, 0, SRCCOPY);
+    // 캔버스는 부른 쪽이 넘겨준 논리 좌표계 그대로 돌려준다.
+    SetMapMode(canvas, MM_ANISOTROPIC);
+    SetWindowExtEx(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(canvas, deviceW, deviceH, 0);
+    // 스냅샷은 논리 좌표로 읽고 쓰도록 캔버스와 같은 변환을 건다.
     SetMapMode(gSnapDc, MM_ANISOTROPIC);
     SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
     SetViewportExtEx(gSnapDc, deviceW, deviceH, 0);
+    ++gSnapSerial;
     gSnapHeld = 1;
 }
 int FxSnapshotHeld() { return gSnapHeld; }
@@ -196,6 +208,9 @@ void FxSnapshotRelease() { gSnapHeld = 0; }
 void FxSnapshotDestroy() {
     if (gSnapDc) { SelectObject(gSnapDc, gSnapOld); DeleteDC(gSnapDc); gSnapDc = 0; }
     if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
+    if (gSpinDc) { SelectObject(gSpinDc, gSpinOld); DeleteDC(gSpinDc); gSpinDc = 0; }
+    if (gSpinBmp) { DeleteObject(gSpinBmp); gSpinBmp = 0; }
+    gSpinSerial = 0;
     gSnapHeld = 0; gSnapW = 0; gSnapH = 0;
 }
 // 정수 사인. 각도는 1/10도, 결과는 천분율(-1000~1000)이다. 0~90도를 1도 간격으로
@@ -237,13 +252,35 @@ void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
     int hw = deviceW * scaleXMille / 2000, hh = deviceH * scaleYMille / 2000;
     if (hw <= 0 || hh <= 0) return;
     int ca = CosMille(angleDeci), sa = SinMille(angleDeci);
+    SetMapMode(gSnapDc, MM_TEXT);
+    // 원본이 논리 해상도보다 크면 줄여 둔 사본에서 돌린다. 축소는 판이 새로
+    // 잡혔을 때 한 번만 하고, 그 뒤 프레임은 작은 원본을 그대로 쓴다.
+    HDC source = gSnapDc; int sourceW = gSnapW, sourceH = gSnapH;
+    if (gSnapW > BASE_WIDTH || gSnapH > BASE_HEIGHT) {
+        if (!gSpinDc) {
+            gSpinDc = CreateCompatibleDC(gSnapDc);
+            if (gSpinDc) {
+                gSpinBmp = CreateCompatibleBitmap(gSnapDc, BASE_WIDTH, BASE_HEIGHT);
+                if (gSpinBmp) gSpinOld = (HBITMAP)SelectObject(gSpinDc, gSpinBmp);
+                else { DeleteDC(gSpinDc); gSpinDc = 0; }
+            }
+            gSpinSerial = 0;
+        }
+        if (gSpinDc) {
+            if (gSpinSerial != gSnapSerial) {
+                SetStretchBltMode(gSpinDc, COLORONCOLOR);
+                StretchBlt(gSpinDc, 0, 0, BASE_WIDTH, BASE_HEIGHT, gSnapDc, 0, 0, gSnapW, gSnapH, SRCCOPY);
+                gSpinSerial = gSnapSerial;
+            }
+            source = gSpinDc; sourceW = BASE_WIDTH; sourceH = BASE_HEIGHT;
+        }
+    }
     POINT corner[3];
     corner[0].x = px + (-hw * ca + hh * sa) / 1000; corner[0].y = py + (-hw * sa - hh * ca) / 1000;
     corner[1].x = px + ( hw * ca + hh * sa) / 1000; corner[1].y = py + ( hw * sa - hh * ca) / 1000;
     corner[2].x = px + (-hw * ca - hh * sa) / 1000; corner[2].y = py + (-hw * sa + hh * ca) / 1000;
     SetMapMode(dc, MM_TEXT);
-    SetMapMode(gSnapDc, MM_TEXT);
-    PlgBlt(dc, corner, gSnapDc, 0, 0, gSnapW, gSnapH, 0, 0, 0);
+    PlgBlt(dc, corner, source, 0, 0, sourceW, sourceH, 0, 0, 0);
     SetMapMode(gSnapDc, MM_ANISOTROPIC);
     SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
     SetViewportExtEx(gSnapDc, gSnapW, gSnapH, 0);
