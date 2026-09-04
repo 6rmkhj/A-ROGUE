@@ -120,6 +120,20 @@ int DeathCreepAmount();    // 잠식 정도 0~1000 (0 = 정지 중이 아님)
 void SyncLastGasp();       // 체력 1이 된 시각을 잡아 둔다 (띠가 자라는 기준)
 int NoiseFrameStep();
 
+// ---- 관리자 터미널 (디버그) ------------------------------------------------
+// `(백틱)으로 열고 닫는다. 보스까지 가는 데 걸리는 시간을 줄이려고 넣은 개발용
+// 창이라 규칙에는 관여하지 않는다. 명령이 부르는 것은 전부 정규 규칙 함수다.
+// 커서를 깜빡이지 않으므로 리페인트를 따로 돌릴 필요가 없다.
+#define TERM_LOG_LINES 10
+#define TERM_LOG_CAP   72
+#define TERM_INPUT_MAX 40
+extern int gTermOpen;
+extern wchar_t gTermLog[TERM_LOG_LINES][TERM_LOG_CAP];
+extern int gTermLogCount;
+extern wchar_t gTermInput[TERM_INPUT_MAX + 1];
+extern int gTermInputLen;
+void DrawTerminal(HDC dc, int width, int height);
+
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);
 RECT GuideCloseRect(int width);

@@ -1932,6 +1932,21 @@ static void CombatWon(GameState* game) {
     PushLog(game, L"전투 보상: 설치할 면과 교체 위치를 선택하십시오.");
 }
 
+// 관리자 터미널 전용. CombatWon을 그대로 부르므로 기믹 정리·드라이브 특성 회복·
+// 보상 생성·보스전 분기가 평소 승리와 완전히 같은 경로로 돈다.
+void DebugWinCombat(GameState* game) {
+    if (game->phase != PHASE_COMBAT) return;
+    for (int i = 0; i < game->enemyCount; ++i) {
+        if (!game->enemies[i].alive) continue;
+        game->enemies[i].hp = 0;
+        game->enemies[i].alive = 0;
+    }
+    ClearTurnTrace(game);
+    ClearCombatFx(game);
+    RecordFx(game, GIMMICK_NONE, -1, -1);
+    CombatWon(game);
+}
+
 void EndTurn(GameState* game) {
     if (game->phase != PHASE_COMBAT) return;
     int assigned = 0;

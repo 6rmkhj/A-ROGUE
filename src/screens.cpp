@@ -50,6 +50,36 @@ void ApplyWindowedScale(int percent) {
     SetWindowPos(gWindow, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED);
 }
 
+// 위에서 내려온 콘솔 한 장. 게임 화면 위에 마지막으로 얹히므로 어떤 연출이
+// 진행 중이어도 가려지지 않는다.
+void DrawTerminal(HDC dc, int width, int height) {
+    (void)height;
+    const int lineH = 20;
+    int bodyH = 32 + TERM_LOG_LINES * lineH + 34;
+    RECT panel = MakeRect(0, 0, width, bodyH);
+    Fill(dc, panel, RGB(4, 9, 7));
+    DrawScanlines(dc, panel);
+    Fill(dc, MakeRect(0, bodyH - 2, width, bodyH), C_GREEN);
+    Text(dc, 18, 7, L"A:\\ROGUE  ADMIN CONSOLE   [`] 닫기   [help] 명령 목록", C_DIM, gFontSmall);
+
+    int y = 30;
+    for (int i = 0; i < gTermLogCount; ++i) {
+        // 되울린 입력은 흐리게, 결과는 초록으로 둔다.
+        Text(dc, 18, y, gTermLog[i], gTermLog[i][0] == L'>' ? C_DIM : C_GREEN, gFontSmall);
+        y += lineH;
+    }
+
+    // 입력 줄은 로그 길이와 무관하게 맨 아래 고정이다.
+    int inputY = bodyH - 28;
+    Text(dc, 18, inputY, L"A:\\>", C_YELLOW, gFontSmall);
+    int caret = 18 + TextWidth(dc, L"A:\\> ", gFontSmall);
+    if (gTermInputLen > 0) {
+        Text(dc, caret, inputY, gTermInput, C_TEXT, gFontSmall);
+        caret += TextWidth(dc, gTermInput, gFontSmall);
+    }
+    Fill(dc, MakeRect(caret + 1, inputY + 3, caret + 10, inputY + 17), C_GREEN);
+}
+
 static void DrawSettings(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
@@ -2485,6 +2515,9 @@ void PaintGame(HWND window) {
     int hitFlash = PlayerHitFlash();
     if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
     else if (!gDeathActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
+
+    // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
+    if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 실제 창 크기의 오프스크린 버퍼 위에서 배경 채우기 + 비율 유지 확대까지 전부 끝낸다.
     // (화면 DC에 직접 그리면 배경 채우기와 StretchBlt 사이가 노출돼 깜빡임이 생긴다.)
