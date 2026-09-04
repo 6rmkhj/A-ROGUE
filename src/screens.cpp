@@ -244,8 +244,9 @@ static void DrawTitle(HDC dc, int width, int height) {
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
-// 압력·오염 게이지가 있는 보스는 상태줄이 한 줄 더 밀린다. 그 줄까지 들어가도록 밑변을 382로 둔다.
-RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 382); }
+// 기믹 상태줄은 두 줄까지 접힌다("발동: 강화 공격! (피해 N+로 예방했어야)"). 게이지는 체력 바 밑의
+// 얇은 띠로 붙이고, 그 아래 250~384에 두 줄(40px)을 준다.
+RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 384); }
 static RECT PortraitRect(const RECT& panel) { return MakeRect(panel.left + 31, panel.top + 8, panel.left + 167, panel.top + 132); }
 RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 408, left + 154, 532); }
 RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 574, left + 184, 708); }
@@ -707,7 +708,7 @@ static void DrawEnemy(HDC dc, int index) {
         (COLORREF)info->color, MixColor(C_BG, C_RED, 62));
     if (shownAlive) {
         wsprintfW(b, L"의도: %s %d", INTENT_NAMES[enemy->intent], enemy->intentValue);
-        Text(dc, r.left + 12, r.top + 227, b, enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT ? C_RED : C_YELLOW, gFontSmall);
+        Text(dc, r.left + 12, r.top + 231, b, enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT ? C_RED : C_YELLOW, gFontSmall);
         if (hasGimmick) {
             wchar_t status[96]; FormatGimmickStatus(status, 96);
             int active = gGame.boss.empowered || gGame.boss.reversed || gGame.boss.offlineDie >= 0
@@ -715,20 +716,19 @@ static void DrawEnemy(HDC dc, int index) {
             // 압력·오염은 글로 적힌 수치와 함께 칸 게이지로도 세운다. 몇 칸
             // 남았는지가 한눈에 잡혀야 피해로 눌러야 할 턴을 놓치지 않는다.
             int family = BOSS_GIMMICK_INFO[gGame.boss.gimmick].family;
-            int gaugeTop = r.top + 247;
+            // 게이지는 체력 바 바로 밑의 얇은 띠다. 행을 따로 쓰지 않으므로 상태줄이 두 줄을 온전히 갖는다.
             if ((family == FAM_PRESSURE || family == FAM_QUARANTINE) && gGame.boss.gaugeMax > 0) {
-                DrawPacketGrid(dc, MakeRect(r.left + 12, gaugeTop, r.right - 12, gaugeTop + 12),
+                DrawPacketGrid(dc, MakeRect(r.left + 12, r.top + 222, r.right - 12, r.top + 229),
                     gGame.boss.gauge, gGame.boss.gaugeMax,
                     gGame.boss.empowered ? C_RED : (COLORREF)info->color, C_LINE);
-                gaugeTop += 18;
             }
-            TextRect(dc, MakeRect(r.left + 12, gaugeTop, r.right - 10, r.bottom - 2), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
+            TextRect(dc, MakeRect(r.left + 12, r.top + 250, r.right - 10, r.bottom), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
         } else if (enemy->block > 0 || enemy->burn > 0) {
             wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
-            Text(dc, r.left + 12, r.top + 247, b, C_DIM, gFontSmall);
+            Text(dc, r.left + 12, r.top + 250, b, C_DIM, gFontSmall);
         }
     } else {
-        Text(dc, r.left + 12, r.top + 227, L"[ 삭제됨 ]", C_DIM, gFontSmall);
+        Text(dc, r.left + 12, r.top + 231, L"[ 삭제됨 ]", C_DIM, gFontSmall);
         // 붕괴가 끝나면 빈 껍데기에 종료 도장만 남는다.
         if (!collapsing) {
             RECT stamp = MakeRect(r.left + 8, r.top + 54, r.right - 8, r.top + 88);
@@ -2102,7 +2102,7 @@ static void DrawPressureAlloc(HDC dc, int act, COLORREF fam) {
     int boss = BossCardIndex();
     if (boss < 0) return;
     RECT card = EnemyRect(boss);
-    RECT gauge = MakeRect(card.left + 12, card.top + 247, card.right - 12, card.top + 259);
+    RECT gauge = MakeRect(card.left + 12, card.top + 222, card.right - 12, card.top + 229);
     int x = card.left + 20 + (gauge.right - gauge.left) * act / 1000;
     if (x > gauge.right) x = gauge.right;
     Fill(dc, MakeRect(x - 8, gauge.top - 16, x + 8, gauge.top - 6), fam);
@@ -2480,7 +2480,7 @@ void DrawGimmickFx(HDC dc) {
         DrawPressureAlloc(dc, act, fam);
         if (FxDecorOn()) DrawEdgeGlow(dc, screen, fam, FxScale(Lerp(0, 550 + 150 * weight, swell)), 14 + 4 * weight);
         if (sinceImpact >= 0) {
-            RECT gauge = MakeRect(card.left + 12, card.top + 247, card.right - 12, card.top + 259);
+            RECT gauge = MakeRect(card.left + 12, card.top + 222, card.right - 12, card.top + 229);
             DrawFxShardsStaggered(dc, gauge.right, (gauge.top + gauge.bottom) / 2, sinceImpact, 380, 12 + 8 * weight, kind * 5, fam, 7);
         }
         if (kind == GIMMICK_HEAP_OVERFLOW) {
