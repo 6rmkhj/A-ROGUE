@@ -37,7 +37,8 @@ int VolumeFromX(int x) {
     return v < 0 ? 0 : v > 100 ? 100 : v;
 }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
-RECT BgmToggleRect() { return MakeRect(560, 468, 780, 510); }
+// 소리 슬라이더 안내문(y434~458) 아래로 내려온다. 468이면 라벨이 안내문을 덮는다.
+RECT BgmToggleRect() { return MakeRect(560, 500, 780, 542); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
 
@@ -152,7 +153,7 @@ static void DrawSettings(HDC dc, int width, int height) {
     }
     TextRect(dc, MakeRect(560, 434, panel.right - 30, 458),
         L"끌거나 좌우 방향키로 조절합니다.", C_DIM, gFontSmall, DT_SINGLELINE);
-    Text(dc, 560, 446, L"배경 음악", C_YELLOW, gFontMedium);
+    Text(dc, 560, 468, L"배경 음악", C_YELLOW, gFontMedium);
     RECT bgm = BgmToggleRect(); int hoverBgm = Inside(bgm, gMouse.x, gMouse.y);
     Panel(dc, bgm, AudioMusicEnabled() ? RGB(28, 70, 57) : hoverBgm ? RGB(28, 39, 48) : C_PANEL_2,
         AudioMusicEnabled() ? C_GREEN : hoverBgm ? C_BLUE : C_LINE);
@@ -1619,12 +1620,13 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"볼륨 선택  드라이브마다 손상 2종 + 특성 1개 + 전용 적·보스 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"볼륨 선택  손상 2종 + 특성 1개 + 전용 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
         L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 88),
+    // 여섯 줄이 들어가야 한다. 페이지 이동 버튼이 y686부터라 680까지 쓸 수 있다.
+    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 52),
         L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
