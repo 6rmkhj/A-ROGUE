@@ -331,7 +331,13 @@ static void FormatGimmickStatus(wchar_t* out, int size) {
         if (boss->nextTargetDie >= 0) wsprintfW(out, boss->nextTargetPermanent
             ? L"삭제 예고: 주사위 %d 면 %d" : L"격리 예고: 주사위 %d 면 %d",
             boss->nextTargetDie + 1, boss->nextTargetFace + 1);
-        else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) lstrcpynW(out, L"3턴마다 면 1개 2턴 격리", size);
+        else if (boss->gimmick == GIMMICK_SANDBOX_BREACH) {
+            // 예고는 저장된 상태가 아니라 턴 번호에서 나온다. 규칙과 같은 식이다.
+            int loose = LivingMinionCount(&gGame), cap = gi->p2;
+            if (loose >= cap) wsprintfW(out, L"탈주체 %d/%d · 자리 없음", loose, cap);
+            else if ((gGame.turn + 1) % gi->p1 == 0) wsprintfW(out, L"예고: 다음 턴 검체 탈주 (%d/%d)", loose, cap);
+            else wsprintfW(out, L"%d턴마다 검체 탈주 (%d/%d)", gi->p1, loose, cap);
+        }
         else wsprintfW(out, L"오염 %d/%d", boss->gauge, boss->gaugeMax > 0 ? boss->gaugeMax : gi->p1);
         break;
     default:

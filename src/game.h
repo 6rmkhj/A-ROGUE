@@ -75,6 +75,9 @@ struct EnemyState {
     uint8_t intent;
     uint8_t alive;
     uint8_t burn;
+    // 소환된 개체의 출력 비율. 0 = 기본(본체 그대로), 1~99 = 그 비율로 약해진다.
+    // 체력만 깎으면 탈주체가 보스와 같은 화력을 내므로 이 축이 따로 필요하다.
+    uint8_t power;
     int hp;
     int maxHp;
     int block;
@@ -307,6 +310,8 @@ int CorruptPercent(const GameState* game);
 int ScaleCorruptDamage(const GameState* game, int damage);
 const DifficultyInfo* DifficultyInfoOrNull(int difficulty);
 int LivingEnemyCount(const GameState* game);
+// 살아 있는 적 중 보스가 아닌 것 (소환된 탈주체). 규칙과 화면이 같은 값을 본다.
+int LivingMinionCount(const GameState* game);
 const Face* RolledFace(const GameState* game, int dieIndex);
 
 // ---- 안전 조회와 역할 판정 (enum 범위 비교 금지) ---------------------------
