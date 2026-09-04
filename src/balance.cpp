@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "game.h"
 
 static int WeakestFace(const GameState* game) {
@@ -59,6 +60,14 @@ static void AssignDice(GameState* game) {
     int ramAggressive = game->selectedDrive == 4 && game->playerHp * 2 > game->playerMaxHp;
     prefs[1] = ramAggressive ? SLOT_AMPLIFY : SLOT_DEFEND;
     prefs[2] = game->selectedDrive == 3 || ramAggressive || reversed ? SLOT_CHAIN : SLOT_AMPLIFY;
+    // 실험용: AROGUE_THIRD=chain|amplify|defend 로 세 번째 주사위의 슬롯을 전 드라이브에 강제한다.
+    // 어떤 슬롯이 남는 주사위에 더 값어치 있는지 승률로 비교하기 위한 것이다. 게이트에는 쓰지 않는다.
+    static int forced = -2;
+    if (forced == -2) {
+        const char* e = getenv("AROGUE_THIRD"); forced = -1;
+        if (e && e[0] == 'c') forced = SLOT_CHAIN; else if (e && e[0] == 'a') forced = SLOT_AMPLIFY; else if (e && e[0] == 'd') forced = SLOT_DEFEND;
+    }
+    if (forced >= 0) { prefs[1] = forced == SLOT_DEFEND ? SLOT_AMPLIFY : SLOT_DEFEND; prefs[2] = forced; }
     int used[SLOT_COUNT] = {};
     for (int i = 0; i < 3; ++i) {
         int die = order[i];
