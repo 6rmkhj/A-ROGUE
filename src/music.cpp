@@ -29,7 +29,7 @@ struct MusicSong {
 
 static const MusicSong SONG[6] = {
     { // C:\ SYSTEM
-      0, 100, 16, 38, 150, 0x0000,
+      0, 118, 16, 25, 200, 0x0000,
       {0,-4,3,-2,5,0,-4,-5}, {3,4,4,4,3,3,4,4},
       {{0,-128,-128,-128,-128,-128,0,-128,7,-128,-128,-128,0,-128,5,-128}, {0,-128,-128,-128,-128,-128,0,-128,7,-128,-128,-128,0,-128,3,-128}},
       {{0,2,3,2,0,2,3,2,0,2,3,2,1,2,3,2}, {0,2,3,5,3,2,0,2,0,2,3,5,3,2,1,2}},
@@ -38,7 +38,7 @@ static const MusicSong SONG[6] = {
       {0x1111, 0x1111}, {0x1010, 0x1010}, {0x5555, 0x5555}
     },
     { // D:\ ARCHIVE
-      3, 84, 16, 50, 90, 0x0000,
+      3, 98, 16, 50, 130, 0x0000,
       {0,0,-4,5,3,-2,0,-5}, {3,3,4,3,4,4,3,3},
       {{0,-128,-128,-128,-128,-128,-128,-128,0,-128,-128,7,-128,-128,5,-128}, {0,-128,-128,-128,-128,-128,-128,-128,0,-128,-128,-128,7,-128,-128,-128}},
       {{0,-128,2,-128,3,-128,2,-128,0,-128,2,-128,4,-128,3,-128}, {0,-128,2,-128,3,-128,4,-128,3,-128,2,-128,0,-128,2,-128}},
@@ -47,7 +47,7 @@ static const MusicSong SONG[6] = {
       {0x0101, 0x0101}, {0x1000, 0x1000}, {0x4444, 0x4444}
     },
     { // E:\ REMOVABLE
-      5, 108, 16, 30, 170, 0x0408,
+      5, 126, 16, 25, 215, 0x0408,
       {0,-2,-4,-2,5,0,-4,-5}, {3,4,4,4,3,3,4,4},
       {{0,-128,0,-128,-128,0,-128,-128,0,-128,-128,0,-128,7,-128,5}, {0,-128,0,-128,-128,0,-128,-128,0,-128,-128,0,-128,3,-128,5}},
       {{0,3,2,3,0,3,2,3,1,3,2,3,0,3,2,5}, {0,3,2,3,0,3,2,3,1,3,2,3,0,3,2,3}},
@@ -56,7 +56,7 @@ static const MusicSong SONG[6] = {
       {0x1109, 0x1109}, {0x1010, 0x1010}, {0xAAAA, 0xAAAA}
     },
     { // N:\ NETWORK
-      2, 124, 16, 25, 200, 0x0000,
+      2, 142, 16, 12, 235, 0x0000,
       {0,5,-4,-2,3,-2,0,-5}, {3,3,4,4,4,4,3,4},
       {{0,-128,0,0,-128,0,-128,0,-128,0,0,-128,0,-128,7,-128}, {0,-128,0,0,-128,0,-128,0,-128,0,0,-128,0,-128,5,-128}},
       {{0,2,3,5,3,2,0,2,3,5,3,2,0,2,3,2}, {3,2,0,2,3,5,3,2,3,2,0,2,3,5,4,5}},
@@ -65,7 +65,7 @@ static const MusicSong SONG[6] = {
       {0x1111, 0x1111}, {0x1010, 0x1010}, {0xFFFF, 0xFFFF}
     },
     { // R:\ RAMDISK
-      -5, 140, 16, 33, 210, 0x0000,
+      -5, 162, 16, 12, 245, 0x0000,
       {0,3,5,8,10,8,7,0}, {3,4,3,4,4,4,4,3},
       {{0,-128,0,-128,0,-128,0,-128,0,-128,0,-128,0,-128,0,-128}, {0,0,-128,0,0,0,-128,0,0,0,-128,0,0,-128,7,-128}},
       {{0,2,3,4,3,2,0,2,3,4,5,4,3,2,0,2}, {5,4,3,2,3,4,5,4,3,2,0,2,3,4,3,2}},
@@ -74,7 +74,7 @@ static const MusicSong SONG[6] = {
       {0x1111, 0x1191}, {0x1010, 0x1010}, {0xFFFF, 0xFFFF}
     },
     { // X:\ QUARANTINE
-      1, 96, 15, 45, 120, 0x0000,
+      1, 112, 15, 50, 165, 0x0000,
       {0,1,0,-5,5,1,-2,0}, {3,4,3,3,3,4,4,3},
       {{0,-128,-128,0,-128,-128,0,-128,-128,0,-128,-128,0,-128,1,-128}, {0,-128,-128,0,-128,-128,0,-128,-128,0,-128,-128,7,-128,1,-128}},
       {{0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,-128}, {0,1,2,3,1,2,0,1,2,3,1,2,0,1,2,-128}},
@@ -90,9 +90,14 @@ static const VoiceShape SHAPE[MUSIC_CHANNELS] = {
     {2048, 9, 42000, 6},   // 베이스: 빠른 어택, 길게 유지
     {1200, 8, 34000, 6},   // 리드
     {4096, 6, 6000, 5},    // 아르페지오: 짧게 톡톡 튄다
-    {48, 12, 65536, 9},    // 패드: 60ms 어택, 계속 울린다
-    {48, 12, 65536, 9}
+    {48, 12, 65536, 9}     // 코드: 60ms 어택, 계속 울린다
 };
+
+// ---- 8비트 칩 특성 ----------------------------------------------------------
+// NES 삼각파는 4비트 계단이다. 매끈한 삼각파를 16단으로 깎으면 그 거친 저음이 난다.
+static int Steps4(int v) { return (v / 4096) * 4096; }
+// NES 노이즈 채널은 1비트 LFSR이다. 크기가 없는 부호만 남기면 훨씬 거칠고 건조하다.
+static int Bit(int noise) { return noise >= 0 ? 24000 : -24000; }
 
 static int NoteHz(int semitone) {
     static const int ratio[12] = {1024,1085,1149,1218,1290,1367,1448,1534,1625,1722,1825,1933};
@@ -124,7 +129,7 @@ static int ChordTone(int idx, int third) {
     return TONE[idx] + ((idx == 1 || idx == 4) ? third : 0);
 }
 
-static void Trigger(MusicChannelState* v, int note) { v->note = note; v->env = 0; v->stage = 0; v->gate = 1; }
+static void Trigger(MusicChannelState* v, int note) { v->note = note; v->env = 0; v->stage = 0; v->gate = 1; v->held = 0; }
 
 static void Envelope(MusicChannelState* v, const VoiceShape* s) {
     if (!v->gate) { v->env -= v->env >> s->releaseShift; if (v->env < 16) v->env = 0; return; }
@@ -163,12 +168,12 @@ static void TriggerStep(MusicState* m, const MusicSong* s, int crit) {
     if (v == REST) m->channel[2].gate = 0;
     else if (v != TIE) Trigger(&m->channel[2], root + ChordTone(v, third));
     if (step == 0) {
-        // 패드는 마디마다 코드의 근음과 3도를 잡고 계속 울린다. 음이 같으면 건드리지 않는다.
-        int want[2] = {root + 12, root + 12 + third};
-        for (int k = 0; k < 2; ++k) {
-            MusicChannelState* c = &m->channel[3 + k];
-            if (c->note != want[k] || !c->gate) { c->note = want[k]; c->gate = 1; c->stage = 0; }
-        }
+        // 코드 성부는 마디마다 근음을 잡고 계속 울린다. 3도·5도는 렌더에서 60Hz로 번갈아 낸다.
+        // 채널 하나로 화음을 내는 C64/NES의 고속 아르페지오다. 음이 같으면 건드리지 않는다.
+        MusicChannelState* c = &m->channel[3];
+        int want = root + 12;
+        if (c->note != want || !c->gate) { c->note = want; c->gate = 1; c->stage = 0; }
+        m->chordThird = third;
     }
     int snareMask = s->snare[sec];
     if ((m->bar & 3) == 3) snareMask |= 0xC000;   // 4마디마다 끝에 작은 채움
@@ -201,8 +206,9 @@ void MusicRender(MusicState* m, int32_t* out, int frames) {
         // 노이즈는 어느 층이 켜져 있든 매 샘플 돌린다. 그래야 편곡이 바뀌어도 잡음 열이 같다.
         m->noiseRng = m->noiseRng * 1664525u + 1013904223u;
         int noise = (int)(m->noiseRng >> 16) - 32768;
-        int hiss = (noise - m->drum.noisePrev) / 2;   // 이전 샘플과의 차: 고역만 남는다 (하이햇)
+        int prevNoise = m->drum.noisePrev;   // 하이햇이 차분(고역)을 만들 때 쓴다
         m->drum.noisePrev = noise;
+        (void)prevNoise;
         if (!m->enabled || m->currentScene == MUSIC_SCENE_GAMEOVER) continue;
 
         // ---- 층 게인. 볼륨이 아니라 악기가 들어오는 순서다 ----
@@ -232,43 +238,50 @@ void MusicRender(MusicState* m, int32_t* out, int frames) {
         cut -= (cut - 24) * crit / 65536;
 
         int sample = 0;
-        // 베이스: 삼각파. 필터 없이도 부드럽다.
+        // 베이스: 4비트 계단 삼각파. NES의 그 저음이다.
         { MusicChannelState* c = &m->channel[0]; Envelope(c, &SHAPE[0]); c->phase += PhaseStep(NoteHz(c->note));
-          if (c->env) sample += Scale(Scale(Triangle(c->phase), c->env), play) * 60 / 100; }
-        // 리드: 펄스 + 저역통과. 위독하면 사라진다.
-        { MusicChannelState* c = &m->channel[1]; Envelope(c, &SHAPE[1]); c->phase += PhaseStep(NoteHz(c->note));
+          if (c->env) sample += Scale(Scale(Steps4(Triangle(c->phase)), c->env), play) * 60 / 100; }
+        // 리드: 얇은 펄스 + 저역통과. 한 음을 150ms 넘게 끌면 비브라토가 들어온다. 위독하면 사라진다.
+        { MusicChannelState* c = &m->channel[1]; Envelope(c, &SHAPE[1]);
+          uint32_t inc = PhaseStep(NoteHz(c->note));
+          if (c->gate && ++c->held > 3300) {
+              // 6Hz 삼각 LFO, 폭 약 +-25센트. 정수 위상 하나로 만든다.
+              int lfo = Triangle((uint32_t)(c->held - 3300) * 17476u);   // 6Hz: 2^32 / 22050 * 6
+              inc += (uint32_t)((int64_t)inc * lfo / (32768 * 64));
+          }
+          c->phase += inc;
           int v = LowPass(&c->lp, Pulse(c->phase, s->duty), cut);
           if (c->env) sample += Scale(Scale(Scale(v, c->env), g2), 65536 - crit) * 46 / 100; }
         // 아르페지오: 좁은 펄스, 짧은 음.
         { MusicChannelState* c = &m->channel[2]; Envelope(c, &SHAPE[2]); c->phase += PhaseStep(NoteHz(c->note));
           int v = LowPass(&c->lp, Pulse(c->phase, 25), cut);
           if (c->env) sample += Scale(Scale(v, c->env), g3) * 30 / 100; }
-        // 패드: 두 성부, 하나는 살짝 디튠. 어둡게 걸러 뒤에 깐다.
-        for (int k = 0; k < 2; ++k) {
-            MusicChannelState* c = &m->channel[3 + k]; Envelope(c, &SHAPE[3 + k]);
-            uint32_t inc = PhaseStep(NoteHz(c->note)); if (k) inc += inc / 256;
-            c->phase += inc;
-            int v = LowPass(&c->lp, Pulse(c->phase, 50), 28);
-            if (c->env) sample += Scale(Scale(v, c->env), play) * 9 / 100;
-        }
+        // 코드: 근음·3도·5도를 60Hz로 번갈아 내는 고속 아르페지오. 한 채널로 화음이 난다.
+        { MusicChannelState* c = &m->channel[3]; Envelope(c, &SHAPE[3]);
+          int which = (int)((m->sampleClock / 367u) % 3u);   // 367샘플 = 약 60Hz
+          int tone = c->note + (which == 1 ? m->chordThird : which == 2 ? 7 : 0);
+          c->phase += PhaseStep(NoteHz(tone));
+          int v = LowPass(&c->lp, Pulse(c->phase, 50), 70);
+          if (c->env) sample += Scale(Scale(v, c->env), play) * 11 / 100; }
         // 킥: 150Hz에서 45Hz로 떨어지는 사인. 엔벨로프가 피치도 끌고 내려간다.
         if (m->drum.kickEnv > 0) {
             int hz = 45 + 105 * m->drum.kickEnv / 65536;
             m->drum.kickPhase += PhaseStep(hz);
-            sample += Scale(Scale(Para(m->drum.kickPhase), m->drum.kickEnv), g1) * 62 / 100;
+            sample += Scale(Scale(Steps4(Para(m->drum.kickPhase)), m->drum.kickEnv), g1) * 62 / 100;
             m->drum.kickEnv -= m->drum.kickEnv / 256; if (m->drum.kickEnv < 64) m->drum.kickEnv = 0;
         }
-        // 스네어: 노이즈에 185Hz 몸통을 잠깐 얹는다. 몸통은 제곱으로 더 빨리 죽는다.
+        // 스네어: 1비트 노이즈에 185Hz 몸통을 잠깐 얹는다. 몸통은 제곱으로 더 빨리 죽는다.
         if (m->drum.snareEnv > 0) {
             int e = m->drum.snareEnv;
             m->drum.bodyPhase += PhaseStep(185);
-            int body = Scale(Scale(Triangle(m->drum.bodyPhase), e), e);
-            sample += Scale(Scale(noise, e) * 34 / 100 + body * 30 / 100, g1);
+            int body = Scale(Scale(Steps4(Triangle(m->drum.bodyPhase)), e), e);
+            sample += Scale(Scale(Bit(noise), e) * 30 / 100 + body * 30 / 100, g1);
             m->drum.snareEnv -= e / 512; if (m->drum.snareEnv < 64) m->drum.snareEnv = 0;
         }
-        // 하이햇: 고역 노이즈, 20ms.
+        // 하이햇: 1비트 노이즈의 차분(고역), 20ms. 짧고 바삭하다.
         if (m->drum.hatEnv > 0) {
-            sample += Scale(Scale(hiss, m->drum.hatEnv), g1) * 14 / 100;
+            int tick = (Bit(noise) - Bit(prevNoise)) / 2;
+            sample += Scale(Scale(tick, m->drum.hatEnv), g1) * 10 / 100;
             m->drum.hatEnv -= m->drum.hatEnv / 64; if (m->drum.hatEnv < 64) m->drum.hatEnv = 0;
         }
         // 위독: 바닥에 잡음이 깔린다.

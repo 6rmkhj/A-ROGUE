@@ -45,7 +45,7 @@ SONGS = []
 
 # C:\ SYSTEM — A단조, 차분한 4비트. Am F C G / Dm Am F E
 SONGS.append(dict(
-    name='C:\\ SYSTEM', tonic=0, bpm=100, steps=16, duty=38, cut=150, drop=0x0000,
+    name='C:\\ SYSTEM', tonic=0, bpm=118, steps=16, duty=25, cut=200, drop=0x0000,
     root=[0, -4, 3, -2,   5, 0, -4, -5], third=[m, M, M, M,   m, m, M, M],
     bass=[tokens('0 . . . . . 0 . 7 . . . 0 . 5 .', 16),
           tokens('0 . . . . . 0 . 7 . . . 0 . 3 .', 16)],
@@ -64,7 +64,7 @@ SONGS.append(dict(
 
 # D:\ ARCHIVE — C단조, 느리고 성기게. Cm Cm Ab Fm / Eb Bb Cm Gm
 SONGS.append(dict(
-    name='D:\\ ARCHIVE', tonic=3, bpm=84, steps=16, duty=50, cut=90, drop=0x0000,
+    name='D:\\ ARCHIVE', tonic=3, bpm=98, steps=16, duty=50, cut=130, drop=0x0000,
     root=[0, 0, -4, 5,   3, -2, 0, -5], third=[m, m, M, m,   M, M, m, m],
     bass=[tokens('0 . . . . . . . 0 . . 7 . . 5 .', 16),
           tokens('0 . . . . . . . 0 . . . 7 . . .', 16)],
@@ -83,7 +83,7 @@ SONGS.append(dict(
 
 # E:\ REMOVABLE — D단조, 접촉 불량. 3·10 스텝은 항상 빠진다. Dm C Bb C / Gm Dm Bb A
 SONGS.append(dict(
-    name='E:\\ REMOVABLE', tonic=5, bpm=108, steps=16, duty=30, cut=170, drop=0x0408,
+    name='E:\\ REMOVABLE', tonic=5, bpm=126, steps=16, duty=25, cut=215, drop=0x0408,
     root=[0, -2, -4, -2,   5, 0, -4, -5], third=[m, M, M, M,   m, m, M, M],
     bass=[tokens('0 . 0 . . 0 . . 0 . . 0 . 7 . 5', 16),
           tokens('0 . 0 . . 0 . . 0 . . 0 . 3 . 5', 16)],
@@ -102,7 +102,7 @@ SONGS.append(dict(
 
 # N:\ NETWORK — B단조, 빠른 아르페지오. Bm Em G A / D A Bm F#
 SONGS.append(dict(
-    name='N:\\ NETWORK', tonic=2, bpm=124, steps=16, duty=25, cut=200, drop=0x0000,
+    name='N:\\ NETWORK', tonic=2, bpm=142, steps=16, duty=12, cut=235, drop=0x0000,
     root=[0, 5, -4, -2,   3, -2, 0, -5], third=[m, m, M, M,   M, M, m, M],
     bass=[tokens('0 . 0 0 . 0 . 0 . 0 0 . 0 . 7 .', 16),
           tokens('0 . 0 0 . 0 . 0 . 0 0 . 0 . 5 .', 16)],
@@ -121,7 +121,7 @@ SONGS.append(dict(
 
 # R:\ RAMDISK — E단조(낮은 E2), 가장 빠르게. 상승 Em G Am C / 붕괴 D C B Em
 SONGS.append(dict(
-    name='R:\\ RAMDISK', tonic=-5, bpm=140, steps=16, duty=33, cut=210, drop=0x0000,
+    name='R:\\ RAMDISK', tonic=-5, bpm=162, steps=16, duty=12, cut=245, drop=0x0000,
     root=[0, 3, 5, 8,   10, 8, 7, 0], third=[m, M, m, M,   M, M, M, m],
     bass=[tokens('0 . 0 . 0 . 0 . 0 . 0 . 0 . 0 .', 16),
           tokens('0 0 . 0 0 0 . 0 0 0 . 0 0 . 7 .', 16)],
@@ -140,7 +140,7 @@ SONGS.append(dict(
 
 # X:\ QUARANTINE — Bb단조, 15스텝 엇박, 반음 충돌. Bbm B Bbm Fm / Ebm B Ab Bbm
 SONGS.append(dict(
-    name='X:\\ QUARANTINE', tonic=1, bpm=96, steps=15, duty=45, cut=120, drop=0x0000,
+    name='X:\\ QUARANTINE', tonic=1, bpm=112, steps=15, duty=50, cut=165, drop=0x0000,
     root=[0, 1, 0, -5,   5, 1, -2, 0], third=[m, M, m, m,   m, M, M, m],
     bass=[tokens('0 . . 0 . . 0 . . 0 . . 0 . 1 .', 16),
           tokens('0 . . 0 . . 0 . . 0 . . 7 . 1 .', 16)],
