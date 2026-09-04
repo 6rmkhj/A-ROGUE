@@ -1478,9 +1478,13 @@ static void DrawFaceGrid(HDC dc, int mode) {
         wchar_t label[24]; wsprintfW(label, L"주사위 %d", d + 1); Text(dc, 56, 371 + d * 90, label, C_GREEN, gFontMedium);
         for (int f = 0; f < 6; ++f) {
             RECT r = FaceGridRect(d, f); const Face* face = &gGame.dice[d].faces[f]; int hover = Inside(r, gMouse.x, gMouse.y);
-            COLORREF border = hover && mode ? (mode == 2 ? C_RED : C_GREEN) : C_LINE; Panel(dc, r, hover ? RGB(28, 39, 48) : C_PANEL, border);
+            int undo = mode == 2 && CanUndoPrunedFace(&gGame, d, f);
+            COLORREF border = hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE; Panel(dc, r, hover ? RGB(28, 39, 48) : C_PANEL, border);
             wchar_t value[24]; FormatFace(face, value); TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 37), value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
-            wchar_t bytes[24]; wsprintfW(bytes, L"%dB", FaceCost(face)); TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+            wchar_t bytes[24];
+            if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
+            else wsprintfW(bytes, L"%dB", FaceCost(face));
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes, hover && undo ? C_GREEN : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
 }
@@ -1543,7 +1547,7 @@ RECT PruneTsrRect(int i) { int left = 150 + i * 180; return MakeRect(left, 252, 
 static void DrawPrune(HDC dc, int width, int height) {
     wchar_t b[160]; wsprintfW(b, L"%d층 진입 한도: %dB  ·  현재: %dB", gGame.floor + 1, EffectiveCapacity(&gGame), UsedBytes(&gGame));
     TextRect(dc, MakeRect(0, 92, width, 132), b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제되고, 상주 프로그램을 클릭하면 종료됩니다.\n한도 이하가 되면 다음으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
+    TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제되고, 같은 칸을 다시 클릭하면 복원됩니다.\n한도 이하이고 면이 하나 이상 남으면 다음으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
     int tsrCount = InstalledTsrCount(&gGame);
     if (tsrCount > 0) {
         Text(dc, 56, 272, L"상주 프로그램", C_GREEN, gFontMedium);
@@ -1557,8 +1561,10 @@ static void DrawPrune(HDC dc, int width, int height) {
             TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
-    DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int ready = UsedBytes(&gGame) <= EffectiveCapacity(&gGame) && NonEmptyFaceCount(&gGame) > 0;
-    Panel(dc, confirm, ready ? RGB(28, 70, 57) : C_PANEL_2, ready ? C_GREEN : C_LINE); TextRect(dc, confirm, L"계속 [엔터]", ready ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int faces = NonEmptyFaceCount(&gGame);
+    int ready = UsedBytes(&gGame) <= EffectiveCapacity(&gGame) && faces > 0;
+    const wchar_t* confirmLabel = faces == 0 ? L"면 1개 이상 필요" : L"계속 [엔터]";
+    Panel(dc, confirm, ready ? RGB(28, 70, 57) : C_PANEL_2, ready ? C_GREEN : C_LINE); TextRect(dc, confirm, confirmLabel, ready ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {

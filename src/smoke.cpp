@@ -1380,15 +1380,25 @@ static int CheckDirectoryNodes() {
     for (int f = 0; f < 3; ++f) for (int i = 0; i < DIRECTORY_PER_FLOOR; ++i)
         if (doomed.directory.history[f][i] != DIR_NODE_NONE) return Fail("a new run must clear the directory history");
 
-    // 면을 전부 지운 채로는 디렉터리로 진행할 수 없다.
+    // 면을 전부 지운 채로는 디렉터리로 진행할 수 없고, 같은 칸을 다시 누르면 복원된다.
     GameState wiped; NewRun(&wiped, 0xD1D0000Au); wiped.driveChoices[0] = 0; SelectDrive(&wiped, 0);
     wiped.phase = PHASE_PRUNE; wiped.pendingContinuation = CONTINUE_DIRECTORY;
+    Face firstFace = wiped.dice[0].faces[0];
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) PruneFace(&wiped, d, f);
     ConfirmPrune(&wiped);
     if (wiped.phase != PHASE_PRUNE) return Fail("an empty deck must not be allowed to continue");
-    wiped.dice[0].faces[0].kind = FACE_NUMBER; wiped.dice[0].faces[0].value = 4;
+    if (!CanUndoPrunedFace(&wiped, 0, 0)) return Fail("a face deleted during prune must be undoable");
+    PruneFace(&wiped, 0, 0);
+    if (memcmp(&wiped.dice[0].faces[0], &firstFace, sizeof(Face)) != 0) return Fail("prune undo must restore the exact face");
+    if (CanUndoPrunedFace(&wiped, 0, 0)) return Fail("a restored face must no longer be marked for undo");
     ConfirmPrune(&wiped);
     if (wiped.phase != PHASE_DIRECTORY) return Fail("one restored face must let the prune resume the directory");
+
+    GameState originallyEmpty; NewRun(&originallyEmpty, 0xD1D0000Bu); originallyEmpty.phase = PHASE_PRUNE;
+    originallyEmpty.dice[0].faces[0].kind = FACE_EMPTY; originallyEmpty.dice[0].faces[0].value = 0;
+    PruneFace(&originallyEmpty, 0, 0);
+    if (CanUndoPrunedFace(&originallyEmpty, 0, 0) || originallyEmpty.dice[0].faces[0].kind != FACE_EMPTY)
+        return Fail("a face that was already empty must not become undoable");
 
     // CORRUPTED는 출력 가능한 면이 모자라면 아예 등장하지 않는다.
     GameState bare; NewRun(&bare, 0xD1D00009u); bare.driveChoices[0] = 5; SelectDrive(&bare, 0);

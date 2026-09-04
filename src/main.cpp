@@ -623,7 +623,12 @@ static void ClickPrune(int x, int y) {
     for (int i = 0; i < tsrCount && i < 4; ++i) if (Inside(PruneTsrRect(i), x, y)) {
         UninstallTsr(&gGame, InstalledTsrAt(&gGame, i)); PlaySfx(SFX_PRUNE); return;
     }
-    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) { PruneFace(&gGame, d, f); PlaySfx(SFX_PRUNE); return; }
+    for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
+        int undo = CanUndoPrunedFace(&gGame, d, f);
+        PruneFace(&gGame, d, f);
+        PlaySfx(undo ? SFX_REWARD_SET : SFX_PRUNE);
+        return;
+    }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlaySfx(SFX_CONFIRM); }
 }
 

@@ -2287,6 +2287,10 @@ static void DamageRandomFace(GameState* game) {
     PushLog(game, L"배드 섹터: 무작위 면 하나가 손상되었습니다.");
 }
 
+static void ClearPruneUndo(GameState* game) {
+    ZeroMemory(&game->prune, sizeof(game->prune));
+}
+
 // 층 하강. CACHE의 임시 한도는 다음 층 용량 검사보다 먼저 사라진다.
 static void EnterNextFloor(GameState* game) {
     ++game->floor;
@@ -2306,6 +2310,7 @@ static void EnterNextFloor(GameState* game) {
         else DamageRandomFace(game);
     }
     if (UsedBytes(game) > EffectiveCapacity(game)) {
+        ClearPruneUndo(game);
         game->phase = PHASE_PRUNE;
         game->pendingContinuation = CONTINUE_DIRECTORY;
         PushLog(game, L"용량 초과: 다음 층 한도에 맞게 정리하십시오.");
@@ -2316,6 +2321,7 @@ static void EnterNextFloor(GameState* game) {
 
 static void ContinueAfterReward(GameState* game) {
     if (UsedBytes(game) > EffectiveCapacity(game)) {
+        ClearPruneUndo(game);
         game->phase = PHASE_PRUNE;
         game->pendingContinuation = CONTINUE_AFTER_REWARD;
         PushLog(game, L"현재 층 용량 초과: 면이나 상주 프로그램을 정리하십시오.");
@@ -2380,13 +2386,34 @@ void PruneFace(GameState* game, int dieIndex, int faceIndex) {
     if (game->phase != PHASE_PRUNE) return;
     if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return;
     Face* face = &game->dice[dieIndex].faces[faceIndex];
-    if (face->kind == FACE_EMPTY) return;
+    if (face->kind == FACE_EMPTY) {
+        if (!game->prune.canUndo[dieIndex][faceIndex]) return;
+        *face = game->prune.deletedFaces[dieIndex][faceIndex];
+        if (game->prune.wasContraband[dieIndex][faceIndex]) {
+            game->driveRule.contrabandDie = (int8_t)dieIndex;
+            game->driveRule.contrabandFace = (int8_t)faceIndex;
+        }
+        game->prune.canUndo[dieIndex][faceIndex] = 0;
+        game->prune.wasContraband[dieIndex][faceIndex] = 0;
+        PushLog(game, L"삭제한 면을 복원했습니다.");
+        return;
+    }
+    game->prune.deletedFaces[dieIndex][faceIndex] = *face;
+    game->prune.canUndo[dieIndex][faceIndex] = 1;
+    game->prune.wasContraband[dieIndex][faceIndex] =
+        game->driveRule.contrabandDie == dieIndex && game->driveRule.contrabandFace == faceIndex;
     DriveRuleOnFaceReplaced(game, dieIndex, faceIndex);
     face->kind = FACE_EMPTY;
     face->value = 0;
     face->damaged = 0;
     face->quarantined = QUAR_NONE;
     PushLog(game, L"면을 삭제해 용량을 확보했습니다.");
+}
+
+int CanUndoPrunedFace(const GameState* game, int dieIndex, int faceIndex) {
+    if (!game || game->phase != PHASE_PRUNE) return 0;
+    if (dieIndex < 0 || dieIndex >= 3 || faceIndex < 0 || faceIndex >= 6) return 0;
+    return game->prune.canUndo[dieIndex][faceIndex] != 0;
 }
 
 // 정리 화면에서 상주 프로그램을 종료해 용량을 되찾는다.
@@ -2421,6 +2448,7 @@ void ConfirmPrune(GameState* game) {
     }
     int continuation = game->pendingContinuation;
     game->pendingContinuation = CONTINUE_NONE;
+    ClearPruneUndo(game);
     if (continuation == CONTINUE_AFTER_REWARD) ContinueAfterReward(game);
     else if (continuation == CONTINUE_DIRECTORY) BeginDirectorySelection(game);
     else StartCombat(game);   // CONTINUE_COMBAT과 테스트가 직접 세운 경로

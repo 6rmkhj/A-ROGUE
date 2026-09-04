@@ -86,6 +86,14 @@ struct Face {
     uint8_t quarantined;   // QUAR_* — 임시 격리 상태 (영구 삭제는 kind=EMPTY)
 };
 
+// 용량 정리 화면에서 지운 면은 같은 칸을 다시 눌러 되돌릴 수 있다.
+// 원래부터 비어 있던 칸과 방금 지운 칸을 구분하기 위해 정리 화면 동안만 보관한다.
+struct PruneRuntime {
+    Face deletedFaces[3][6];
+    uint8_t canUndo[3][6];
+    uint8_t wasContraband[3][6];
+};
+
 struct DieState {
     Face faces[6];
     uint8_t rolledFace;
@@ -250,6 +258,7 @@ struct GameState {
     int sectorsRepaired;
     int tsrsInstalled;
     int pendingContinuation;      // PendingContinuation — 정리 후 복귀 지점
+    PruneRuntime prune;
     DirectoryRuntime directory;
     DriveRuleRuntime driveRule;
     StoryRuntime story;
@@ -317,6 +326,7 @@ void InstallTsr(GameState* game, int rewardIndex);
 void RepairSector(GameState* game);
 void SkipReward(GameState* game);
 void PruneFace(GameState* game, int dieIndex, int faceIndex);
+int CanUndoPrunedFace(const GameState* game, int dieIndex, int faceIndex);
 void UninstallTsr(GameState* game, int tsrIndex);
 void ConfirmPrune(GameState* game);
 void KeybReroll(GameState* game, int dieIndex);
