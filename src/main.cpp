@@ -625,11 +625,30 @@ void SyncIdleAnimation() {
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
     // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
     int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT
-        || gGame.phase == PHASE_DIRECTORY || AmbientNoiseLevel() > 0)
+        || gGame.phase == PHASE_DIRECTORY || gGame.phase == PHASE_VICTORY || AmbientNoiseLevel() > 0)
         && !gGuideOpen && !gSettingsOpen && !gDeckOpen) || GuideNoiseActive();
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
     if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
+}
+
+// 마지막 에필로그를 닫는 순간부터 결과 화면의 기록이 차례로 올라온다.
+// 규칙 계층의 AdvanceStory는 시간이나 소리를 모르므로 UI 진입 처리는 여기서 맡는다.
+static DWORD gVictoryStart;
+int VictoryElapsed() {
+    if (!gVictoryStart) return 3000;
+    int elapsed = (int)(GetTickCount() - gVictoryStart);
+    return elapsed < 0 ? 0 : elapsed;
+}
+
+static void AdvanceStoryUi() {
+    int wasEnding = gGame.phase == PHASE_STORY
+        && (gGame.story.kind == STORY_ENDING_RESTORE || gGame.story.kind == STORY_ENDING_ROGUE);
+    AdvanceStory(&gGame);
+    if (wasEnding && gGame.phase == PHASE_VICTORY) {
+        gVictoryStart = GetTickCount();
+        PlaySfx(SFX_VICTORY);
+    }
 }
 
 static void SyncAudioScene() {
@@ -655,6 +674,7 @@ static void BeginNewRun() {
     FinishDeath();
     FinishDirectoryEnter();
     gUiFxPendingDescent = -1;
+    gVictoryStart = 0;
     FinishUiFx();
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
@@ -847,6 +867,8 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
         return -1;
     }
+    if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
+        && Inside(EndingRestartRect(), x, y)) return 70;
     if (gGame.phase == PHASE_DIRECTORY) {
         for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i) if (Inside(DirectoryChoiceRect(i), x, y)) return 80 + i;
         return -1;
@@ -920,7 +942,7 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) AdvanceStory(&gGame);
+    else if (gGame.phase == PHASE_STORY) AdvanceStoryUi();
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
     }
@@ -928,6 +950,8 @@ static void HandleClick(int x, int y) {
     else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
+    else if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
+        && Inside(EndingRestartRect(), x, y)) BeginNewRun();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
         if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
@@ -1071,7 +1095,7 @@ static void HandleKey(WPARAM key) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStory(&gGame); }
+    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key == '1' || key == '2') { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {

@@ -233,6 +233,7 @@ RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
 RECT EndingChoiceRect(int index);
+RECT EndingRestartRect();
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
 RECT TurnTracePanelRect();
@@ -240,6 +241,7 @@ RECT PruneTsrRect(int i);
 
 int DieForSlotUI(int slot);
 int CanRepairSector();
+int VictoryElapsed();
 
 // ---- 화면 -----------------------------------------------------------------
 void ApplyFullscreen(int enable);
