@@ -1450,13 +1450,20 @@ static void DrawStory(HDC dc, int width, int height) {
     Panel(dc, panel, C_PANEL, C_GREEN);
     Text(dc, panel.left + 28, panel.top + 24, story->title, C_GREEN, gFontLarge);
     TextRect(dc, MakeRect(panel.left + 28, panel.top + 72, panel.right - 28, panel.top + 100), story->path, C_BLUE, gFontSmall, DT_SINGLELINE);
-    TextRect(dc, MakeRect(panel.right - 310, panel.top + 28, panel.right - 28, panel.top + 52), L"1998-11-19  03:14:07  RECOVERED", C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    TextRect(dc, MakeRect(panel.right - 470, panel.top + 28, panel.right - 28, panel.top + 52), story->stamp, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
     // 파일 복구 진행 바
     Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
     Fill(dc, MakeRect(panel.left + 30, panel.top + 118, panel.right - 30, panel.top + 130), C_GREEN);
     const wchar_t* lines[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
     int y = panel.top + 164;
-    for (int i = 0; i < 5; ++i) if (lines[i]) { TextRect(dc, MakeRect(panel.left + 36, y, panel.right - 36, y + 42), lines[i], i == 4 ? C_YELLOW : C_TEXT, gFontMedium, DT_WORDBREAK); y += 54; }
+    for (int i = 0; i < 5; ++i) if (lines[i]) {
+        wchar_t lineNo[8]; wsprintfW(lineNo, L"%02d", i + 1);
+        COLORREF lineColor = lines[i][0] == L'>' ? C_BLUE : (i == 4 ? C_YELLOW : C_TEXT);
+        TextRect(dc, MakeRect(panel.left + 36, y + 2, panel.left + 66, y + 30), lineNo, C_DIM, gFontSmall, DT_SINGLELINE);
+        Fill(dc, MakeRect(panel.left + 72, y + 2, panel.left + 74, y + 30), lineColor);
+        TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), lines[i], lineColor, gFontMedium, DT_WORDBREAK);
+        y += 54;
+    }
     TextRect(dc, MakeRect(panel.left, panel.bottom - 54, panel.right, panel.bottom - 20), L"[ENTER] CONTINUE", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
@@ -1465,7 +1472,10 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(0, 130, width, 180), L"FINAL COMMAND", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(0, 205, width, 244), L"복구할 대상을 선택하십시오.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     static const wchar_t* title[2] = {L"[1] RESTORE HOST", L"[2] EXEC ROGUE"};
-    static const wchar_t* desc[2] = {L"호스트를 복원합니다.\nA:\\ROGUE 프로세스는 종료됩니다.", L"자신을 외부 경로에 실행합니다.\n호스트의 마지막 이미지는 닫힙니다."};
+    static const wchar_t* desc[2] = {
+        L"마지막 정상 이미지를 기록합니다.\n현재의 A:\\ROGUE는 덮어씁니다.\nYUN의 기록은 보존됩니다.",
+        L"외부 부팅 경로로 이탈합니다.\n호스트 이미지는 복구할 수 없게 됩니다.\n이후 명령은 없습니다."
+    };
     for (int i = 0; i < 2; ++i) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
         Panel(dc, r, hover ? RGB(28, 55, 48) : C_PANEL, hover ? C_GREEN : C_LINE);

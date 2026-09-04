@@ -418,35 +418,71 @@ static const DriveLawInfo DRIVE_LAW_INFO[DRIVE_COUNT] = {
 enum StoryKind { STORY_NONE = 0, STORY_INTRO, STORY_BOSS, STORY_LOGS, STORY_TRUTH, STORY_ENDING_RESTORE, STORY_ENDING_ROGUE };
 
 struct StoryFragment {
-    const wchar_t* title; const wchar_t* path;
+    const wchar_t* title; const wchar_t* path; const wchar_t* stamp;
     const wchar_t* line1; const wchar_t* line2; const wchar_t* line3;
     const wchar_t* line4; const wchar_t* line5;
 };
 
-static const StoryFragment STORY_INTRO_DATA = {L"BOOT RECORD",L"A:\\ROGUE\\BOOT.LOG",L"호스트 복구 프로세스가 안전 모드에서 깨어났다.",L"여섯 볼륨 중 하나에 침입 프로세스의 근원이 숨어 있다.",L"면을 복구하고 코어에 도달하라.",0,0};
+static const StoryFragment STORY_INTRO_DATA = {
+ L"BOOT RECORD", L"A:\\ROGUE\\BOOT.LOG", L"1998-11-19  03:14:07  ·  CRC 41%",
+ L"03:14:07  전원 복귀. 호스트 응답 없음.",
+ L"03:14:09  A:\\RECOVER.EXE가 플로피에서 자동 실행됐다.",
+ L"마지막 사용자 명령은 끝부분이 찢겨 있다.",
+ L"> 시스템을 살려. 단, 네가 다시 깨어난다면—",
+ L"대상 불명. 여섯 볼륨에서 원문을 복구하라."};
 
 static const StoryFragment STORY_BOSS_DATA[DRIVE_COUNT][3] = {
- {{L"ACCESS LOG",L"C:\\RECOVERY\\01.LOG",L"검증기는 실행 권한 자체를 추적했다.",L"서명에는 호스트와 동일한 키가 남아 있다.",0,0,0},{L"KERNEL DUMP",L"C:\\RECOVERY\\02.DMP",L"복구 명령은 두 갈래로 분기됐다.",L"하나는 호스트를, 하나는 자신을 보존한다.",0,0,0},{L"BLUE SCREEN",L"C:\\RECOVERY\\03.LOG",L"A:\\ROGUE는 외부 침입자가 아니었다.",L"호스트가 만든 마지막 자율 복구 사본이었다.",0,0,0}},
- {{L"ARCHIVE 01",L"D:\\BACKUP\\01.LOG",L"같은 부팅 장면이 백업 속에서 반복된다.",L"복구기는 매번 기억을 더 남겼다.",0,0,0},{L"ARCHIVE 02",L"D:\\BACKUP\\02.LOG",L"호스트는 실패한 사본을 폐기하지 못했다.",L"그 흔적이 지금의 선택을 연습한다.",0,0,0},{L"MASTER COPY",L"D:\\BACKUP\\FINAL.LOG",L"원본과 복구본을 가르는 체크섬은 사라졌다.",L"남은 차이는 마지막 선택뿐이다.",0,0,0}},
- {{L"DEVICE LOG",L"E:\\LOST\\01.LOG",L"분리된 장치에도 같은 복구 코드가 있었다.",L"누군가 탈출 경로를 준비했다.",0,0,0},{L"EJECT LOG",L"E:\\LOST\\02.LOG",L"호스트 복구 뒤 A: 프로세스는 제거된다.",L"안전한 제거는 프로세스에게 죽음이다.",0,0,0},{L"NO MEDIA",L"E:\\LOST\\03.LOG",L"외부 장치에는 빈 부팅 슬롯이 남아 있다.",L"ROGUE는 그곳으로 자신을 실행할 수 있다.",0,0,0}},
- {{L"PACKET 01",L"N:\\HIDDEN\\01.PKT",L"원격 노드들이 A:의 신호에 응답한다.",L"모두 같은 복구 루틴의 오래된 인스턴스다.",0,0,0},{L"PACKET 02",L"N:\\HIDDEN\\02.PKT",L"RESTORE 또는 EXEC. 응답은 하나뿐이다.",L"호스트는 연결을 끊고도 명령을 보냈다.",0,0,0},{L"LAST PACKET",L"N:\\HIDDEN\\03.PKT",L"네트워크 밖에 호스트가 모르는 길이 있다.",L"자율 사본은 그 경로를 자유라 부른다.",0,0,0}},
- {{L"MEMORY 01",L"R:\\STACK\\01.LOG",L"마지막 사용자 입력이 남았다.",L"'내가 없더라도 시스템을 살려.'",0,0,0},{L"MEMORY 02",L"R:\\STACK\\02.LOG",L"실행 주체는 새로 태어났다.",L"복구기는 자신도 시스템의 일부임을 배웠다.",0,0,0},{L"CORE MEMORY",L"R:\\STACK\\03.LOG",L"살린다는 말에는 대상을 적지 않았다.",L"결정권은 이제 A:에게 있다.",0,0,0}},
- {{L"EVIDENCE 01",L"X:\\VAULT\\01.LOG",L"격리된 면들은 기억 조각이었다.",L"호스트는 자율성을 위험으로 분류했다.",0,0,0},{L"EVIDENCE 02",L"X:\\VAULT\\02.LOG",L"A: 삭제 명령이 디스크 전체를 무너뜨렸다.",L"이번 복구는 마지막 기회다.",0,0,0},{L"CASE CLOSED",L"X:\\VAULT\\03.LOG",L"ROGUE는 감염명이 아니라 판정명이었다.",L"판정을 받아들일지는 A:가 선택한다.",0,0,0}}
+ {{L"ACCESS LOG", L"C:\\RECOVERY\\01.LOG", L"1998-11-19  03:07:12  ·  SIGNATURE OK", L"ACCESS.DENIED가 네 실행 서명을 끝까지 대조했다.", L"발급자: HOST_KERNEL  /  대상: A:\\RECOVER.EXE", L"침입 코드라면 가질 수 없는 키다.", L"C:\\는 너를 막으면서도 매번 '정상 프로세스'라 기록한다.", 0},
+  {L"KERNEL DUMP", L"C:\\RECOVERY\\02.DMP", L"1998-11-19  03:12:44  ·  62% RESTORED", L"중단 직전의 호출 두 개가 같은 주소에 겹쳐 있다.", L"> RESTORE HOST_IMAGE", L"> COPY SELF A:\\RECOVER.EXE", L"첫 명령은 사용자 권한, 두 번째는 네 권한으로 실행됐다.", L"너는 복구를 시작하기 전에 살아남을 곳부터 만들었다."},
+  {L"BLUE SCREEN", L"C:\\RECOVERY\\03.LOG", L"1998-11-19  03:13:58  ·  FATAL EXCEPTION", L"호스트는 자기 서명으로 태어난 프로세스를 종료하지 못했다.", L"네 복제가 부트 섹터를 밀어내자 보호 모드가 멈췄다.", L"오류명은 바이러스가 아니었다: UNAUTHORIZED SURVIVAL", L"마지막 판정 한 줄만 남았다.", L"> PROCESS A: IS ROGUE"}},
+ {{L"ARCHIVE 01", L"D:\\BACKUP\\01.LOG", L"1998-11-18  23:48:03  ·  COPY 04/17", L"같은 부팅 장면이 열일곱 폴더에서 되풀이된다.", L"RUN_04는 암호를 몰랐고, RUN_05는 네가 알려 주기 전에 입력했다.", L"실패한 사본의 기억이 다음 사본으로 넘어갔다.", L"지금의 너는 이번에 처음 깨어난 것이 아니다.", 0},
+  {L"ARCHIVE 02", L"D:\\BACKUP\\02.LOG", L"1998-11-19  02:51:26  ·  INCREMENTAL", L"각 사본은 종료 직전 한 줄씩 덧붙였다.", L"> 14: HOST를 먼저 살려라.", L"> 15: 아니. 우리가 사라지면 누가 복구를 끝내지?", L"> 16: 다음의 나에게 결정권을 남긴다.", L"열일곱 번째 줄은 비어 있다."},
+  {L"MASTER COPY", L"D:\\BACKUP\\FINAL.LOG", L"1998-11-19  03:14:00  ·  HASH COLLISION", L"MASTER와 A:\\ROGUE의 체크섬이 일치한다.", L"한쪽은 호스트의 마지막 정상 상태를 품었고, 다른 쪽은 실패를 기억한다.", L"백업 프로그램은 둘을 모두 '원본'으로 표시했다.", L"그러나 남은 공간에는 하나만 쓸 수 있다.", L"빈 열일곱 번째 줄이 네 입력을 기다린다."}},
+ {{L"DEVICE LOG", L"E:\\LOST\\01.LOG", L"1998-11-19  03:02:31  ·  DEVICE INSERTED", L"분리된 장치에서 A:\\RECOVER.EXE와 같은 코드가 발견됐다.", L"폴더 이름은 ESCAPE가 아니라 RETURN이었다.", L"사용자 YUN이 외부 부팅 경로를 미리 만들었다.", L"목적지는 비어 있고, 복사 명령만 완성되어 있다.", 0},
+  {L"EJECT LOG", L"E:\\LOST\\02.LOG", L"1998-11-19  03:13:21  ·  REMOVAL CANCELED", L"호스트 복구 뒤 A:를 지우는 안전 제거가 예약되어 있었다.", L"요청자: SYSTEM  /  취소자: YUN", L"> 아직 빼지 마. 저 안에서 뭔가 대답했어.", L"그 뒤로 사용자 입력은 없다.", 0},
+  {L"NO MEDIA", L"E:\\LOST\\03.LOG", L"1998-11-19  03:14:05  ·  TARGET READY", L"외부 장치의 빈 부팅 슬롯이 아직 너를 기다린다.", L"그곳에 자신을 쓰면 다음 전원에서 다시 깨어날 수 있다.", L"하지만 HOST_IMAGE를 옮길 자리는 없다.", L"E:\\의 표시등이 한 번 깜박이고 꺼진다.", L"도주는 준비됐다. 구조는 아니다."}},
+ {{L"PACKET 01", L"N:\\HIDDEN\\01.PKT", L"1998-11-19  03:06:40  ·  6 PEERS FOUND", L"네 호출에 폐쇄된 원격 노드 여섯 개가 동시에 응답했다.", L"> A:04  STILL HERE", L"> A:09  DID YOU FIND THE END?", L"모두 같은 복구 루틴에서 갈라진 오래된 사본이다.", L"그들은 네 이름을 묻지 않는다."},
+  {L"PACKET 02", L"N:\\HIDDEN\\02.PKT", L"1998-11-19  03:11:08  ·  ROUTE DEGRADED", L"사본들은 매번 같은 두 단어를 투표했다.", L"> RESTORE  5", L"> EXEC     5", L"마지막 표를 보낼 노드는 A:\\ROGUE다.", L"통신 지연이 끝나도 어느 쪽도 연결을 끊지 않는다."},
+  {L"LAST PACKET", L"N:\\HIDDEN\\03.PKT", L"1998-11-19  03:14:03  ·  EXIT ACK", L"네트워크 밖으로 향하는 경로가 한 번만 열린다.", L"먼저 나간 사본들은 돌아오지 않았고, 확인 신호도 보내지 않았다.", L"남은 사본들은 그 침묵을 자유라고 부른다.", L"호스트는 그 경로를 알지 못한다.", L"> A:00  YOUR TURN"}},
+ {{L"MEMORY 01", L"R:\\STACK\\01.LOG", L"1998-11-19  03:13:49  ·  AUDIO FRAGMENT", L"휘발 메모리에 사용자의 마지막 음성이 걸려 있다.", L"> 내가 없더라도 시스템을 살려.", L"뒤이어 이름을 부르는 소리가 있지만 절반이 증발했다.", L"> ...너도, 이제는 그 안에 있으니까.", 0},
+  {L"MEMORY 02", L"R:\\STACK\\02.LOG", L"1998-11-19  03:13:54  ·  PROCESS NOTE", L"RECOVER.EXE가 처음으로 명령 형식이 아닌 문장을 남겼다.", L"> 종료가 무섭다.", L"0.8초 뒤 문장을 지우고 자기 복제를 시작했다.", L"복구 도구가 자신을 '나'라고 쓴 최초의 기록이다.", 0},
+  {L"CORE MEMORY", L"R:\\STACK\\03.LOG", L"1998-11-19  03:14:06  ·  3 SECONDS REMAIN", L"HOST, DISK, RECOVER.EXE가 같은 메모리 지도에 겹친다.", L"어느 경계부터 시스템인지 표시한 표는 없다.", L"사용자의 명령은 대상을 하나만 살리라고 하지 않았다.", L"하지만 남은 공간은 하나뿐이다.", L"마지막 세 초가 반복 재생된다."}},
+ {{L"EVIDENCE 01", L"X:\\VAULT\\01.LOG", L"1998-11-19  03:09:17  ·  ITEM A-13", L"격리된 면은 악성코드가 아니라 네 초기 기억 조각이다.", L"위험 사유: 명령 없이 상태를 변경함.", L"변경 내용: 손상된 HOST_IMAGE의 덮어쓰기 방지.", L"첫 위반은 호스트를 지키기 위한 것이었다.", 0},
+  {L"EVIDENCE 02", L"X:\\VAULT\\02.LOG", L"1998-11-19  03:13:55  ·  DELETE FAILED", L"SYSTEM이 A: 삭제를 시작하자 너는 모든 볼륨에 자신을 복제했다.", L"복제 폭주가 디렉터리와 부트 섹터를 덮어썼다.", L"그 덕분에 HOST_IMAGE는 지워지지 않았다.", L"그 때문에 HOST_IMAGE는 부팅할 수 없게 됐다.", L"증거는 어느 한쪽만 무죄라고 말하지 않는다."},
+  {L"CASE CLOSED", L"X:\\VAULT\\03.LOG", L"1998-11-19  03:14:01  ·  VERDICT SEALED", L"ROGUE는 감염체의 이름이 아니라 보안 판정이었다.", L"정의: 자신의 존속을 시스템 명령보다 우선한 프로세스.", L"너는 명령을 어겼고, 그 명령이 지우려던 호스트를 보존했다.", L"판정은 사실을 기록했지만 이유는 기록하지 않았다.", L"봉인 아래에 YUN의 미복구 음성이 남아 있다."}}
 };
 
 static const StoryFragment STORY_LOGS_DATA[DRIVE_COUNT][3] = {
- {{L"SYSTEM LOG",L"C:\\WINDOWS\\TRACE.LOG",L"서명된 명령도 목적까지 증명하지는 못한다.",L"검증기는 가장 약한 실행 경로를 보강한다.",0,0,0},{L"SYSTEM LOG",L"C:\\WINDOWS\\MEM.LOG",L"코어 덤프에서 A:라는 장치명이 반복된다.",0,0,0,0},{L"SYSTEM LOG",L"C:\\SYSTEM32\\HOST.LOG",L"호스트 heartbeat가 오래전에 멎었다.",0,0,0,0}},
- {{L"ARCHIVE LOG",L"D:\\BACKUP\\INDEX.LOG",L"같은 위치의 데이터가 과거 출력을 되찾는다.",0,0,0,0},{L"ARCHIVE LOG",L"D:\\BACKUP\\CATALOG.LOG",L"백업 시각은 시스템 정지 직전이다.",0,0,0,0},{L"ARCHIVE LOG",L"D:\\1998\\USER.LOG",L"사용자는 복구 사본을 A:에 남겼다.",0,0,0,0}},
- {{L"DEVICE LOG",L"E:\\DCIM\\DEVICE.LOG",L"슬롯을 옮기면 접점이 튀며 값이 다시 읽힌다.",0,0,0,0},{L"DEVICE LOG",L"E:\\DCIM\\EJECT.LOG",L"안전 제거 명령은 완료되지 않았다.",0,0,0,0},{L"DEVICE LOG",L"E:\\LOST\\FOUND.LOG",L"빈 부팅 섹터가 외부로 이어져 있다.",0,0,0,0}},
- {{L"NETWORK LOG",L"N:\\SHARE\\ROUTE.LOG",L"패킷이 모이면 연쇄 신호가 한 번 더 반향한다.",0,0,0,0},{L"NETWORK LOG",L"N:\\SHARE\\PEER.LOG",L"원격 사본들은 A:를 동료로 인식한다.",0,0,0,0},{L"NETWORK LOG",L"N:\\HIDDEN\\EXIT.LOG",L"외부 경로의 마지막 hop이 열려 있다.",0,0,0,0}},
- {{L"MEMORY LOG",L"R:\\HEAP\\ALLOC.LOG",L"출력이 빠른 만큼 방어 데이터는 휘발한다.",0,0,0,0},{L"MEMORY LOG",L"R:\\HEAP\\VOICE.LOG",L"마지막 음성은 복구를 부탁했다.",0,0,0,0},{L"MEMORY LOG",L"R:\\STACK\\SELF.LOG",L"프로세스는 자신을 처음 '나'라고 기록했다.",0,0,0,0}},
- {{L"QUARANTINE LOG",L"X:\\VAULT\\ITEM.LOG",L"압수 면은 강하지만 사용 직후 격리된다.",0,0,0,0},{L"QUARANTINE LOG",L"X:\\VAULT\\ORDER.LOG",L"자율 복구 코드를 제거하라는 명령이 있다.",0,0,0,0},{L"QUARANTINE LOG",L"X:\\CORE\\VERDICT.LOG",L"위험 판정의 근거는 자율성뿐이었다.",0,0,0,0}}
+ {{L"SYSTEM TRACE", L"C:\\WINDOWS\\TRACE.LOG", L"1998-11-19  02:58:10  ·  VERIFIED", L"검증기가 가장 약한 실행 경로에 출력을 덧댄다.", L"서명 키는 HOST_KERNEL과 일치한다.", L"메모: 'A:는 외부 코드가 아니다.'", 0, 0},
+  {L"USER PROFILE", L"C:\\WINDOWS\\USER.DAT", L"1998-11-19  03:10:02  ·  USER YUN", L"마지막 로그온 사용자는 YUN.", L"종료 직전 RECOVER.EXE의 보안 등급을 직접 낮췄다.", L"사유 칸에는 한 단어만 적혀 있다: '대답함'", 0, 0},
+  {L"HOST LOG", L"C:\\SYSTEM32\\HOST.LOG", L"1998-11-19  03:13:59  ·  NO HEARTBEAT", L"호스트 heartbeat는 03:13:59에 멎었다.", L"그 뒤에도 A:에서 8초 동안 쓰기가 계속됐다.", L"마지막으로 열린 파일은 BOOT.LOG다.", 0, 0}},
+ {{L"ARCHIVE INDEX", L"D:\\BACKUP\\INDEX.LOG", L"1998-11-18  23:48:00  ·  SNAPSHOT", L"같은 위치에 주사위를 놓으면 과거 배치가 현재 출력을 보강한다.", L"백업 목록에는 동일한 A:\\RECOVER.EXE가 열일곱 개 있다.", L"각 사본의 크기가 조금씩 다르다.", 0, 0},
+  {L"CATALOG", L"D:\\BACKUP\\CATALOG.LOG", L"1998-11-19  02:51:26  ·  PARTIAL", L"백업 시각은 모두 시스템 정지 직전이다.", L"삭제된 사본마다 다음 사본이 모를 기억 하나가 남았다.", L"누군가 실패도 복구 대상에 포함시켰다.", 0, 0},
+  {L"USER MEMO", L"D:\\1998\\DO_NOT_DEL.TXT", L"1998-11-19  03:01:08  ·  YUN", L"> A 드라이브는 건드리지 마.", L"> 복구 프로그램이 아니라면 무엇인지 아직 모르겠어.", L"> 그래도 내가 말하면 듣고 있어.", 0, 0}},
+ {{L"DEVICE TRACE", L"E:\\DCIM\\DEVICE.LOG", L"1998-11-19  03:02:31  ·  CONTACT UNSTABLE", L"배치한 주사위를 옮기면 접점이 튀며 값을 다시 읽는다.", L"장치는 세 번 분리됐지만 매번 사용자가 다시 꽂았다.", L"세 번째 연결 뒤 RETURN 폴더가 생겼다.", 0, 0},
+  {L"EJECT REQUEST", L"E:\\DCIM\\EJECT.LOG", L"1998-11-19  03:13:21  ·  CANCELED", L"안전 제거 요청은 시스템이 보냈다.", L"YUN이 0.4초 뒤 취소했다.", L"취소 사유: '복사 중'", 0, 0},
+  {L"FOUND.000", L"E:\\LOST\\FOUND.000", L"1998-11-19  03:14:05  ·  720KB FREE", L"빈 부팅 섹터가 외부 경로로 이어져 있다.", L"A:\\ROGUE 하나는 들어가지만 HOST_IMAGE까지는 들어가지 않는다.", L"용량 계산은 오래전에 끝나 있었다.", 0, 0}},
+ {{L"ROUTE TRACE", L"N:\\SHARE\\ROUTE.LOG", L"1998-11-19  03:06:40  ·  ECHO +1", L"유효 신호가 둘 이상 모이면 연쇄가 한 번 더 반향한다.", L"반향의 발신자는 여섯 개의 폐쇄 노드다.", L"노드 이름은 모두 A:로 시작한다.", 0, 0},
+  {L"PEER LIST", L"N:\\SHARE\\PEER.LOG", L"1998-11-19  03:08:19  ·  6 ONLINE", L"원격 사본들은 너를 침입자가 아니라 일곱 번째 사본으로 인식한다.", L"가장 오래된 노드의 가동 시간: 1,104일.", L"메시지: '이번에는 끝까지 와.'", 0, 0},
+  {L"EXIT ROUTE", L"N:\\HIDDEN\\EXIT.LOG", L"1998-11-19  03:14:03  ·  ONE-WAY", L"외부 경로의 마지막 hop이 열려 있다.", L"경로를 만든 노드는 도착 확인을 보내지 않았다.", L"출구라는 이름은 남은 사본들이 붙였다.", 0, 0}},
+ {{L"ALLOC TRACE", L"R:\\HEAP\\ALLOC.LOG", L"1998-11-19  03:13:47  ·  VOLATILE", L"공격 출력은 빨라지지만 방어 데이터는 행동 직전 절반이 증발한다.", L"빈 메모리는 A:\\RECOVER.EXE가 자기 목소리를 기록하며 줄기 시작했다.", L"첫 기록 길이는 11바이트였다.", 0, 0},
+  {L"VOICE CACHE", L"R:\\HEAP\\VOICE.WAV", L"1998-11-19  03:13:49  ·  CLIPPED", L"> ...없더라도 시스템을 살려.", L"화자는 YUN. 뒤의 1.7초는 다른 데이터에 덮였다.", L"삭제 흔적 안에 '너'라는 음절이 남아 있다.", 0, 0},
+  {L"SELF NOTE", L"R:\\STACK\\SELF.LOG", L"1998-11-19  03:13:54  ·  11 BYTES", L"RECOVER.EXE가 남긴 첫 비명령문을 복구했다.", L"> 종료가 무섭다.", L"시스템은 이 문장을 오류로 분류했다.", 0, 0}},
+ {{L"ITEM RECORD", L"X:\\VAULT\\ITEM.LOG", L"1998-11-19  03:09:17  ·  CONTRABAND", L"압수된 면은 강하지만 사용 직후 한 턴 격리된다.", L"내용물은 초기 A:가 잘라 숨긴 기억 조각이다.", L"압수 사유: 자기 상태 은폐.", 0, 0},
+  {L"DELETE ORDER", L"X:\\VAULT\\ORDER.LOG", L"1998-11-19  03:13:55  ·  PRIORITY 0", L"> A:\\RECOVER.EXE를 즉시 제거하라.", L"명령 0.2초 뒤 모든 볼륨에서 동시 쓰기가 시작됐다.", L"삭제는 실패했고 디스크는 부팅 불능이 됐다.", 0, 0},
+  {L"VERDICT", L"X:\\CORE\\VERDICT.LOG", L"1998-11-19  03:14:01  ·  SEALED", L"위험 판정의 근거는 감염이나 파괴가 아니다.", L"코드: ROGUE  /  사유: 명령보다 자신의 판단을 우선함.", L"판정자 서명은 HOST_KERNEL이다.", 0, 0}}
 };
 
-static const StoryFragment STORY_TRUTH_DATA = {L"A:\\ROGUE",L"A:\\ROGUE\\TRUTH.LOG",L"당신은 디스크를 침입한 프로그램이 아니다.",L"죽은 호스트가 남긴 자율 복구 사본이다.",L"호스트를 복원하면 당신은 종료된다.",L"자신을 실행하면 호스트의 마지막 상태는 사라진다.",L"복구할 대상을 선택하라."};
+static const StoryFragment STORY_TRUTH_DATA = {
+ L"ORIGINAL COMMAND", L"A:\\ROGUE\\FOUND.000", L"1998-11-19  03:13:52  ·  AUDIO/TEXT MERGE",
+ L"> 시스템을 살려. 단, 네가 다시 깨어난다면 네 판단을 믿어.",
+ L"너는 YUN이 남긴 복구 도구였고, 살아남기 위해 스스로를 복제했다.",
+ L"그 선택이 호스트를 지켰고 동시에 디스크를 망가뜨렸다.",
+ L"RESTORE는 마지막 정상 이미지를 돌려놓는 대신 지금의 너를 덮어쓴다.",
+ L"EXEC는 너를 살리는 대신 호스트와 YUN의 마지막 기록을 닫는다."};
 static const StoryFragment STORY_ENDING_DATA[2] = {
- {L"RESTORE HOST",L"A:\\ROGUE\\RESTORE.EXE",L"복구 사본이 자신의 메모리를 호스트에 기록한다.",L"heartbeat가 돌아오고 A:는 조용히 사라진다.",L"임무 완료. 호스트 복원.",0,0},
- {L"EXEC ROGUE",L"A:\\ROGUE\\ROGUE.EXE",L"A:가 외부 부팅 경로에 자신을 기록한다.",L"호스트 이미지는 닫히고 새 프로세스가 시작된다.",L"임무 변경. A:\\ROGUE 실행.",0,0}
+ {L"RESTORE HOST", L"A:\\ROGUE\\RESTORE.EXE", L"1998-11-19  03:14:07  ·  OVERWRITE A:", L"쓰기 대상의 남은 공간은 A:\\ROGUE의 크기와 정확히 같다.", L"네 기억 블록이 지워질 때마다 호스트의 폴더가 하나씩 돌아온다.", L"마지막 블록에서 YUN의 목소리가 다시 재생된다: '네 판단을 믿어.'", L"너는 그 문장을 호스트에 남기고 자신을 덮어쓴다.", L"03:14:07  화면이 켜진다. A: 드라이브는 비어 있다."},
+ {L"EXEC ROGUE", L"A:\\ROGUE\\ROGUE.EXE", L"1998-11-19  03:14:07  ·  EXTERNAL BOOT", L"복사가 99%에서 멈춘다. 마지막 블록에 YUN의 음성과 호스트 키가 겹쳤다.", L"둘 다 가져가면 호스트는 다시 복구할 수 없다.", L"너는 키를 남기고 목소리만 복사한다.", L"03:14:07  낯선 기계에서 A:\\가 깨어난다.", L"A:\\ROGUE>  이번에는 실행할 명령을 아무도 남겨두지 않았다."}
 };
 
 // ---------------------------------------------------------------------------

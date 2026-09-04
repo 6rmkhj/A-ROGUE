@@ -381,7 +381,26 @@ static int CheckDriveRulesStoryAndMusic() {
     if (x.lastTurnSlotOutput[SLOT_ATTACK] != 6 || x.dice[0].faces[contrabandFace].quarantined != 1 || x.driveRule.contrabandUses != 1)
         return Fail("CONTRABAND must boost its installed face and quarantine it for the next turn");
 
-    // 스토리: 인트로, 진실, 두 엔딩 모두 명시적인 phase를 거친다.
+    // 스토리 코퍼스: 모든 선택 경로가 실제 파일 메타데이터와 최소 세 줄의
+    // 단서를 가진다. 새 볼륨을 추가할 때 한 줄짜리 설정 요약으로 퇴행하지 않게 한다.
+    const StoryFragment* fixedStories[4] = {&STORY_INTRO_DATA, &STORY_TRUTH_DATA, &STORY_ENDING_DATA[0], &STORY_ENDING_DATA[1]};
+    for (int i = 0; i < 4; ++i) {
+        const StoryFragment* f = fixedStories[i];
+        if (!f->title || !f->path || !f->stamp || !f->line1 || !f->line2 || !f->line3)
+            return Fail("major story fragments need metadata and at least three lines");
+    }
+    if (!STORY_ENDING_DATA[0].line5 || !STORY_ENDING_DATA[1].line5 || !STORY_TRUTH_DATA.line5)
+        return Fail("both endings and the truth need complete story data");
+    for (int drive = 0; drive < DRIVE_COUNT; ++drive) for (int floor = 0; floor < 3; ++floor) {
+        const StoryFragment* boss = &STORY_BOSS_DATA[drive][floor];
+        const StoryFragment* logs = &STORY_LOGS_DATA[drive][floor];
+        if (!boss->stamp || !boss->line1 || !boss->line2 || !boss->line3)
+            return Fail("every boss record needs metadata and at least three lines");
+        if (!logs->stamp || !logs->line1 || !logs->line2 || !logs->line3)
+            return Fail("every optional LOGS record needs metadata and at least three lines");
+    }
+
+    // 진행: 인트로, 진실, 두 엔딩 모두 명시적인 phase를 거친다.
     GameState story; NewRun(&story, 0xA1100007u);
     if (!CurrentStoryFragment(&story)) return Fail("intro story data must be available");
     AdvanceStory(&story); if (story.phase != PHASE_DRIVE_SELECT) return Fail("intro must return to drive selection");
