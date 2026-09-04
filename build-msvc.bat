@@ -29,6 +29,9 @@ cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- ..\src\balance.cpp ..\src\game.cpp /Fe
 if errorlevel 1 (popd & exit /b 1)
 .\balance.exe
 if errorlevel 1 (popd & exit /b 1)
+rem BGM audition tool. Built only, never run here: wav.exe <outdir> writes drive_*.wav.
+cl /nologo /std:c++17 /O2 /MT /utf-8 /GR- /W4 ..\src\wav.cpp ..\src\music.cpp /Fe:wav.exe /link /OPT:REF /OPT:ICF
+if errorlevel 1 (popd & exit /b 1)
 for %%A in (AROGUE.exe) do set "EXESIZE=%%~zA"
 set /a PERCENT=EXESIZE*100/1474560
 echo [4/4] AROGUE.exe: %EXESIZE% bytes ^(%PERCENT%%% of 1,474,560 bytes^)
