@@ -95,6 +95,19 @@ static HWND gAudioWindow;     // 펌프 타이머를 다는 창. 오디오가 �
 static WAVEHDR gWaveHdr[MIX_BUFFERS];
 static short gMixBuf[MIX_BUFFERS][MIX_FRAMES];
 static int gAudioClosing;
+// 믹싱은 전용 스레드에서 돈다. 예전에는 UI 스레드의 10ms 타이머가 펌프를 돌렸는데,
+// WM_TIMER는 큐가 빌 때만 오고 페인트 한 번이 수십 ms를 먹으면 80ms짜리 큐가
+// 말라 소리가 끊겼다. 지금은 장치가 버퍼를 비울 때마다 이벤트로 깨어나 채운다.
+// UI 스레드는 효과음을 넣거나 음악 설정을 바꿀 때만 잠깐 잠근다.
+static CRITICAL_SECTION gAudioLock;
+static HANDLE gAudioEvent, gAudioThread;
+static volatile LONG gAudioQuit;
+static volatile LONG gUnderruns;
+
+struct AudioGuard {
+    AudioGuard() { EnterCriticalSection(&gAudioLock); }
+    ~AudioGuard() { LeaveCriticalSection(&gAudioLock); }
+};
 static MusicState gMusic;
 static int gMusicEnabled = 1;
 static int gDuckFrames;
@@ -105,18 +118,19 @@ static int gAudioVolume = 50;
 
 void SetAudioVolume(int percent) {
     if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
-    gAudioVolume = percent;
+    gAudioVolume = percent;   // int 한 칸이라 잠그지 않아도 찢어지지 않는다
 }
 
 int AudioVolume() { return gAudioVolume; }
 
-void AudioSetScene(int scene) { MusicSetScene(&gMusic, scene); }
-void AudioSetDrive(int drive) { MusicSetDrive(&gMusic, drive); }
-void AudioSetIntensity(int intensity) { MusicSetIntensity(&gMusic, intensity); }
-void AudioSetCritical(int critical) { MusicSetCritical(&gMusic, critical); }
-void AudioSetMusicEnabled(int enabled) { gMusicEnabled = enabled != 0; MusicSetEnabled(&gMusic, gMusicEnabled); }
+void AudioSetScene(int scene) { AudioGuard g; MusicSetScene(&gMusic, scene); }
+void AudioSetDrive(int drive) { AudioGuard g; MusicSetDrive(&gMusic, drive); }
+void AudioSetIntensity(int intensity) { AudioGuard g; MusicSetIntensity(&gMusic, intensity); }
+void AudioSetCritical(int critical) { AudioGuard g; MusicSetCritical(&gMusic, critical); }
+void AudioSetMusicEnabled(int enabled) { AudioGuard g; gMusicEnabled = enabled != 0; MusicSetEnabled(&gMusic, gMusicEnabled); }
 int AudioMusicEnabled() { return gMusicEnabled; }
-void AudioSetEnding(int ending) { MusicSetEnding(&gMusic, ending); }
+void AudioSetEnding(int ending) { AudioGuard g; MusicSetEnding(&gMusic, ending); }
+int AudioUnderruns() { return (int)gUnderruns; }
 
 static void MixFrames(short* out, int frames) {
     int32_t accumulator[MIX_FRAMES] = {};
@@ -143,14 +157,40 @@ static void MixFrames(short* out, int frames) {
     }
 }
 
+// 장치가 비운 버퍼를 전부 다시 채워 넣는다. 오디오 스레드에서만 부른다.
+static void Pump() {
+    int done = 0;
+    for (int i = 0; i < MIX_BUFFERS; ++i) if (gWaveHdr[i].dwFlags & WHDR_DONE) ++done;
+    if (done == MIX_BUFFERS) InterlockedIncrement(&gUnderruns);   // 큐가 완전히 말랐었다
+    for (int i = 0; i < MIX_BUFFERS; ++i) {
+        if (!(gWaveHdr[i].dwFlags & WHDR_DONE)) continue;
+        { AudioGuard g; MixFrames(gMixBuf[i], MIX_FRAMES); }
+        gWaveHdr[i].dwFlags &= ~WHDR_DONE;
+        waveOutWrite(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
+    }
+}
+
+static DWORD WINAPI AudioThread(void*) {
+    // 20ms 버퍼 넷이 전부다. 페인트가 밀려도 이 스레드는 밀리지 않아야 한다.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    while (!gAudioQuit) {
+        WaitForSingleObject(gAudioEvent, 20);   // 버퍼 완료 이벤트. 놓쳐도 20ms 뒤 깨어난다
+        if (gAudioQuit) break;
+        Pump();
+    }
+    return 0;
+}
+
 void AudioOpen(HWND window) {
+    InitializeCriticalSection(&gAudioLock);
     MusicInit(&gMusic);
     WAVEFORMATEX format;
     ZeroMemory(&format, sizeof(format));
     format.wFormatTag = WAVE_FORMAT_PCM; format.nChannels = 1;
     format.nSamplesPerSec = SFX_RATE; format.wBitsPerSample = 16;
     format.nBlockAlign = 2; format.nAvgBytesPerSec = SFX_RATE * 2;
-    if (waveOutOpen(&gWaveOut, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+    gAudioEvent = CreateEventW(0, FALSE, FALSE, 0);
+    if (!gAudioEvent || waveOutOpen(&gWaveOut, WAVE_MAPPER, &format, (DWORD_PTR)gAudioEvent, 0, CALLBACK_EVENT) != MMSYSERR_NOERROR) {
         gWaveOut = 0; return;               // no audio device: stay silent, keep playing
     }
     for (int i = 0; i < MIX_BUFFERS; ++i) {
@@ -162,26 +202,14 @@ void AudioOpen(HWND window) {
         waveOutWrite(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
     }
     gAudioWindow = window;
-    SetTimer(window, AUDIO_TIMER_ID, 10, 0);
-}
-
-// Called from the window timer, so it is plain synchronous code on the UI thread:
-// no callback re-entrancy and no locking. Any buffer the device has finished with
-// gets refilled from the live voices and queued straight back up.
-void AudioPump() {
-    if (!gWaveOut || gAudioClosing) return;
-    for (int i = 0; i < MIX_BUFFERS; ++i) {
-        if (!(gWaveHdr[i].dwFlags & WHDR_DONE)) continue;
-        MixFrames(gMixBuf[i], MIX_FRAMES);
-        gWaveHdr[i].dwFlags &= ~WHDR_DONE;
-        waveOutWrite(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
-    }
+    gAudioThread = CreateThread(0, 0, AudioThread, 0, 0, 0);
 }
 
 void AudioClose() {
     if (!gWaveOut) return;
     gAudioClosing = 1;
-    if (gAudioWindow) KillTimer(gAudioWindow, AUDIO_TIMER_ID);
+    InterlockedExchange(&gAudioQuit, 1);
+    if (gAudioThread) { SetEvent(gAudioEvent); WaitForSingleObject(gAudioThread, 500); CloseHandle(gAudioThread); gAudioThread = 0; }
     waveOutReset(gWaveOut);
     for (int i = 0; i < MIX_BUFFERS; ++i) waveOutUnprepareHeader(gWaveOut, &gWaveHdr[i], sizeof(WAVEHDR));
     waveOutClose(gWaveOut);
@@ -190,6 +218,7 @@ void AudioClose() {
 
 void PlaySfxPitched(int id, int semitones) {
     if (id < 0 || id >= SFX_COUNT || !gWaveOut) return;
+    AudioGuard guard;   // 믹서가 같은 슬롯을 읽는 중에 갈아 끼우지 않는다
     const SfxSpec* s = &SFX[id];
     if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER
         || id == SFX_PLAYER_HIT || id == SFX_CRASH || id >= SFX_FX_LOCK)

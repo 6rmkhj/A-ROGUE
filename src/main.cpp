@@ -806,8 +806,19 @@ static void TermRun() {
     if (lstrcmpW(cmd, L"help") == 0) {
         TermPrint(L"  win       현재 전투를 즉시 승리 처리한다");
         TermPrint(L"  hp [n]    체력을 n으로 (생략하면 최대치)");
+        TermPrint(L"  perf      페인트 시간과 오디오 언더런");
         TermPrint(L"  clear     기록 지우기");
         TermPrint(L"  help      이 목록");
+        return;
+    }
+    if (lstrcmpW(cmd, L"perf") == 0) {
+        // 렉과 끊김을 사용자 PC에서 그대로 잰다. 언더런이 0이 아니면 소리가 실제로 끊긴 것이다.
+        RECT rc; GetClientRect(gWindow, &rc);
+        wchar_t msg[TERM_LOG_CAP];
+        wsprintfW(msg, L"  창 %dx%d · 페인트 최근 %dms · 최대 %dms · %d프레임", rc.right, rc.bottom, PaintLastMs(), PaintMaxMs(), PaintCount());
+        TermPrint(msg);
+        wsprintfW(msg, L"  오디오 언더런 %d회 (큐 %d x 20ms)", AudioUnderruns(), 4);
+        TermPrint(msg);
         return;
     }
     if (lstrcmpW(cmd, L"clear") == 0) { gTermLogCount = 0; return; }
@@ -903,7 +914,9 @@ static void HandleKey(WPARAM key) {
 static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
-        CreateRenderFonts(); AudioOpen(window); return 0;
+        CreateRenderFonts(); AudioOpen(window);
+        SetTimer(window, AUDIO_TIMER_ID, 50, 0);   // 게임 상태 -> 음악 씬·강도 동기화
+        return 0;
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
@@ -924,7 +937,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
     case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
     case WM_TIMER:
-        if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); AudioPump(); return 0; }
+        if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); return 0; }   // 믹싱은 오디오 스레드가 한다
         if (wParam == 1u) TickRollAnimation();
         else if (wParam == 2u) InvalidateRect(window, 0, FALSE);
         else if (wParam == 3u) {
