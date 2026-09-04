@@ -20,8 +20,10 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 
 #define COMBAT_CLEAR_MS 1500
 #define TURN_TRACE_STEP_MS 360
-#define DESCENT_MS 2400
-#define DIR_ENTER_MS 900       // 디렉터리 진입 연출
+#define DESCENT_LOCK_MS 520    // 고른 드라이브 카드가 잠기고 나머지가 밀려나는 구간
+#define DESCENT_MS 2920        // 카드 잠금 + 실제 마운트/심층 스캔 전체 길이
+#define DIR_SELECT_LOCK_MS 360 // 고른 디렉터리 카드가 경로로 수렴하는 구간
+#define DIR_ENTER_MS 1460      // 카드 잠금 + 디렉터리 라우팅/진입 전체 길이
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
 // ---- 피격·위독·정지 연출 --------------------------------------------------
@@ -59,8 +61,9 @@ extern int gTurnTraceActive;
 extern DWORD gTurnTraceStart;
 extern int gDescentActive, gDescentToFloor;
 extern DWORD gDescentStart;
+extern int gDescentChoiceIndex; // 최초 마운트 때 고른 카드 (층 하강이면 -1)
 // 디렉터리 진입: 고른 경로 조각이 타이핑되는 짧은 오버레이
-extern int gDirEnterActive, gDirEnterKind;
+extern int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 extern DWORD gDirEnterStart;
 // 체력 0 이후의 정지 연출 (노이즈가 화면을 삼키고 나면 재시작 화면으로 넘어간다)
 extern int gDeathActive;

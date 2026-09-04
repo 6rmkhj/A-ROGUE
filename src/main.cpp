@@ -392,6 +392,7 @@ static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
 int gDescentActive;
 DWORD gDescentStart;
 int gDescentToFloor;   // 진입하는 층 (0 = 최초 마운트)
+int gDescentChoiceIndex;
 static int gDescentSeekPhase; // 진행 중 한 번씩 울리는 섹터 안착 신호 단계
 
 static void FinishDescent() {
@@ -402,8 +403,9 @@ static void FinishDescent() {
     InvalidateRect(gWindow, 0, FALSE);
 }
 
-static void BeginDescent(int toFloor) {
+static void BeginDescent(int toFloor, int choiceIndex) {
     gDescentToFloor = toFloor;
+    gDescentChoiceIndex = choiceIndex;
     gDescentSeekPhase = 0;
     gDescentStart = GetTickCount();
     gDescentActive = 1;
@@ -412,10 +414,11 @@ static void BeginDescent(int toFloor) {
 }
 
 // ---- 디렉터리 진입 연출 ----------------------------------------------------
-// 선택은 이미 game.cpp에서 확정됐고 전투도 시작된 뒤다. 여기서는 고른 경로가
-// 타이핑되는 짧은 오버레이만 얹는다.
-int gDirEnterActive, gDirEnterKind;
+// 선택은 이미 game.cpp에서 확정됐고 전투도 시작된 뒤다. 여기서는 선택 카드를
+// 경로에 잠근 뒤 라우팅 신호와 타이핑으로 전투 화면까지 이어 준다.
+int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 DWORD gDirEnterStart;
+static int gDirEnterCuePhase;
 
 static void FinishDirectoryEnter() {
     if (!gDirEnterActive) return;
@@ -426,8 +429,10 @@ static void FinishDirectoryEnter() {
 
 // 타이머 8은 기믹 발동 연출이 쓰고 있다. 같은 번호를 나눠 쓰면 둘 중 하나가
 // 상대의 타이머를 죽여 연출이 멈추므로 진입 연출은 9번을 쓴다.
-static void BeginDirectoryEnter(int kind) {
+static void BeginDirectoryEnter(int kind, int choiceIndex) {
     gDirEnterKind = kind;
+    gDirEnterChoiceIndex = choiceIndex;
+    gDirEnterCuePhase = 0;
     gDirEnterStart = GetTickCount();
     gDirEnterActive = 1;
     PlaySfx(SFX_READ_START);
@@ -586,7 +591,7 @@ static void TakeDirectory(int index) {
     if (index < 0 || index >= DirectoryChoiceCount(&gGame)) return;
     int kind = gGame.directory.choices[index].kind;
     SelectDirectoryChoice(&gGame, index);
-    if (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_STORY) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind); }
+    if (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_STORY) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind, index); }
 }
 
 static void ClickDirectory(int x, int y) {
@@ -597,7 +602,7 @@ static void ClickDirectory(int x, int y) {
 static void ClickDriveSelect(int x, int y) {
     for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
-        if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
+        if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, i); }
         return;
     }
 }
@@ -747,7 +752,7 @@ static void HandleClick(int x, int y) {
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
-    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor, -1);
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -888,7 +893,7 @@ static void HandleKey(WPARAM key) {
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '3') {
             SelectDrive(&gGame, (int)(key - '1'));
-            if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0); }
+            if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, (int)(key - '1')); }
         }
     }
     else if (gGame.phase == PHASE_DIRECTORY) {
@@ -911,7 +916,7 @@ static void HandleKey(WPARAM key) {
         else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY) { if (key == 'R' || key == VK_RETURN) BeginNewRun(); }
-    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor);
+    if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) BeginDescent(gGame.floor, -1);
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -960,8 +965,11 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         }
         else if (wParam == 6u) {
             int descentElapsed = (int)(GetTickCount() - gDescentStart);
-            if (gDescentSeekPhase == 0 && descentElapsed >= DESCENT_MS / 3) { ++gDescentSeekPhase; PlaySfx(SFX_DIE_LOCK); }
-            else if (gDescentSeekPhase == 1 && descentElapsed >= DESCENT_MS * 2 / 3) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 4); }
+            int scanMs = DESCENT_MS - (gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
+            int scanStart = gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0;
+            if (gDescentSeekPhase == 0 && descentElapsed >= scanStart) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 1); }
+            else if (gDescentSeekPhase == 1 && descentElapsed >= scanStart + scanMs / 3) { ++gDescentSeekPhase; PlaySfx(SFX_DIE_LOCK); }
+            else if (gDescentSeekPhase == 2 && descentElapsed >= scanStart + scanMs * 2 / 3) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 4); }
             if (descentElapsed >= DESCENT_MS) FinishDescent();
             else InvalidateRect(window, 0, FALSE);
         }
@@ -981,7 +989,10 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 9u) {
-            if ((int)(GetTickCount() - gDirEnterStart) >= DIR_ENTER_MS) FinishDirectoryEnter();
+            int dirElapsed = (int)(GetTickCount() - gDirEnterStart);
+            if (gDirEnterCuePhase == 0 && dirElapsed >= DIR_SELECT_LOCK_MS) { ++gDirEnterCuePhase; PlaySfxPitched(SFX_DIE_LOCK, 2); }
+            else if (gDirEnterCuePhase == 1 && dirElapsed >= DIR_SELECT_LOCK_MS + 360) { ++gDirEnterCuePhase; PlaySfxPitched(SFX_DIE_LOCK, 5); }
+            if (dirElapsed >= DIR_ENTER_MS) FinishDirectoryEnter();
             else InvalidateRect(window, 0, FALSE);
         }
         return 0;

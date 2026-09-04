@@ -1031,6 +1031,84 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(0, height - 100, width, height - 70), L"카드마다 서로 다른 난이도가 배정됩니다 · 난이도는 오염(관통) 피해 배율이며, 방어도는 관통을 절반만 막습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// 선택 화면과 다음 화면 사이의 연결 동작. 탈락한 카드는 위아래 셔터가 닫히며
+// 사라지고, 고른 카드는 스캔 헤드와 겹테두리로 잠긴다. 별도 스냅샷 없이 이전
+// 화면을 다시 그리므로 창 배율과 무관하고, 모든 위치는 경과 시간으로만 정해진다.
+static void DrawSelectionCardExit(HDC dc, const RECT& card, int chosen, int elapsed,
+                                  int duration, COLORREF accent, const wchar_t* lockedLabel) {
+    int p = Track(elapsed, 0, duration);
+    if (!chosen) {
+        int close = EaseInCubic(Track(elapsed, 45, duration - 45));
+        int half = (card.bottom - card.top) / 2;
+        int cover = half * close / 1000;
+        COLORREF shutter = RGB(7, 11, 16);
+        Fill(dc, MakeRect(card.left, card.top, card.right, card.top + cover), shutter);
+        Fill(dc, MakeRect(card.left, card.bottom - cover, card.right, card.bottom), shutter);
+        if (cover > 5) {
+            Fill(dc, MakeRect(card.left, card.top + cover - 2, card.right, card.top + cover), C_LINE);
+            Fill(dc, MakeRect(card.left, card.bottom - cover, card.right, card.bottom - cover + 2), C_LINE);
+        }
+        if (close > 430) {
+            RECT stamp = MakeRect(card.left + 24, (card.top + card.bottom) / 2 - 16,
+                                  card.right - 24, (card.top + card.bottom) / 2 + 16);
+            Fill(dc, stamp, RGB(9, 13, 18));
+            TextRect(dc, stamp, L"ROUTE DROPPED", C_DIM, gFontSmall,
+                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        return;
+    }
+
+    int lock = EaseOutBack(Track(elapsed, 0, duration * 3 / 4));
+    int expand = FxScale(4 + 13 * (1000 - (lock > 1000 ? 1000 : lock)) / 1000);
+    DrawPulseFrame(dc, card, expand, 4, accent);
+    Outline(dc, card, accent, lock > 720 ? 3 : 2);
+
+    // 세로 판독선이 카드를 훑고 지나간다. 뒤쪽에 짧은 꼬리를 남겨 실제로
+    // 선택 내용을 읽어 잠그는 것처럼 보이게 한다.
+    int scan = Track(elapsed, 35, duration * 3 / 4);
+    int head = Lerp(card.left + 2, card.right - 2, EaseOutCubic(scan));
+    Fill(dc, MakeRect(head - 2, card.top + 2, head + 2, card.bottom - 2), accent);
+    for (int i = 1; i <= 3; ++i) {
+        int x = head - i * 7;
+        if (x > card.left) Fill(dc, MakeRect(x, card.top + 5, x + 1, card.bottom - 5), MixColor(C_BG, accent, 58 - i * 12));
+    }
+
+    if (p > 500) {
+        int h = 38 * (p - 500) / 500;
+        if (h > 38) h = 38;
+        RECT stamp = MakeRect(card.left + 34, (card.top + card.bottom) / 2 - h / 2,
+                              card.right - 34, (card.top + card.bottom) / 2 + h / 2);
+        Fill(dc, stamp, RGB(5, 9, 13));
+        Outline(dc, stamp, accent, 2);
+        if (h >= 30) TextRect(dc, stamp, lockedLabel, accent, gFontMedium,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (elapsed > duration / 2)
+        DrawPixelBurst(dc, (card.left + card.right) / 2, (card.top + card.bottom) / 2,
+                       elapsed - duration / 2, duration / 2, FxScale(24), card.left + 17, accent);
+}
+
+static void DrawDriveSelectionExit(HDC dc, int width, int height, int elapsed) {
+    Fill(dc, MakeRect(0, 68, width, height), C_BG);
+    DrawDriveSelect(dc, width, height);
+    int chosen = gDescentChoiceIndex;
+    if (chosen < 0 || chosen >= 3) return;
+    const DriveInfo* drive = &DRIVE_INFO[gGame.driveChoices[chosen]];
+    for (int i = 0; i < 3; ++i)
+        DrawSelectionCardExit(dc, DriveCardRect(i), i == chosen, elapsed, DESCENT_LOCK_MS,
+                              (COLORREF)drive->color, L"VOLUME LOCKED");
+
+    int commit = Track(elapsed, DESCENT_LOCK_MS * 2 / 3, DESCENT_LOCK_MS);
+    if (commit > 0) {
+        int y = Lerp(68, height, EaseInCubic(commit));
+        DrawSectorStatic(dc, MakeRect(0, 68, width, y), gGame.selectedDrive + 31,
+                         elapsed / NOISE_CHURN_MS, 180 + 620 * commit / 1000);
+        Fill(dc, MakeRect(0, y - 3, width, y + 2), (COLORREF)drive->color);
+    }
+    TextRect(dc, MakeRect(0, 92, width, 124), L"SELECTION COMMITTED  ·  MOUNT REQUEST QUEUED",
+             (COLORREF)drive->color, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
 // ---------------------------------------------------------------------------
 // 디렉터리 선택 화면
 //
@@ -1186,14 +1264,47 @@ static void DrawDirectorySelect(HDC dc, int width, int height) {
         L"[1] / [2] 또는 디렉터리를 클릭하십시오  ·  선택지는 다시 뽑히지 않습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+static void DrawDirectorySelectionExit(HDC dc, int width, int height, int elapsed) {
+    Fill(dc, MakeRect(0, 68, width, height), C_BG);
+    DrawDirectorySelect(dc, width, height);
+    int chosen = gDirEnterChoiceIndex;
+    if (chosen < 0 || chosen >= DirectoryChoiceCount(&gGame)) return;
+    const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(gDirEnterKind);
+    if (!info) return;
+    COLORREF accent = (COLORREF)info->color;
+    for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i)
+        DrawSelectionCardExit(dc, DirectoryChoiceRect(i), i == chosen, elapsed, DIR_SELECT_LOCK_MS,
+                              accent, L"PATH LOCKED");
+
+    RECT selected = DirectoryChoiceRect(chosen);
+    POINT from = {(selected.left + selected.right) / 2, selected.bottom + 2};
+    POINT to = {width / 2, height - 48};
+    int route = EaseOutCubic(Track(elapsed, 90, DIR_SELECT_LOCK_MS));
+    DrawSignalPath(dc, from, to, height - 96, route, 4, accent, 13, 1);
+    if (elapsed > DIR_SELECT_LOCK_MS * 2 / 3)
+        DrawBandGlitch(dc, selected, elapsed, FxScale(7), gDirEnterKind + 43, 11);
+    int dissolve = Track(elapsed, DIR_SELECT_LOCK_MS - 100, DIR_SELECT_LOCK_MS);
+    if (dissolve > 0)
+        DrawScreenStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
+                         820 * dissolve / 1000);
+    TextRect(dc, MakeRect(0, 102, width, 134), L"ROUTE ACCEPTED  ·  RESOLVING DIRECTORY HANDLE",
+             accent, gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
 // 디렉터리 진입 연출. 값이 전부 경과 시간의 함수라 리페인트와 겹쳐도 안전하다.
 #define DIR_BRANCH_MS 320   // 갈래를 보여 주고 나서 경로 타이핑이 시작된다
 
 static void DrawDirectoryEnter(HDC dc, int width, int height) {
     const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(gDirEnterKind);
     if (!info) return;
-    int elapsed = (int)(GetTickCount() - gDirEnterStart);
-    if (elapsed < 0) elapsed = 0; if (elapsed > DIR_ENTER_MS) elapsed = DIR_ENTER_MS;
+    int totalElapsed = (int)(GetTickCount() - gDirEnterStart);
+    if (totalElapsed < 0) totalElapsed = 0; if (totalElapsed > DIR_ENTER_MS) totalElapsed = DIR_ENTER_MS;
+    if (totalElapsed < DIR_SELECT_LOCK_MS) {
+        DrawDirectorySelectionExit(dc, width, height, totalElapsed);
+        return;
+    }
+    int elapsed = totalElapsed - DIR_SELECT_LOCK_MS;
+    int enterMs = DIR_ENTER_MS - DIR_SELECT_LOCK_MS;
     Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
     RECT panel = MakeRect(200, 206, width - 200, height - 206);
     Panel(dc, panel, C_PANEL, (COLORREF)info->color);
@@ -1236,7 +1347,7 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
     lstrcpynW(here, base, 96);
     int length = lstrlenW(here);
     int typing = elapsed - DIR_BRANCH_MS;
-    int typed = typing <= 0 ? 0 : typing * length / (DIR_ENTER_MS * 2 / 5);
+    int typed = typing <= 0 ? 0 : typing * length / (enterMs * 2 / 5);
     if (typed > length) typed = length;
     wchar_t typedText[104] = L"> ";
     lstrcpynW(typedText + 2, here, typed + 1);
@@ -1247,8 +1358,33 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
     RECT band = MakeRect(panel.left + 24, panel.top + 196, panel.right - 24, panel.top + 236);
     Panel(dc, band, RGB(8, 13, 19), C_LINE);
     RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
-    DrawSectorStatic(dc, inner, gDirEnterKind + 3, elapsed / NOISE_CHURN_MS, 200 + 700 - elapsed * 700 / DIR_ENTER_MS);
+    DrawSectorStatic(dc, inner, gDirEnterKind + 3, elapsed / NOISE_CHURN_MS, 200 + 700 - elapsed * 700 / enterMs);
     DrawScanlines(dc, inner);
+
+    // 고른 갈래가 실제 핸들로 연결되는 순간. 카드 잠금 뒤에도 신호의 방향이
+    // 이어져 선택 → 경로 → 전투의 관계가 한 동작으로 보인다.
+    int chosenRow = gDirEnterChoiceIndex;
+    if (chosenRow < 0 || chosenRow >= count) chosenRow = 0;
+    POINT routeFrom = {panel.left + 304, rowTop + chosenRow * 30 + 13};
+    POINT routeTo = {panel.right - 34, band.top + 20};
+    int routeProgress = EaseOutCubic(Track(elapsed, 80, DIR_BRANCH_MS + 170));
+    DrawSignalPath(dc, routeFrom, routeTo, panel.top + 132, routeProgress, 5,
+                   (COLORREF)info->color, 12, 1);
+    int impact = Track(elapsed, DIR_BRANCH_MS, DIR_BRANCH_MS + 170);
+    if (impact > 0) {
+        DrawPulseFrame(dc, band, FxScale(3 + 14 * (1000 - impact) / 1000), 3, (COLORREF)info->color);
+        if (elapsed < DIR_BRANCH_MS + 260)
+            DrawPixelBurst(dc, routeTo.x, routeTo.y, elapsed - DIR_BRANCH_MS, 260,
+                           FxScale(20), gDirEnterKind * 9 + 5, (COLORREF)info->color);
+    }
+
+    int sweep = Track(elapsed, 0, 260);
+    if (sweep < 1000) {
+        int y = Lerp(panel.top + 2, panel.bottom - 2, EaseOutCubic(sweep));
+        DrawScreenStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
+                         820 * (1000 - sweep) / 1000);
+        Fill(dc, MakeRect(panel.left + 2, y - 2, panel.right - 2, y + 2), (COLORREF)info->color);
+    }
 
     wchar_t b[160];
     wsprintfW(b, L"%s  ·  %s", info->effect, info->cost);
@@ -1260,9 +1396,15 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
 // 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
 static void DrawDescent(HDC dc, int width, int height) {
     const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
-    int elapsed = (int)(GetTickCount() - gDescentStart);
-    if (elapsed < 0) elapsed = 0; if (elapsed > DESCENT_MS) elapsed = DESCENT_MS;
+    int totalElapsed = (int)(GetTickCount() - gDescentStart);
+    if (totalElapsed < 0) totalElapsed = 0; if (totalElapsed > DESCENT_MS) totalElapsed = DESCENT_MS;
     int mount = gDescentToFloor == 0;
+    if (mount && gDescentChoiceIndex >= 0 && totalElapsed < DESCENT_LOCK_MS) {
+        DrawDriveSelectionExit(dc, width, height, totalElapsed);
+        return;
+    }
+    int elapsed = totalElapsed - (mount && gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
+    int scanMs = DESCENT_MS - (mount && gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
     Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
     RECT panel = MakeRect(170, 150, width - 170, height - 150);
     Panel(dc, panel, C_PANEL, (COLORREF)drive->color);
@@ -1277,7 +1419,7 @@ static void DrawDescent(HDC dc, int width, int height) {
     // 목표 경로가 한 글자씩 타이핑된다.
     const wchar_t* path = drive->paths[gDescentToFloor];
     int length = lstrlenW(path);
-    int typed = elapsed * length / (DESCENT_MS * 3 / 5);
+    int typed = elapsed * length / (scanMs * 3 / 5);
     if (typed > length) typed = length;
     wchar_t typedText[64] = L"> ";
     lstrcpynW(typedText + 2, path, typed + 1);
@@ -1285,7 +1427,7 @@ static void DrawDescent(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(panel.left + 26, panel.top + 98, panel.right - 26, panel.top + 148), typedText, (COLORREF)drive->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     // 판독 노이즈 밴드: 진행될수록 정적이 걷힌다.
-    int noiseLevel = 900 - elapsed * 900 / DESCENT_MS;
+    int noiseLevel = 900 - elapsed * 900 / scanMs;
     RECT band = MakeRect(panel.left + 26, panel.top + 162, panel.right - 26, panel.top + 272);
     Panel(dc, band, RGB(8, 13, 19), C_LINE);
     RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
@@ -1299,18 +1441,18 @@ static void DrawDescent(HDC dc, int width, int height) {
     Fill(dc, track, RGB(8, 12, 17));
     for (int x = track.left; x < track.right; x += 9)
         Fill(dc, MakeRect(x, track.top, x + 1, track.bottom), RGB(30, 42, 52));
-    int seekPhase = elapsed * 3 / DESCENT_MS;
+    int seekPhase = elapsed * 3 / scanMs;
     if (seekPhase > 2) seekPhase = 2;
-    int within = elapsed * 3 - seekPhase * DESCENT_MS;
+    int within = elapsed * 3 - seekPhase * scanMs;
     int trackSpan = track.right - track.left;
     int from = trackSpan * seekPhase / 3, to = trackSpan * (seekPhase + 1) / 3;
-    int headX = track.left + from + (to - from) * within / DESCENT_MS;
+    int headX = track.left + from + (to - from) * within / scanMs;
     Fill(dc, MakeRect(track.left, track.top + 3, headX, track.top + 5), MixColor(C_BG, (COLORREF)drive->color, 62));
     Fill(dc, MakeRect(headX - 2, track.top - 6, headX + 2, track.bottom + 6), (COLORREF)drive->color);
 
     RECT barRect = MakeRect(panel.left + 26, panel.top + 288, panel.right - 26, panel.top + 306);
-    Bar(dc, barRect, elapsed, DESCENT_MS, (COLORREF)drive->color);
-    wsprintfW(b, L"%d%%", elapsed * 100 / DESCENT_MS);
+    Bar(dc, barRect, elapsed, scanMs, (COLORREF)drive->color);
+    wsprintfW(b, L"%d%%", elapsed * 100 / scanMs);
     TextRect(dc, MakeRect(panel.right - 106, panel.top + 310, panel.right - 26, panel.top + 332), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
 
     int capacity = EffectiveCapacity(&gGame);
@@ -1323,6 +1465,23 @@ static void DrawDescent(HDC dc, int width, int height) {
     if (mount) wsprintfW(b, L"볼륨 특성: %s", drive->perkText);
     else lstrcpyW(b, L"감염 코어에 접근하기 위해 더 깊은 섹터로 진입합니다.");
     Text(dc, panel.left + 26, panel.top + 348, b, C_TEXT, gFontSmall);
+
+    // 카드 잠금의 스캔 헤드가 마운트 패널 안으로 이어진다. 초반에는 외곽이
+    // 크게 한 번 숨 쉬고, 각 seek 착지점마다 트랙에서 작은 데이터 파편이 튄다.
+    int reveal = Track(elapsed, 0, 240);
+    if (reveal < 1000) {
+        int sweepY = Lerp(panel.top + 2, panel.bottom - 2, EaseOutCubic(reveal));
+        DrawSectorStatic(dc, MakeRect(0, 68, width, height), gGame.selectedDrive + 31,
+                         elapsed / NOISE_CHURN_MS, 800 * (1000 - reveal) / 1000);
+        Fill(dc, MakeRect(panel.left + 2, sweepY - 2, panel.right - 2, sweepY + 2), (COLORREF)drive->color);
+        DrawPulseFrame(dc, panel, FxScale(5 + 18 * (1000 - reveal) / 1000), 4, (COLORREF)drive->color);
+        DrawEdgeGlow(dc, MakeRect(0, 68, width, height), (COLORREF)drive->color,
+                     FxScale(520 * (1000 - reveal) / 1000), 12);
+    }
+    int phaseElapsed = elapsed % (scanMs / 3);
+    if (phaseElapsed < 220)
+        DrawPixelBurst(dc, headX, (track.top + track.bottom) / 2, phaseElapsed, 220,
+                       FxScale(12), gGame.selectedDrive * 17 + seekPhase, (COLORREF)drive->color);
     const wchar_t* hint = gGame.phase == PHASE_PRUNE
         ? L"진입 후 용량 정리가 필요합니다 · 클릭이나 키로 바로 넘기기"
         : L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기";
