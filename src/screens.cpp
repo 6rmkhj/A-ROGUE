@@ -244,7 +244,8 @@ static void DrawTitle(HDC dc, int width, int height) {
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
-RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 366); }
+// 압력·오염 게이지가 있는 보스는 상태줄이 한 줄 더 밀린다. 그 줄까지 들어가도록 밑변을 382로 둔다.
+RECT EnemyRect(int i) { int left = 28 + i * 218; return MakeRect(left, 94, left + 198, 382); }
 static RECT PortraitRect(const RECT& panel) { return MakeRect(panel.left + 31, panel.top + 8, panel.left + 167, panel.top + 132); }
 RECT SlotRect(int i) { int left = 28 + i * 172; return MakeRect(left, 408, left + 154, 532); }
 RECT DieRect(int i) { int left = 48 + i * 220; return MakeRect(left, 574, left + 184, 708); }
@@ -721,7 +722,7 @@ static void DrawEnemy(HDC dc, int index) {
                     gGame.boss.empowered ? C_RED : (COLORREF)info->color, C_LINE);
                 gaugeTop += 18;
             }
-            TextRect(dc, MakeRect(r.left + 12, gaugeTop, r.right - 10, r.bottom - 4), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
+            TextRect(dc, MakeRect(r.left + 12, gaugeTop, r.right - 10, r.bottom - 2), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
         } else if (enemy->block > 0 || enemy->burn > 0) {
             wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
             Text(dc, r.left + 12, r.top + 247, b, C_DIM, gFontSmall);
@@ -943,9 +944,9 @@ static void DrawCombat(HDC dc, int width, int height) {
         else
             wsprintfW(result, L"예상 결과  적 체력 -%d  ·  내 체력 -%d  ·  획득 방어도 %d%s",
                 gPreview.damageDealt, gPreview.damageTaken, gPreview.blockGained, note);
-        Text(dc, 28, 382, result, gPreview.playerDies ? C_RED : gPreview.uncertain ? C_YELLOW : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
-    } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
-    else Text(dc, 28, 382, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
+        Text(dc, 28, 388, result, gPreview.playerDies ? C_RED : gPreview.uncertain ? C_YELLOW : gPreview.combatEnds ? C_GREEN : C_TEXT, gFontSmall);
+    } else if (ResolveOrderReversed(&gGame)) Text(dc, 28, 388, L"① 배치  →  ② 스페이스: 연쇄 > 방어 > 공격 > 증폭 (역전!)  →  ③ 적 행동", C_RED, gFontSmall);
+    else Text(dc, 28, 388, L"① 배치  →  ② 스페이스: 증폭 > 공격 > 방어 > 연쇄  →  ③ 적 행동", C_DIM, gFontSmall);
     for (int i = 0; i < SLOT_COUNT; ++i) DrawSlot(dc, i);
     for (int i = 0; i < 3; ++i) { DrawDie(dc, i); DrawFaceStrip(dc, i); }
     DrawCombatFxFront(dc);  // 충격·파편·피해 숫자는 판 위에 얹는다
