@@ -84,12 +84,15 @@ static int BestReward(const GameState* game) {
 }
 
 static void Run(int drive, unsigned int seed, Stats* st) {
-    GameState game; NewRun(&game, seed);
+    GameState game; NewRun(&game, seed, drive == DRIVE_FINAL ? 0x3F : 0);
     game.driveChoices[0] = drive;
     ++st->runs;
     int steps = 0, index = -1, hpAtStart = 0, turnsHere = 0;
-    while (game.phase != PHASE_VICTORY && game.phase != PHASE_GAMEOVER && steps++ < 600) {
+    while (game.phase != PHASE_VICTORY && game.phase != PHASE_CHAPTER_CLEAR && game.phase != PHASE_GAMEOVER && steps++ < 600) {
         if (game.phase == PHASE_DRIVE_SELECT) { SelectDrive(&game, 0); }
+        else if (game.phase == PHASE_STORY) { AdvanceStory(&game); }
+        else if (game.phase == PHASE_DIRECTORY) { SelectDirectoryChoice(&game, 0); }
+        else if (game.phase == PHASE_ENDING_CHOICE) { SelectEnding(&game, 0); }
         else if (game.phase == PHASE_COMBAT) {
             int floorIndex = game.floor < 0 ? 0 : game.floor > 2 ? 2 : game.floor;
             int here = floorIndex * 3 + game.encounter;
@@ -129,32 +132,42 @@ static void Run(int drive, unsigned int seed, Stats* st) {
     }
     if (index >= 0 && index < ENCOUNTERS) { st->damageSum[index] += hpAtStart - game.playerHp; st->turnSum[index] += turnsHere; }
     if (game.phase == PHASE_GAMEOVER && index >= 0 && index < ENCOUNTERS) ++st->deaths[index];
-    if (game.phase == PHASE_VICTORY) ++st->wins;
+    if (game.phase == PHASE_VICTORY || game.phase == PHASE_CHAPTER_CLEAR) ++st->wins;
+}
+
+// 구역별 표. 일반 볼륨 합계와 최종 볼륨이 같은 줄자를 보아야 비교가 된다.
+static void PrintCurve(const Stats* st) {
+    printf("  %-14s %8s %8s %8s %8s %8s\n", "encounter", "reached", "hp% in", "dmg", "turns", "deaths");
+    for (int i = 0; i < ENCOUNTERS; ++i) {
+        const char* label = (i % 3 == 2) ? "boss" : "mob";
+        char name[32]; snprintf(name, sizeof(name), "floor%d %s%d", i / 3 + 1, label, i % 3 + 1);
+        double hpPct = st->maxHpSum[i] ? 100.0 * st->hpSum[i] / st->maxHpSum[i] : 0.0;
+        printf("  %-14s %8lld %7.1f%% %8.2f %8.2f %8lld\n", name, st->reached[i], hpPct,
+            st->reached[i] ? (double)st->damageSum[i] / st->reached[i] : 0.0,
+            st->reached[i] ? (double)st->turnSum[i] / st->reached[i] : 0.0,
+            st->deaths[i]);
+    }
+    printf("  turns total %lld · damage-free turns %lld (%.1f%%)\n",
+        st->turns, st->zeroDamageTurns, st->turns ? 100.0 * st->zeroDamageTurns / st->turns : 0.0);
+    printf("  average block gained per turn %.2f vs average telegraphed hit %.2f\n",
+        st->turns ? (double)st->blockSum / st->turns : 0.0,
+        st->intentTurns ? (double)st->intentSum / st->intentTurns : 0.0);
 }
 
 int main() {
     Stats st = {};
     const int runsPerDrive = 300;
-    for (int drive = 0; drive < DRIVE_COUNT; ++drive)
+    for (int drive = 0; drive < DRIVE_SELECTABLE_COUNT; ++drive)
         for (int i = 0; i < runsPerDrive; ++i)
             Run(drive, 0x77110000u + (unsigned int)(drive * 7717 + i * 7919), &st);
 
     printf("CURVE over %lld runs (%d drives x %d seeds), %lld wins (%.1f%%)\n",
-        st.runs, DRIVE_COUNT, runsPerDrive, st.wins, st.runs ? 100.0 * st.wins / st.runs : 0.0);
-    printf("  %-14s %8s %8s %8s %8s %8s\n", "encounter", "reached", "hp% in", "dmg", "turns", "deaths");
-    for (int i = 0; i < ENCOUNTERS; ++i) {
-        const char* label = (i % 3 == 2) ? "boss" : "mob";
-        char name[32]; sprintf(name, "floor%d %s%d", i / 3 + 1, label, i % 3 + 1);
-        double hpPct = st.maxHpSum[i] ? 100.0 * st.hpSum[i] / st.maxHpSum[i] : 0.0;
-        printf("  %-14s %8lld %7.1f%% %8.2f %8.2f %8lld\n", name, st.reached[i], hpPct,
-            st.reached[i] ? (double)st.damageSum[i] / st.reached[i] : 0.0,
-            st.reached[i] ? (double)st.turnSum[i] / st.reached[i] : 0.0,
-            st.deaths[i]);
-    }
-    printf("  turns total %lld · damage-free turns %lld (%.1f%%)\n",
-        st.turns, st.zeroDamageTurns, st.turns ? 100.0 * st.zeroDamageTurns / st.turns : 0.0);
-    printf("  average block gained per turn %.2f vs average telegraphed hit %.2f\n",
-        st.turns ? (double)st.blockSum / st.turns : 0.0,
-        st.intentTurns ? (double)st.intentSum / st.intentTurns : 0.0);
-    return 0;
+        st.runs, DRIVE_SELECTABLE_COUNT, runsPerDrive, st.wins, st.runs ? 100.0 * st.wins / st.runs : 0.0);
+    PrintCurve(&st);
+    Stats final = {};
+    for (int i = 0; i < runsPerDrive; ++i) Run(DRIVE_FINAL, 0xA4000000u + (unsigned int)i * 7919u, &final);
+    printf("FINAL CURVE over %lld runs, %lld wins (%.1f%%)\n",
+        final.runs, final.wins, final.runs ? 100.0 * final.wins / final.runs : 0.0);
+    PrintCurve(&final);
+    return final.reached[0] == final.runs && final.turns > 0 ? 0 : 1;
 }

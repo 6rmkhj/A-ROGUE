@@ -39,7 +39,7 @@ static int CheckTiming() {
 }
 
 static void Scene(int drive) {
-    NewRun(&gGame, 12345);
+    NewRun(&gGame, 12345, 0);
     ConfigureDriveForTest(&gGame, drive, 12345, 0);
     StartCombat(&gGame);
     gGame.phase = PHASE_COMBAT; gGame.enemyCount = 3;
@@ -87,6 +87,23 @@ static int SaveFrame(const char* folder, const char* name, int width, int height
 }
 
 int main(int argc, char** argv) {
+    LoadTranslations();
+    for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+        SetUiLanguage(language);
+        wchar_t command[512]; BuildRecoveredCommand(0x3F, command, 512);
+        const wchar_t* expected = language == LANGUAGE_KOREAN
+            ? L"> 시스템을 살려. 단, 네가 다시 깨어난다면 네 판단을 믿어."
+            : L"> Save the system. But if you wake again, trust your judgment.";
+        if (lstrcmpW(command, expected)) { printf("FAIL: recovered command assembly\n"); return 20; }
+        for (int d = 0; d < 6; ++d) {
+            BuildRecoveredCommand((uint8_t)(1u << d), command, 512);
+            int gaps = 0; for (const wchar_t* p = command; *p; ++p) if (*p == L'[') ++gaps;
+            if (gaps != 5 || !wcsstr(command, LocalizeText(STORY_SHARD_TEXT[d]))) return 21;
+        }
+        wchar_t tiny[2] = {L'x', L'y'}; BuildRecoveredCommand(0x3F, tiny, 1);
+        if (tiny[0] || tiny[1] != L'y') return 22;
+    }
+    SetUiLanguage(LANGUAGE_KOREAN);
     int timing = CheckTiming();
     if (timing) { printf("FAIL: FX timeline %d\n", timing); return 1; }
     Scene(0);
@@ -118,6 +135,116 @@ int main(int argc, char** argv) {
         if (!dc || !bmp || !bits) return 2;
         HGDIOBJ old = SelectObject(dc, bmp);
         SetMapMode(dc, MM_ANISOTROPIC); SetWindowExtEx(dc, BASE_WIDTH, BASE_HEIGHT, 0); SetViewportExtEx(dc, w, h, 0);
+        // Title and settings, with and without saved progress, in both languages.
+        for (int stage = 0; stage < 4; ++stage) {
+            uint8_t mask = stage == 0 ? 0 : stage == 1 ? 0x15 : 0x3F;
+            uint8_t seen = stage == 3 ? 0x03 : 0;
+            InitTitle(&gGame, mask, seen);
+            gSettingsOpen = stage >= 2;
+            gCampaignResetArmed = stage == 3;
+            GameState before = gGame;
+            for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+                SetUiLanguage(language);
+                Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                DrawTitle(dc, BASE_WIDTH, BASE_HEIGHT);
+                if (gSettingsOpen) { DrawHeader(dc, BASE_WIDTH); DrawSettings(dc, BASE_WIDTH, BASE_HEIGHT); }
+                GdiFlush(); ++frames;
+                if (argc > 1 && pass == 1 && scale == 1) {
+                    char name[80]; sprintf_s(name, "campaign_title_%d_lang_%d", stage, language);
+                    if (!SaveFrame(argv[1], name, w, h, bits)) return 29;
+                }
+            }
+            SetUiLanguage(LANGUAGE_KOREAN);
+            // The reset button must be reachable and must not overlap the run restart.
+            if (gSettingsOpen) {
+                RECT reset = CampaignResetRect(), restart = RestartButtonRect();
+                int cx = (reset.left + reset.right) / 2, cy = (reset.top + reset.bottom) / 2;
+                if (HoverId(cx, cy) != 922) { printf("FAIL: campaign reset hover\n"); return 30; }
+                if (reset.left < restart.right && restart.left < reset.right
+                    && reset.top < restart.bottom && restart.top < reset.bottom) {
+                    printf("FAIL: campaign reset overlaps run restart\n"); return 31;
+                }
+            }
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: title render mutated game\n"); return 32; }
+        }
+        gSettingsOpen = 0; gCampaignResetArmed = 0;
+        // Empty, centered single/pair, late-game triple, and the fresh three-volume
+        // opening. The last pair also covers the progress strip with nothing recovered.
+        static const int CARD_COUNTS[5] = {0, 1, 2, 3, 3};
+        static const uint8_t CARD_MASKS[5] = {0x3F, 0x3F, 0x3E, 0x3E, 0x00};
+        for (int variant = 0; variant < 5; ++variant) {
+            int count = CARD_COUNTS[variant];
+            NewRun(&gGame, 12345u, CARD_MASKS[variant]);
+            AdvanceStory(&gGame);
+            gGame.phase = PHASE_DRIVE_SELECT; // Empty-card safety remains covered.
+            gGame.driveChoiceCount = count;
+            GameState before = gGame;
+            for (int x = 0; x < BASE_WIDTH; x += 8) {
+                int expected = -1;
+                for (int i = 0; i < count; ++i) if (Inside(DriveCardRect(i), x, 400)) expected = 50 + i;
+                if (HoverId(x, 400) != expected) { printf("FAIL: drive card hover bounds\n"); return 14; }
+                if (expected < 0) ClickDriveSelect(x, 400);
+            }
+            RECT hidden = DriveCardRect(count);
+            if (hidden.right != hidden.left || hidden.bottom != hidden.top) return 15;
+            if (count) {
+                RECT first = DriveCardRect(0), last = DriveCardRect(count - 1);
+                if (first.left != BASE_WIDTH - last.right || first.right - first.left != 320) return 16;
+                if (count == 3 && first.left != 56) return 17;
+            }
+            for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+                SetUiLanguage(language);
+                Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                DrawHeader(dc, BASE_WIDTH); DrawDriveSelect(dc, BASE_WIDTH, BASE_HEIGHT);
+                GdiFlush(); ++frames;
+                if (argc > 1 && pass == 1 && scale == 1) {
+                    char name[80]; sprintf_s(name, "campaign_cards_%d_lang_%d", variant, language);
+                    if (!SaveFrame(argv[1], name, w, h, bits)) return 18;
+                }
+            }
+            SetUiLanguage(LANGUAGE_KOREAN);
+            gDescentChoiceIndex = count ? count - 1 : 0;
+            DrawDriveSelectionExit(dc, BASE_WIDTH, BASE_HEIGHT, 160); GdiFlush(); ++frames;
+            gDescentChoiceIndex = -1;
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: drive render or empty click mutated game\n"); return 19; }
+        }
+        // Story and end screens in both languages, including sparse recovery.
+        for (int scene = 0; scene < 17; ++scene) {
+            uint8_t mask = scene == 0 ? 0 : scene == 1 ? 0x15 : 0x3F;
+            NewRun(&gGame, 12345u, mask);
+            if (scene >= 3 && scene < 9) {
+                gGame.selectedDrive = scene - 3;
+                gGame.clearedMask = (uint8_t)(1u << gGame.selectedDrive);
+                BeginStory(&gGame, STORY_SHARD, 0, PHASE_CHAPTER_CLEAR);
+            } else if (scene >= 9 && scene <= 11) {
+                gGame.phase = PHASE_CHAPTER_CLEAR;
+                gGame.selectedDrive = 0;
+                gGame.clearedMask = scene == 9 ? 1 : scene == 10 ? 0x15 : 0x3F;
+            } else if (scene == 12) {
+                // Final command screen: every card is offered, one already recorded.
+                gGame.phase = PHASE_ENDING_CHOICE; gGame.selectedDrive = DRIVE_FINAL;
+                gGame.finalVolumeCleared = 1; SetSeenEndings(&gGame, 1u);
+            } else if (scene >= 13 && scene <= 15) {
+                gGame.phase = PHASE_VICTORY; gGame.selectedDrive = DRIVE_FINAL;
+                gGame.finalVolumeCleared = 1; gGame.story.selectedEnding = (uint8_t)(scene - 13);
+            } else if (scene == 16) { gGame.phase = PHASE_GAMEOVER; gGame.clearedMask = 0x15; }
+            GameState before = gGame;
+            for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+                SetUiLanguage(language);
+                Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                DrawHeader(dc, BASE_WIDTH);
+                if (gGame.phase == PHASE_STORY) DrawStory(dc, BASE_WIDTH, BASE_HEIGHT);
+                else if (gGame.phase == PHASE_ENDING_CHOICE) DrawEndingChoice(dc, BASE_WIDTH, BASE_HEIGHT);
+                else DrawEndScreen(dc, BASE_WIDTH, BASE_HEIGHT, gGame.phase != PHASE_GAMEOVER);
+                GdiFlush(); ++frames;
+                if (argc > 1 && pass == 1 && scale == 1) {
+                    char name[80]; sprintf_s(name, "campaign_story_%d_lang_%d", scene, language);
+                    if (!SaveFrame(argv[1], name, w, h, bits)) return 23;
+                }
+            }
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: campaign screen mutated game\n"); return 24; }
+        }
+        SetUiLanguage(LANGUAGE_KOREAN);
         for (int drive = 0; drive < DRIVE_COUNT; ++drive) for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
             Scene(drive); gFxLevel = mode;
             GameState before = gGame;
@@ -154,6 +281,47 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        if (argc > 1 && pass == 1 && scale == 1) {
+            Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+            for (int i = 0; i < 6; ++i) {
+                int kind = i < 3 ? DRIVE_MOBS[DRIVE_FINAL][i] : DRIVE_BOSSES[DRIVE_FINAL][i - 3];
+                int x = 65 + (i % 3) * 340, y = 45 + (i / 3) * 340;
+                DrawSpriteArt(dc, MakeRect(x, y, x + 280, y + 240), kind, 1, 0, 0, 0);
+                Text(dc, x, y + 255, ENEMY_INFO[kind].name, C_GREEN, gFontMedium);
+            }
+            GdiFlush(); if (!SaveFrame(argv[1], "final_roster", w, h, bits)) return 28;
+        }
+        for (int floor = 0; floor < 3; ++floor) for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
+            NewRun(&gGame, 0xA400000u, 0x3F); SelectDrive(&gGame, 0);
+            gGame.floor = floor; gGame.encounter = 2; StartCombat(&gGame);
+            gGame.enemies[0].hp = gGame.enemies[0].maxHp = 999;
+            gGame.playerHp = gGame.playerMaxHp = 999;
+            for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
+                gGame.dice[d].faces[f].kind = FACE_NUMBER;
+                gGame.dice[d].faces[f].value = floor == 0 ? 3 : 1;
+                gGame.dice[d].faces[f].damaged = 0;
+            }
+            for (int t = 0; t < (floor == 2 ? 4 : 1); ++t) { AssignDieToSlot(&gGame, 0, SLOT_ATTACK); EndTurn(&gGame); }
+            if (gGame.boss.firedFx != ENEMY_INFO[DRIVE_BOSSES[DRIVE_FINAL][floor]].gimmick) return 25;
+            gFxLevel = mode; gFxKind = gGame.boss.firedFx; gFxA = gGame.boss.fxA; gFxB = gGame.boss.fxB;
+            gFxActive = 1; gFxStart = 10000; gRolled = 1; gTurnTraceActive = 0;
+            GameState before = gGame;
+            for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+                SetUiLanguage(language);
+                for (int age = 100; age <= 1900; age += 300) {
+                    gCheckTick = 10000 + age;
+                    Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                    DrawHeader(dc, BASE_WIDTH); DrawCombat(dc, BASE_WIDTH, BASE_HEIGHT); DrawGimmickFx(dc);
+                    GdiFlush(); ++frames;
+                    if (argc > 1 && pass == 1 && scale == 1 && mode == 0 && age == 400) {
+                        char name[80]; sprintf_s(name, "final_boss_%d_lang_%d", floor, language);
+                        if (!SaveFrame(argv[1], name, w, h, bits)) return 26;
+                    }
+                }
+            }
+            gFxActive = 0;
+            if (memcmp(&gGame, &before, sizeof(gGame))) return 27;
+        }
         SelectObject(dc, old); DeleteObject(bmp); DeleteDC(dc);
     }
     if (pass == 0) beforeObjects = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
@@ -162,7 +330,7 @@ int main(int argc, char** argv) {
     DWORD afterObjects = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
     DestroyRenderFonts();
     if (afterObjects != beforeObjects) { printf("FAIL: GDI objects %lu -> %lu\n", beforeObjects, afterObjects); return 6; }
-    printf("PASS: FX timing, no future damage, all 6 drives x 3 modes x 2 scales, %d offscreen frames, no game mutation or GDI leaks; %.2f ms/frame\n",
+    printf("PASS: campaign cards, final boss FX in both languages, FX timing, no future damage, all 7 drives x 3 modes x 2 scales, %d offscreen frames, no game mutation or GDI leaks; %.2f ms/frame\n",
         frames, (double)(finish.QuadPart - start.QuadPart) * 1000 / freq.QuadPart / frames);
     return 0;
 }

@@ -13,7 +13,8 @@ enum GamePhase {
     PHASE_PRUNE,
     PHASE_ENDING_CHOICE,
     PHASE_GAMEOVER,
-    PHASE_VICTORY
+    PHASE_VICTORY,
+    PHASE_CHAPTER_CLEAR
 };
 
 struct DriveRuleRuntime {
@@ -150,6 +151,9 @@ struct BossRuntime {
     int restoresUsed;
     int restoredTotal;                   // TAPE.LOOP 총 회복량 (상한 검사용)
     int quarantinesDone;                 // SAMPLE-13 격리 횟수 (최대 p2)
+    int signatureSlot;                   // A: parity-gated slot for this turn.
+    int copiedPower;                     // A: previous execution's highest slot output.
+    int nextSealSlot;                    // A: next permanent seal target (-1 when done).
 };
 
 // 턴 계산 추적: 내부는 12줄까지 기록하고 화면은 최근 8줄을 보여준다.
@@ -222,6 +226,13 @@ struct GameState {
     int modifierA;
     int modifierB;
     int driveChoices[3];
+    int driveChoiceCount;         // 실제 표시·선택 가능한 카드 수 (0..3)
+    uint8_t clearedMask;          // Injected campaign snapshot; updated on volume clear.
+    uint8_t finalVolumeCleared;
+    // 이미 본 최종 명령 (SetSeenEndings가 주입). 규칙에는 전혀 관여하지 않고 최종
+    // 명령 카드의 기록 표시에만 쓰이므로 자동 검증의 결정론에 영향이 없다.
+    uint8_t seenEndingMask;
+    uint8_t permanentSlotMask;    // LAST.WRITE seals survive combat cleanup until NewRun.
     int driveDifficulty[3];       // 카드별 난이도 (세 장 모두 다름)
     int selectedDrive;
     int difficulty;               // 마운트한 볼륨의 난이도 (마운트 전 -1)
@@ -288,8 +299,15 @@ void AdvanceStory(GameState* game);
 void SelectEnding(GameState* game, int ending);
 const StoryFragment* CurrentStoryFragment(const GameState* game);
 
-void InitTitle(GameState* game);
-void NewRun(GameState* game, uint32_t seed);
+// clearedMask/seenMask는 이어하기 표시 전용이다. 규칙 경로는 읽지 않는다.
+void InitTitle(GameState* game, uint8_t clearedMask, uint8_t seenMask);
+void NewRun(GameState* game, uint32_t seed, uint8_t clearedMask);
+// 표시 전용. NewRun이 상태를 비운 뒤에 불러야 하고 규칙에는 관여하지 않는다.
+void SetSeenEndings(GameState* game, uint8_t seenMask);
+// 이미 확정된 최종 명령 번호, 아직 고르지 않았으면 -1.
+int CommittedEnding(const GameState* game);
+int RecoveredShardCount(uint8_t clearedMask);
+int EffectiveLawDrive(const GameState* game);
 void SelectDrive(GameState* game, int choiceIndex);
 // 다음 일반전 앞의 디렉터리 2택을 생성하고 PHASE_DIRECTORY로 들어간다.
 void BeginDirectorySelection(GameState* game);
@@ -320,6 +338,10 @@ void EndTurn(GameState* game);
 // 눕힌 뒤 정상 승리 처리를 그대로 탄다. 스모크·밸런스는 이 함수를 부르지 않으므로
 // 자동 검증의 결정론에는 아무 영향이 없다.
 void DebugWinCombat(GameState* game);
+// 관리자 터미널(`)의 winwin 전용. 마지막 보스 자리로 옮겨 CombatWon을 그대로
+// 태우므로 조각 획득과 볼륨 종료가 평소 완주와 같은 경로로 돈다. 진행 중인
+// 볼륨이 없으면(타이틀·드라이브 선택·결과 화면) 판을 건드리지 않고 0을 반환.
+int DebugWinDrive(GameState* game);
 void SelectReward(GameState* game, int rewardIndex);
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex);
 void InstallTsr(GameState* game, int rewardIndex);

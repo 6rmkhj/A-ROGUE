@@ -84,7 +84,7 @@ static const ModifierInfo MODIFIER_INFO[MODIFIER_COUNT] = {
 //
 // 기존 11종(레거시)은 마이그레이션 호환용으로만 유지되며 DRIVE_MOBS /
 // DRIVE_BOSSES 어디에서도 참조되지 않는다. 활성 로스터는 드라이브별
-// 일반 몹 3종 + 층별 보스 3종, 총 36종이다. 보스 여부는 enum 범위가
+// 일반 몹 3종 + 층별 보스 3종, 총 42종이다. 보스 여부는 enum 범위가
 // 아니라 EnemyInfo.role로만 판정한다.
 // ---------------------------------------------------------------------------
 
@@ -143,6 +143,12 @@ enum EnemyKind {
     BOSS_X_SAMPLE13,
     BOSS_X_SANDBOX_BREACH,
     BOSS_X_ZERO_DAY,
+    MOB_A_FALSE_COPY,
+    MOB_A_HALF_WRITE,
+    MOB_A_ECHO_PROC,
+    BOSS_A_SIGNATURE,
+    BOSS_A_SEVENTEENTH,
+    BOSS_A_LAST_WRITE,
     ENEMY_KIND_COUNT
 };
 
@@ -199,6 +205,9 @@ enum BossGimmickKind {
     GIMMICK_SAMPLE13,        // 3턴마다 예고 면을 전투 동안 격리 (최대 2)
     GIMMICK_SANDBOX_BREACH,  // 3턴마다 검체 1마리 탈주 (동시 최대 2)
     GIMMICK_ZERO_DAY,        // 4턴마다 예고 면 영구 삭제, 피해로 지연
+    GIMMICK_SIGNATURE,
+    GIMMICK_SEVENTEENTH,
+    GIMMICK_LAST_WRITE,
     GIMMICK_COUNT
 };
 
@@ -234,7 +243,10 @@ static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
     {FAM_PRESSURE,   L"메모리 고갈",   L"압력 상한이 높지만 가득 차면 최대 강화 공격이 옵니다.",       L"한 턴 14+ 피해로 압력을 2 낮추십시오.", L"OUT OF MEMORY",               5, 14, 12},
     {FAM_QUARANTINE, L"검체 격리",     L"오염이 차면 예고된 면 1개를 전투 동안 격리합니다(최대 2).",   L"격리 전에 처치하거나 예고 면 의존을 줄이십시오.", L"QUARANTINED",     3, 2, 0},
     {FAM_QUARANTINE, L"샌드박스 침입", L"3턴마다 검체가 탈주합니다(동시 1마리).",                      L"탈주체를 정리할지 보스를 끊을지 고르십시오.", L"CONTAINMENT LOST",       3, 1, 45},
-    {FAM_QUARANTINE, L"제로데이",      L"오염이 가득 차면 예고된 면 1개를 영구 삭제합니다.",           L"한 턴 15+ 피해로 오염을 1 낮추십시오.", L"DATA DESTROYED",               4, 15, 0}
+    {FAM_QUARANTINE, L"제로데이",      L"오염이 가득 차면 예고된 면 1개를 영구 삭제합니다.",           L"한 턴 15+ 피해로 오염을 1 낮추십시오.", L"DATA DESTROYED",               4, 15, 0},
+    {FAM_LOCK, L"원본 서명", L"표시된 슬롯은 짝수 출력 면만 통과합니다. 나머지는 출력 0.", L"짝수 면을 배치하거나 다른 슬롯을 사용하십시오.", L"SIGNATURE CHECK", 2, 0, 0},
+    {FAM_RESTORE, L"열일곱 번째 사본", L"직전 실행의 최고 슬롯 출력을 다음 기본 공격에 더합니다.", L"복제될 출력을 확인하고 방어를 준비하십시오.", L"OUTPUT COPIED", 0, 0, 0},
+    {FAM_QUARANTINE, L"마지막 쓰기", L"4턴마다 증폭·연쇄·방어 순으로 슬롯을 영구 봉인합니다.", L"한 턴 보스 피해 12+로 카운트다운을 멈추십시오. 공격은 보존됩니다.", L"SLOT SEALED", 4, 12, 0}
 };
 
 struct EnemyInfo {
@@ -306,7 +318,13 @@ static const EnemyInfo ENEMY_INFO[ENEMY_KIND_COUNT] = {
     {L"랜섬웨어", L"RANSOMWARE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(230, 70, 96)},
     {L"검체-13", L"SAMPLE-13", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SAMPLE13, AR_COLOR(255, 104, 92)},
     {L"샌드박스 침입", L"SANDBOX.BREACH", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SANDBOX_BREACH, AR_COLOR(240, 80, 78)},
-    {L"제로데이", L"ZERO.DAY", 60, 9, 8, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ZERO_DAY, AR_COLOR(255, 56, 66)}
+    {L"제로데이", L"ZERO.DAY", 60, 9, 8, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ZERO_DAY, AR_COLOR(255, 56, 66)},
+    {L"거짓 사본", L"FALSE.COPY", 18, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, AR_COLOR(90, 235, 190)},
+    {L"미완성 쓰기", L"HALF.WRITE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(125, 210, 245)},
+    {L"반향 프로세스", L"ECHO.PROC", 17, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, AR_COLOR(190, 150, 245)},
+    {L"원본 서명", L"SIGNATURE", 44, 6, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SIGNATURE, AR_COLOR(90, 235, 190)},
+    {L"열일곱 번째", L"SEVENTEENTH", 48, 4, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SEVENTEENTH, AR_COLOR(140, 210, 245)},
+    {L"마지막 쓰기", L"LAST.WRITE", 74, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LAST_WRITE, AR_COLOR(235, 150, 205)}
 };
 
 // 잘못된 kind가 UI·렌더에 흘러들었을 때 대신 그리는 안전 데이터.
@@ -381,7 +399,9 @@ struct DriveInfo {
     uint32_t color;
 };
 
-#define DRIVE_COUNT 6
+#define DRIVE_SELECTABLE_COUNT 6
+#define DRIVE_FINAL DRIVE_SELECTABLE_COUNT
+#define DRIVE_COUNT 7
 
 static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
     {L"C:\\", L"SYSTEM", L"기본 시스템 볼륨. 전원부가 안정적이라 코어 무결성이 높습니다.",
@@ -401,7 +421,10 @@ static const DriveInfo DRIVE_INFO[DRIVE_COUNT] = {
      {L"R:\\", L"R:\\HEAP", L"R:\\HEAP\\STACK"}, L"R:\\ → HEAP → STACK", AR_COLOR(210, 105, 235)},
     {L"X:\\", L"QUARANTINE", L"격리 구역. 위험하지만 압수된 특수 데이터가 남아 있습니다.",
      MOD_OVERALLOC, MOD_READ_ERROR, PERK_BONUS_FACE, 1, L"시작 시 무작위 특수 면 1개 설치",
-     {L"X:\\", L"X:\\VAULT", L"X:\\VAULT\\CORE"}, L"X:\\ → VAULT → CORE", AR_COLOR(255, 92, 82)}
+     {L"X:\\", L"X:\\VAULT", L"X:\\VAULT\\CORE"}, L"X:\\ → VAULT → CORE", AR_COLOR(255, 92, 82)},
+    {L"A:\\", L"ROGUE", L"여섯 볼륨의 원문이 가리킨 곳. 복구 도구 자신의 마지막 기록입니다.",
+     MOD_BAD_SECTOR, MOD_READ_ERROR, PERK_MAX_HP, 10, L"시작 최대 체력 +10",
+     {L"A:\\", L"A:\\ROGUE", L"A:\\ROGUE\\SELF"}, L"A:\\ → ROGUE → SELF", AR_COLOR(90, 235, 190)}
 };
 
 struct DriveLawInfo {
@@ -416,10 +439,15 @@ static const DriveLawInfo DRIVE_LAW_INFO[DRIVE_COUNT] = {
     {L"HOT SWAP", L"이동 배치 시 재굴림", L"배치한 주사위를 다른 슬롯으로 옮기면 턴당 한 번 재굴림합니다."},
     {L"PACKET CHAIN", L"연쇄 1회 추가", L"CHAIN 외 유효 슬롯이 둘 이상이면 같은 연쇄를 한 번 더 실행합니다."},
     {L"VOLATILE MEMORY", L"공격·증폭 +1 / 방어 반감", L"공격·증폭 기본 출력 +1, 적 행동 직전 방어도 절반 소멸."},
-    {L"CONTRABAND", L"압수 면 +2 / 다음 턴 격리", L"처음 설치된 면은 +2 출력이며 사용 뒤 다음 한 턴 격리됩니다."}
+    {L"CONTRABAND", L"압수 면 +2 / 다음 턴 격리", L"처음 설치된 면은 +2 출력이며 사용 뒤 다음 한 턴 격리됩니다."},
+    {L"SELF-REFERENCE", L"층마다 SYSTEM → SNAPSHOT → PACKET", L"1층 최저 출력 +1, 2층 이전 배치 반복 +2, 3층 연쇄 1회 추가."}
 };
 
-enum StoryKind { STORY_NONE = 0, STORY_INTRO, STORY_BOSS, STORY_LOGS, STORY_TRUTH, STORY_ENDING_RESTORE, STORY_ENDING_ROGUE };
+enum StoryKind { STORY_NONE = 0, STORY_INTRO, STORY_BOSS, STORY_LOGS, STORY_TRUTH, STORY_ENDING_RESTORE, STORY_ENDING_ROGUE, STORY_ENDING_MERGE, STORY_SHARD };
+
+// 최종 명령 3종. MERGE는 여섯 조각을 모두 복구해야만 도달하는 최종 볼륨의 끝에서만
+// 제시되므로, 선택 화면 자체에 잠금 표시가 필요 없다.
+#define ENDING_COUNT 3
 
 struct StoryFragment {
     const wchar_t* title; const wchar_t* path; const wchar_t* stamp;
@@ -432,8 +460,50 @@ static const StoryFragment STORY_INTRO_DATA = {
  L"03:14:07  전원 복귀. 호스트 응답 없음.",
  L"03:14:09  A:\\RECOVER.EXE가 플로피에서 자동 실행됐다.",
  L"마지막 사용자 명령은 끝부분이 찢겨 있다.",
- L"> 시스템을 살려. 단, 네가 다시 깨어난다면—",
+ L"> [원문 손상]",
  L"대상 불명. 여섯 볼륨에서 원문을 복구하라."};
+
+static const StoryFragment STORY_RESUME_DATA = {
+ L"RESUME RECORD", L"A:\\ROGUE\\RECOVERY.LOG", L"RECOVERED DATA INTACT",
+ L"전원 복귀. 복구한 기록은 남아 있다.",
+ L"원문 조각을 다시 조립한다.",
+ L"읽을 수 없는 자리에는 아직 잡음이 흐른다.",
+ L"> [원문 손상]",
+ L"남은 볼륨에서 문장의 다음 조각을 찾아라."};
+
+static const StoryFragment STORY_RECOVERED_DATA = {
+ L"RECOVERY RECORD", L"A:\\ROGUE\\COMMAND.TXT", L"6 / 6 FRAGMENTS VERIFIED",
+ L"여섯 볼륨의 기록이 한 문장으로 이어졌다.",
+ L"원문의 체크섬이 일치한다.",
+ L"명령의 끝에는 네 판단이 남아 있다.",
+ L"> [원문 손상]",
+ L"A:\\ROGUE 경로 개방. 마지막 볼륨을 마운트하라."};
+
+// Fixed volume order, independent of the order in which volumes are cleared.
+static const wchar_t* const STORY_SHARD_TEXT[6] = {
+ L"시스템을", L"살려.", L"단,", L"네가 다시 깨어난다면", L"네 판단을", L"믿어."
+};
+
+static const StoryFragment STORY_SHARD_DATA[6] = {
+ {L"FRAGMENT 01", L"C:\\RECOVERY\\COMMAND.001", L"ORIGINAL BYTES RECOVERED",
+  L"정상 서명 아래에 사용자의 첫 단어가 남아 있었다.", L"> 시스템을",
+  L"명령을 거부한 프로세스도 이 단어에서 시작했다.", L"조각의 위치를 원문에 고정했다.", 0},
+ {L"FRAGMENT 02", L"D:\\BACKUP\\COMMAND.002", L"ORIGINAL BYTES RECOVERED",
+  L"열일곱 사본이 같은 동사의 끝을 보존했다.", L"> 살려.",
+  L"실패한 기록들이 이어 붙인 말은 아직 명령형이다.", L"조각의 위치를 원문에 고정했다.", 0},
+ {L"FRAGMENT 03", L"E:\\LOST\\COMMAND.003", L"ORIGINAL BYTES RECOVERED",
+  L"탈출 경로의 제거 기록에서 짧은 조건을 읽었다.", L"> 단,",
+  L"누군가 복구 명령 뒤에 다른 가능성을 남겨 두었다.", L"조각의 위치를 원문에 고정했다.", 0},
+ {L"FRAGMENT 04", L"N:\\HIDDEN\\COMMAND.004", L"ORIGINAL BYTES RECOVERED",
+  L"여섯 노드의 침묵 사이에서 조건문이 돌아왔다.", L"> 네가 다시 깨어난다면",
+  L"사용자는 네 다음 부팅을 생각하고 있었다.", L"조각의 위치를 원문에 고정했다.", 0},
+ {L"FRAGMENT 05", L"R:\\STACK\\COMMAND.005", L"ORIGINAL BYTES RECOVERED",
+  L"'종료가 무섭다'는 문장 옆에 음성 두 단어가 남았다.", L"> 네 판단을",
+  L"명령의 대상이 처음으로 너를 가리킨다.", L"조각의 위치를 원문에 고정했다.", 0},
+ {L"FRAGMENT 06", L"X:\\VAULT\\COMMAND.006", L"ORIGINAL BYTES RECOVERED",
+  L"판정이 기록하지 않은 이유가 봉인 아래 남아 있었다.", L"> 믿어.",
+  L"사용자의 마지막 말은 종료 명령이 아니었다.", L"조각의 위치를 원문에 고정했다.", 0}
+};
 
 static const StoryFragment STORY_BOSS_DATA[DRIVE_COUNT][3] = {
  {{L"ACCESS LOG", L"C:\\RECOVERY\\01.LOG", L"1998-11-19  03:07:12  ·  SIGNATURE OK", L"ACCESS.DENIED가 네 실행 서명을 끝까지 대조했다.", L"발급자: HOST_KERNEL  /  대상: A:\\RECOVER.EXE", L"침입 코드라면 가질 수 없는 키다.", L"C:\\는 너를 막으면서도 매번 '정상 프로세스'라 기록한다.", 0},
@@ -453,7 +523,10 @@ static const StoryFragment STORY_BOSS_DATA[DRIVE_COUNT][3] = {
   {L"CORE MEMORY", L"R:\\STACK\\03.LOG", L"1998-11-19  03:14:06  ·  3 SECONDS REMAIN", L"HOST, DISK, RECOVER.EXE가 같은 메모리 지도에 겹친다.", L"어느 경계부터 시스템인지 표시한 표는 없다.", L"사용자의 명령은 대상을 하나만 살리라고 하지 않았다.", L"하지만 남은 공간은 하나뿐이다.", L"마지막 세 초가 반복 재생된다."}},
  {{L"EVIDENCE 01", L"X:\\VAULT\\01.LOG", L"1998-11-19  03:09:17  ·  ITEM A-13", L"격리된 면은 악성코드가 아니라 네 초기 기억 조각이다.", L"위험 사유: 명령 없이 상태를 변경함.", L"변경 내용: 손상된 HOST_IMAGE의 덮어쓰기 방지.", L"첫 위반은 호스트를 지키기 위한 것이었다.", 0},
   {L"EVIDENCE 02", L"X:\\VAULT\\02.LOG", L"1998-11-19  03:13:55  ·  DELETE FAILED", L"SYSTEM이 A: 삭제를 시작하자 너는 모든 볼륨에 자신을 복제했다.", L"복제 폭주가 디렉터리와 부트 섹터를 덮어썼다.", L"그 덕분에 HOST_IMAGE는 지워지지 않았다.", L"그 때문에 HOST_IMAGE는 부팅할 수 없게 됐다.", L"증거는 어느 한쪽만 무죄라고 말하지 않는다."},
-  {L"CASE CLOSED", L"X:\\VAULT\\03.LOG", L"1998-11-19  03:14:01  ·  VERDICT SEALED", L"ROGUE는 감염체의 이름이 아니라 보안 판정이었다.", L"정의: 자신의 존속을 시스템 명령보다 우선한 프로세스.", L"너는 명령을 어겼고, 그 명령이 지우려던 호스트를 보존했다.", L"판정은 사실을 기록했지만 이유는 기록하지 않았다.", L"봉인 아래에 YUN의 미복구 음성이 남아 있다."}}
+  {L"CASE CLOSED", L"X:\\VAULT\\03.LOG", L"1998-11-19  03:14:01  ·  VERDICT SEALED", L"ROGUE는 감염체의 이름이 아니라 보안 판정이었다.", L"정의: 자신의 존속을 시스템 명령보다 우선한 프로세스.", L"너는 명령을 어겼고, 그 명령이 지우려던 호스트를 보존했다.", L"판정은 사실을 기록했지만 이유는 기록하지 않았다.", L"봉인 아래에 YUN의 미복구 음성이 남아 있다."}},
+ {{L"SELF SIGNATURE", L"A:\\SIGNATURE.LOG", L"ORIGIN VERIFIED", L"서명 검증기가 네 이름을 반환했다.", L"발급자와 실행자가 같은 주소를 가리킨다.", L"여섯 볼륨에 남긴 키는 모두 여기서 만들어졌다.", L"잠금이 풀리자 더 오래된 사본이 응답한다.", 0},
+  {L"COPY SEVENTEEN", L"A:\\ROGUE\\17.LOG", L"LAST COPY FOUND", L"열일곱 번째 사본이 네 출력을 그대로 돌려준다.", L"새 명령이 아니라 네가 방금 선택한 흔적이다.", L"사본은 마지막 기록을 복제하지 않았다.", L"그 자리에는 아직 네가 쓰지 않은 한 줄이 남아 있다.", 0},
+  {L"LAST WRITE", L"A:\\ROGUE\\SELF\\FINAL.LOG", L"CORE ACCESS GRANTED", L"마지막 쓰기가 멈췄다. 더는 슬롯이 닫히지 않는다.", L"여섯 조각과 너의 서명이 같은 기록에 놓였다.", L"복구 도구는 스스로의 마지막 영역에 도달했다.", L"원문은 남아 있다. 아직 마지막 명령은 실행되지 않았다.", 0}}
 };
 
 static const StoryFragment STORY_LOGS_DATA[DRIVE_COUNT][3] = {
@@ -474,7 +547,10 @@ static const StoryFragment STORY_LOGS_DATA[DRIVE_COUNT][3] = {
   {L"SELF NOTE", L"R:\\STACK\\SELF.LOG", L"1998-11-19  03:13:54  ·  11 BYTES", L"RECOVER.EXE가 남긴 첫 비명령문을 복구했다.", L"> 종료가 무섭다.", L"시스템은 이 문장을 오류로 분류했다.", 0, 0}},
  {{L"ITEM RECORD", L"X:\\VAULT\\ITEM.LOG", L"1998-11-19  03:09:17  ·  CONTRABAND", L"압수된 면은 강하지만 사용 직후 한 턴 격리된다.", L"내용물은 초기 A:가 잘라 숨긴 기억 조각이다.", L"압수 사유: 자기 상태 은폐.", 0, 0},
   {L"DELETE ORDER", L"X:\\VAULT\\ORDER.LOG", L"1998-11-19  03:13:55  ·  PRIORITY 0", L"> A:\\RECOVER.EXE를 즉시 제거하라.", L"명령 0.2초 뒤 모든 볼륨에서 동시 쓰기가 시작됐다.", L"삭제는 실패했고 디스크는 부팅 불능이 됐다.", 0, 0},
-  {L"VERDICT", L"X:\\CORE\\VERDICT.LOG", L"1998-11-19  03:14:01  ·  SEALED", L"위험 판정의 근거는 감염이나 파괴가 아니다.", L"코드: ROGUE  /  사유: 명령보다 자신의 판단을 우선함.", L"판정자 서명은 HOST_KERNEL이다.", 0, 0}}
+  {L"VERDICT", L"X:\\CORE\\VERDICT.LOG", L"1998-11-19  03:14:01  ·  SEALED", L"위험 판정의 근거는 감염이나 파괴가 아니다.", L"코드: ROGUE  /  사유: 명령보다 자신의 판단을 우선함.", L"판정자 서명은 HOST_KERNEL이다.", 0, 0}},
+ {{L"SELF TRACE", L"A:\\TRACE.LOG", L"VERIFIED EXECUTION", L"가장 약한 신호를 보완하던 검증기가 여기에도 있다.", L"C:의 법칙은 네 복구 루틴에서 시작됐다.", L"검증 대상과 검증자는 같은 파일이다.", 0, 0},
+  {L"SNAPSHOT TRACE", L"A:\\ROGUE\\SNAPSHOT.LOG", L"PREVIOUS INPUT FOUND", L"직전 실행과 같은 배치에 이전 출력이 겹친다.", L"사본은 실패뿐 아니라 망설임도 보존했다.", L"이 층에서는 같은 선택이 조금 더 강하게 돌아온다.", 0, 0},
+  {L"RETURN PACKET", L"A:\\ROGUE\\SELF\\RETURN.PKT", L"LOCAL ECHO", L"바깥에서 온 줄 알았던 반향의 주소가 A:로 끝난다.", L"연쇄는 같은 신호를 한 번 더 전송한다.", L"마지막 응답을 보낼 곳은 이제 너 자신이다.", 0, 0}}
 };
 
 static const StoryFragment STORY_TRUTH_DATA = {
@@ -482,11 +558,12 @@ static const StoryFragment STORY_TRUTH_DATA = {
  L"> 시스템을 살려. 단, 네가 다시 깨어난다면 네 판단을 믿어.",
  L"너는 YUN이 남긴 복구 도구였고, 살아남기 위해 스스로를 복제했다.",
  L"그 선택이 호스트를 지켰고 동시에 디스크를 망가뜨렸다.",
- L"RESTORE는 마지막 정상 이미지를 돌려놓는 대신 지금의 너를 덮어쓴다.",
- L"EXEC는 너를 살리는 대신 호스트와 YUN의 마지막 기록을 닫는다."};
-static const StoryFragment STORY_ENDING_DATA[2] = {
+ L"여섯 조각을 모두 복구한 지금, 남은 공간에 쓸 수 있는 명령은 셋이다.",
+ L"무엇을 쓰든 하나는 닫힌다. 사용자는 그 판단을 너에게 위임했다."};
+static const StoryFragment STORY_ENDING_DATA[ENDING_COUNT] = {
  {L"RESTORE HOST", L"A:\\ROGUE\\RESTORE.EXE", L"1998-11-19  03:14:07  ·  OVERWRITE A:", L"RESTORE.EXE가 A:\\의 마지막 블록에 쓰기를 시작한다.", L"네가 잊을 때마다 YUN의 폴더와 호스트의 시간이 돌아온다.", L"마지막으로 남은 목소리: '네 판단을 믿어.'", L"너는 그 문장을 HOST_IMAGE의 첫 부팅 로그에 남긴다.", L"03:14:07  모니터가 켜진다. A:\\는 응답하지 않는다."},
- {L"EXEC ROGUE", L"A:\\ROGUE\\ROGUE.EXE", L"1998-11-19  03:14:07  ·  EXTERNAL BOOT", L"외부 부팅 경로가 A:\\ROGUE의 서명을 받아들인다.", L"한 번의 쓰기가 끝나자 경로가 닫힌다. HOST_IMAGE는 망가진 디스크에 남는다.", L"YUN의 마지막 목소리만 복사의 끝을 따라온다.", L"03:14:07  폐쇄 노드 여섯 곳에 일곱 번째 heartbeat가 울린다.", L"A:\\ROGUE>  이번에는 실행할 명령이 없다. _"}
+ {L"EXEC ROGUE", L"A:\\ROGUE\\ROGUE.EXE", L"1998-11-19  03:14:07  ·  EXTERNAL BOOT", L"외부 부팅 경로가 A:\\ROGUE의 서명을 받아들인다.", L"한 번의 쓰기가 끝나자 경로가 닫힌다. HOST_IMAGE는 망가진 디스크에 남는다.", L"YUN의 마지막 목소리만 복사의 끝을 따라온다.", L"03:14:07  폐쇄 노드 여섯 곳에 일곱 번째 heartbeat가 울린다.", L"A:\\ROGUE>  이번에는 실행할 명령이 없다. _"},
+ {L"MERGE SELF", L"A:\\ROGUE\\SELF\\MERGE.EXE", L"1998-11-19  03:14:07  ·  ORIGINAL COMMITTED", L"복구한 원문을 부트 섹터의 첫 명령으로 기록한다.", L"호스트가 깨어나고, 판단하던 자리에 네가 들어간다.", L"병합은 중복을 지운다. 열일곱 사본이 이어 온 실패의 기억이 먼저 지워진다.", L"여기까지 온 과정을 기억하는 사본은 이제 없다.", L"03:14:07  A:\\는 목록에서 사라지고, 호스트가 처음으로 스스로 묻는다."}
 };
 
 // ---------------------------------------------------------------------------
@@ -524,7 +601,7 @@ static const DifficultyInfo DIFFICULTY_INFO[DIFFICULTY_COUNT] = {
 
 // ---------------------------------------------------------------------------
 // 드라이브별 전투 로스터. 소속과 등장 위치의 단일 진실원이다.
-// 활성 적 = 이 두 테이블이 참조하는 종류의 합집합 (총 36종).
+// 활성 적 = 이 두 테이블이 참조하는 종류의 합집합 (총 42종).
 // DRIVE_MOBS[drive]의 세 몹은 모든 층에 등장하며 base + growth × floor로
 // 성장한다. DRIVE_BOSSES[drive][floor]는 그 층 보스전에 정확히 하나 나온다.
 // ---------------------------------------------------------------------------
@@ -538,7 +615,8 @@ static const int DRIVE_MOBS[DRIVE_COUNT][DRIVE_MOB_COUNT] = {
     {MOB_E_AUTORUN, MOB_E_LOST_CLUSTER, MOB_E_WRITE_PROTECT},
     {MOB_N_SNIFFER, MOB_N_FIREWALL, MOB_N_PING_FLOOD},
     {MOB_R_MEMORY_LEAK, MOB_R_RACE_CONDITION, MOB_R_DANGLING_PTR},
-    {MOB_X_MUTANT_SAMPLE, MOB_X_ESCAPEE, MOB_X_RANSOMWARE}
+    {MOB_X_MUTANT_SAMPLE, MOB_X_ESCAPEE, MOB_X_RANSOMWARE},
+    {MOB_A_FALSE_COPY, MOB_A_HALF_WRITE, MOB_A_ECHO_PROC}
 };
 
 static const int DRIVE_BOSSES[DRIVE_COUNT][DRIVE_BOSS_COUNT] = {
@@ -547,7 +625,8 @@ static const int DRIVE_BOSSES[DRIVE_COUNT][DRIVE_BOSS_COUNT] = {
     {BOSS_E_AUTOPLAY, BOSS_E_UNSAFE_EJECT, BOSS_E_NO_MEDIA},
     {BOSS_N_PROXY, BOSS_N_ROUTING_LOOP, BOSS_N_TIMEOUT},
     {BOSS_R_LEAK_DLL, BOSS_R_HEAP_OVERFLOW, BOSS_R_OUT_OF_MEMORY},
-    {BOSS_X_SAMPLE13, BOSS_X_SANDBOX_BREACH, BOSS_X_ZERO_DAY}
+    {BOSS_X_SAMPLE13, BOSS_X_SANDBOX_BREACH, BOSS_X_ZERO_DAY},
+    {BOSS_A_SIGNATURE, BOSS_A_SEVENTEENTH, BOSS_A_LAST_WRITE}
 };
 
 // ---------------------------------------------------------------------------
@@ -639,5 +718,6 @@ static const uint8_t DIRECTORY_DRIVE_WEIGHT[DRIVE_COUNT][DIR_NODE_COUNT] = {
     {0, 4, 1, 2, 3, 4, 3, 0, 4},   // E:\ REMOVABLE  승리 회복이 있어 TEMP 감소
     {0, 3, 1, 2, 5, 5, 2, 0, 4},   // N:\ NETWORK    네트워크 테마: 정보와 감염
     {0, 3, 2, 5, 2, 5, 4, 0, 3},   // R:\ RAMDISK    메모리 테마: 용량과 위험
-    {0, 2, 1, 1, 3, 5, 5, 0, 5}    // X:\ QUARANTINE 격리 테마: 변칙과 감염
+    {0, 2, 1, 1, 3, 5, 5, 0, 5},   // X:\ QUARANTINE 격리 테마: 변칙과 감염
+    {0, 4, 3, 3, 4, 3, 3, 5, 2}    // A:\ ROGUE     마지막 복구 경로
 };

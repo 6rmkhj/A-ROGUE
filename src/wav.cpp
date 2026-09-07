@@ -17,7 +17,8 @@
 #include <math.h>
 #include "music.h"
 
-static const char* LETTER = "cdenrx";
+static const char LETTER[] = "cdenrxa";
+static_assert(sizeof(LETTER) - 1 == MUSIC_DRIVE_COUNT, "Every song needs an export filename");
 static const char* NAME[12] = {"A","Bb","B","C","Db","D","Eb","E","F","Gb","G","Ab"};
 static void NoteName(int n, char* out) { int o = n / 12, k = n % 12; if (k < 0) { k += 12; --o; } sprintf(out, "%s%d", NAME[k], o + 2); }
 
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
     static int32_t acc[MUSIC_RATE * 40];
     static int16_t pcm[MUSIC_RATE * 40];
     char path[512];
-    for (int d = 0; d < 6; ++d) {
+    for (int d = 0; d < MUSIC_DRIVE_COUNT; ++d) {
         MusicState m; MusicInit(&m);
         m.currentDrive = m.targetDrive = d;   // 드라이브 전환 페이드를 건너뛴다
         MusicSetScene(&m, MUSIC_SCENE_PLAY);

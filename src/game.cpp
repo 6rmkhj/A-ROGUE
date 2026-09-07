@@ -39,7 +39,12 @@ static void DriveRuleOnFaceReplaced(GameState* game, int die, int face) {
 const StoryFragment* CurrentStoryFragment(const GameState* game) {
     if (!game) return 0;
     switch (game->story.kind) {
-    case STORY_INTRO: return &STORY_INTRO_DATA;
+    case STORY_INTRO:
+        return game->clearedMask == 0x3F ? &STORY_RECOVERED_DATA
+            : game->clearedMask ? &STORY_RESUME_DATA : &STORY_INTRO_DATA;
+    case STORY_SHARD:
+        if (game->selectedDrive >= 0 && game->selectedDrive < 6) return &STORY_SHARD_DATA[game->selectedDrive];
+        break;
     case STORY_BOSS:
         if (game->selectedDrive >= 0 && game->selectedDrive < DRIVE_COUNT && game->story.fragment < 3)
             return &STORY_BOSS_DATA[game->selectedDrive][game->story.fragment];
@@ -51,6 +56,7 @@ const StoryFragment* CurrentStoryFragment(const GameState* game) {
     case STORY_TRUTH: return &STORY_TRUTH_DATA;
     case STORY_ENDING_RESTORE: return &STORY_ENDING_DATA[0];
     case STORY_ENDING_ROGUE: return &STORY_ENDING_DATA[1];
+    case STORY_ENDING_MERGE: return &STORY_ENDING_DATA[2];
     default: break;
     }
     return 0;
@@ -67,8 +73,11 @@ void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase) 
 
 void AdvanceStory(GameState* game) {
     if (!game || game->phase != PHASE_STORY) return;
+    // 3층 보스 기록 다음은 볼륨에 따라 갈린다. 일반 볼륨은 조각 하나를 남기고 챕터를
+    // 닫고, 최종 볼륨만 진실을 열어 최종 명령 선택으로 이어진다.
     if (game->story.kind == STORY_BOSS && game->story.fragment == 2) {
-        BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
+        if (game->selectedDrive == DRIVE_FINAL) BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
+        else BeginStory(game, STORY_SHARD, 0, PHASE_CHAPTER_CLEAR);
         return;
     }
     if (game->story.kind == STORY_TRUTH) {
@@ -81,9 +90,10 @@ void AdvanceStory(GameState* game) {
 }
 
 void SelectEnding(GameState* game, int ending) {
-    if (!game || game->phase != PHASE_ENDING_CHOICE || ending < 0 || ending > 1) return;
+    if (!game || game->phase != PHASE_ENDING_CHOICE || ending < 0 || ending >= ENDING_COUNT) return;
+    static const int STORY_FOR_ENDING[ENDING_COUNT] = {STORY_ENDING_RESTORE, STORY_ENDING_ROGUE, STORY_ENDING_MERGE};
     game->story.selectedEnding = (uint8_t)ending;
-    BeginStory(game, ending == 0 ? STORY_ENDING_RESTORE : STORY_ENDING_ROGUE, 0, PHASE_VICTORY);
+    BeginStory(game, STORY_FOR_ENDING[ending], 0, PHASE_VICTORY);
 }
 
 static void PushLog(GameState* game, const wchar_t* text) {
@@ -283,7 +293,7 @@ const Face* RolledFace(const GameState* game, int dieIndex) {
 
 int SlotLockedThisTurn(const GameState* game, int slot) {
     if (slot < 0 || slot >= SLOT_COUNT) return 0;
-    return game->boss.lockedSlot[slot];
+    return game->boss.lockedSlot[slot] || (game->permanentSlotMask & (1u << slot));
 }
 
 int SlotLockedNextTurn(const GameState* game, int slot) {
@@ -362,6 +372,10 @@ static void GimmickInitCombat(GameState* game) {
     boss->gimmick = info->gimmick;
     const BossGimmickInfo* gi = GimmickInfo(game);
     switch (boss->gimmick) {
+    case GIMMICK_LAST_WRITE:
+        boss->countdown = gi->p1;
+        boss->nextSealSlot = SLOT_AMPLIFY;
+        break;
     case GIMMICK_TIMEOUT:
         boss->countdown = gi->p1;
         break;
@@ -458,10 +472,17 @@ static int BossEnemyIndex(const GameState* game) {
 static void GimmickTurnBegin(GameState* game) {
     BossRuntime* boss = &game->boss;
     ClearGimmickAnnouncements(boss);
+    for (int s = 0; s < SLOT_COUNT; ++s) boss->lockedSlot[s] = (game->permanentSlotMask >> s) & 1;
     if (boss->gimmick == GIMMICK_NONE || !BossEnemy(game)) return;
     int turn = game->turn;
     wchar_t buffer[96];
     switch (boss->gimmick) {
+    case GIMMICK_SIGNATURE:
+        boss->signatureSlot = (turn - 1) % SLOT_COUNT;
+        break;
+    case GIMMICK_LAST_WRITE:
+        if (boss->nextSealSlot >= 0 && boss->countdown == 1) boss->nextLockedSlot[boss->nextSealSlot] = 1;
+        break;
     case GIMMICK_ACCESS_DENIED:
         if (turn >= 2 && turn % 2 == 0) {
             boss->lockedSlot[AccessDeniedSlot(turn)] = 1;
@@ -660,6 +681,26 @@ static void GimmickTurnEnd(GameState* game) {
     int turn = game->turn;
     wchar_t buffer[96];
     switch (boss->gimmick) {
+    case GIMMICK_SEVENTEENTH:
+        boss->fxHpBefore = boss->fxHpAfter = (int16_t)enemy->hp;
+        RecordFx(game, boss->gimmick, boss->copiedPower, -1);
+        break;
+    case GIMMICK_LAST_WRITE:
+        if (boss->nextSealSlot < 0) break;
+        if (boss->damageThisTurn < gi->p2) --boss->countdown;
+        if (boss->countdown <= 0) {
+            int slot = boss->nextSealSlot;
+            game->permanentSlotMask |= (uint8_t)(1u << slot);
+            boss->lockedSlot[slot] = 1;
+            RecordFx(game, boss->gimmick, slot, -1);
+            wsprintfW(buffer, L"영구 봉인: %s 슬롯. 공격 경로는 보존됩니다.", SLOT_NAMES[slot]);
+            PushLog(game, buffer);
+            const int order[3] = {SLOT_AMPLIFY, SLOT_CHAIN, SLOT_DEFEND};
+            boss->nextSealSlot = -1;
+            for (int i = 0; i < 3; ++i) if (!(game->permanentSlotMask & (1u << order[i]))) { boss->nextSealSlot = order[i]; break; }
+            boss->countdown = boss->nextSealSlot < 0 ? 0 : gi->p1;
+        }
+        break;
     case GIMMICK_RESTORE_POINT:
         if (turn % gi->p1 == 0) {
             if (boss->restoresUsed < 2 && boss->windowDamage < gi->p2) {
@@ -772,9 +813,13 @@ static void GimmickTurnEnd(GameState* game) {
 // 런 준비
 // ---------------------------------------------------------------------------
 
-void InitTitle(GameState* game) {
+// 타이틀도 캠페인 스냅샷을 받는다. 규칙에는 쓰이지 않고 이어하기 표시에만 읽히지만,
+// NewRun과 같은 자리에서 같은 방식으로 주입해야 화면과 세이브가 어긋나지 않는다.
+void InitTitle(GameState* game, uint8_t clearedMask, uint8_t seenMask) {
     ZeroMemory(game, sizeof(*game));
     game->phase = PHASE_TITLE;
+    game->clearedMask = clearedMask & 0x3F;
+    SetSeenEndings(game, seenMask);
     game->rewardChoiceCount = 3;
     game->selectedDie = -1;
     game->selectedReward = -1;
@@ -808,10 +853,24 @@ static void SetupStartingDice(GameState* game) {
     }
 }
 
-static void PickDriveChoices(GameState* game) {
+static void PickDriveChoices(GameState* game, uint8_t clearedMask) {
+    int remaining[DRIVE_SELECTABLE_COUNT], remainingCount = 0;
+    game->driveChoiceCount = 0;
+    for (int i = 0; i < 3; ++i) game->driveChoices[i] = game->driveDifficulty[i] = -1;
+    for (int i = 0; i < DRIVE_SELECTABLE_COUNT; ++i)
+        if (!(clearedMask & (1u << i))) remaining[remainingCount++] = i;
+    if (!remainingCount) { game->driveChoiceCount = 1; game->driveChoices[0] = DRIVE_FINAL; return; }
+    game->driveChoiceCount = 3;
+    if (remainingCount < 3) {
+        int pick = remaining[RandomRange(game, remainingCount)];
+        for (int i = 0; i < game->driveChoiceCount; ++i) game->driveChoices[i] = pick;
+        return;
+    }
+    // Retain the original draws (including duplicate rejection) for mask == 0.
     int count = 0;
-    while (count < 3) {
-        int pick = RandomRange(game, DRIVE_COUNT);
+    while (count < game->driveChoiceCount) {
+        int pick = RandomRange(game, DRIVE_SELECTABLE_COUNT);
+        if (clearedMask & (1u << pick)) continue;
         int duplicate = 0;
         for (int i = 0; i < count; ++i) if (game->driveChoices[i] == pick) duplicate = 1;
         if (!duplicate) game->driveChoices[count++] = pick;
@@ -822,6 +881,10 @@ static void PickDriveChoices(GameState* game) {
 // 이후 굴림 순서가 통째로 밀리므로, 시드에서 파생한 독립 난수를 쓴다.
 // 5종을 섞어 앞 3개만 가져오므로 중복이 나올 수 없다.
 static void PickDriveDifficulties(GameState* game, uint32_t seed) {
+    if (game->driveChoiceCount == 1 && game->driveChoices[0] == DRIVE_FINAL) {
+        game->driveDifficulty[0] = DIFF_EXPERT; return;
+    }
+    if (!game->driveChoiceCount) return;
     uint32_t rng = seed ? seed : 0x5EED1EEDu;
     int pool[DIFFICULTY_COUNT];
     for (int i = 0; i < DIFFICULTY_COUNT; ++i) pool[i] = i;
@@ -830,7 +893,7 @@ static void PickDriveDifficulties(GameState* game, uint32_t seed) {
         int j = (int)(rng % (uint32_t)(i + 1));
         int swap = pool[i]; pool[i] = pool[j]; pool[j] = swap;
     }
-    for (int i = 0; i < 3; ++i) game->driveDifficulty[i] = pool[i];
+    for (int i = 0; i < game->driveChoiceCount; ++i) game->driveDifficulty[i] = pool[i];
 }
 
 // 시드에서 파생한 독립 난수로 세 몹의 순서를 섞고 A,B / C,A / B,C로 배치해
@@ -852,8 +915,20 @@ static void BuildMobSchedule(GameState* game, uint32_t seed) {
     game->mobScheduleReady = 1;
 }
 
-void NewRun(GameState* game, uint32_t seed) {
+int RecoveredShardCount(uint8_t clearedMask) {
+    int count = 0;
+    for (int i = 0; i < 6; ++i) if (clearedMask & (1u << i)) ++count;
+    return count;
+}
+
+int EffectiveLawDrive(const GameState* game) {
+    const int laws[3] = {0, 1, 3};
+    return game->selectedDrive == DRIVE_FINAL ? laws[ClampInt(game->floor, 0, 2)] : game->selectedDrive;
+}
+
+void NewRun(GameState* game, uint32_t seed, uint8_t clearedMask) {
     ZeroMemory(game, sizeof(*game));
+    game->clearedMask = clearedMask & 0x3F;
     game->rng = seed ? seed : 0xC0FFEE11u;
     // 경로 전용 난수는 런 seed에서 고정 salt로 파생한다. 드라이브는 마운트 시 섞인다.
     game->directory.rng = game->rng ^ 0x4B1D5A17u;
@@ -882,20 +957,40 @@ void NewRun(GameState* game, uint32_t seed) {
     game->boss.nextTargetDie = -1;
     game->boss.nextTargetFace = -1;
     SetupStartingDice(game);
-    PickDriveChoices(game);
+    PickDriveChoices(game, clearedMask);
     PickDriveDifficulties(game, game->rng ^ 0x9E3779B9u);
     BeginStory(game, STORY_INTRO, 0, PHASE_DRIVE_SELECT);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
+}
+
+// 이미 고른 최종 명령의 번호, 아직 고르지 않았으면 -1. story.selectedEnding은 0이
+// RESTORE라서 그 값만으로는 "고르지 않음"과 구분되지 않는다.
+int CommittedEnding(const GameState* game) {
+    if (!game) return -1;
+    if (game->phase == PHASE_VICTORY) return game->story.selectedEnding;
+    if (game->phase == PHASE_STORY
+        && (game->story.kind == STORY_ENDING_RESTORE || game->story.kind == STORY_ENDING_ROGUE
+            || game->story.kind == STORY_ENDING_MERGE))
+        return game->story.selectedEnding;
+    return -1;
+}
+
+void SetSeenEndings(GameState* game, uint8_t seenMask) {
+    if (game) game->seenEndingMask = seenMask & ((1u << ENDING_COUNT) - 1u);
 }
 
 // 경로 전용 난수는 아래 디렉터리 절에서 정의된다. 마운트 시 한 번 섞어 준다.
 static void MixDirectoryDrive(GameState* game);
 
 void SelectDrive(GameState* game, int choiceIndex) {
+    if (!game || choiceIndex < 0 || choiceIndex >= game->driveChoiceCount || choiceIndex >= 3) return;
+    int driveIndex = game->driveChoices[choiceIndex];
+    if (driveIndex < 0 || driveIndex >= DRIVE_COUNT) return;
+    if (driveIndex == DRIVE_FINAL && game->clearedMask != 0x3F) return;
     // 자동 러너와 기존 호출자는 인트로를 입력 없이 건너뛸 수 있다. 실제 UI에서는
     // STORY 입력이 먼저 처리되므로 플레이어에게는 정상적으로 표시된다.
     if (game && game->phase == PHASE_STORY && game->story.kind == STORY_INTRO) AdvanceStory(game);
-    if (game->phase != PHASE_DRIVE_SELECT || choiceIndex < 0 || choiceIndex >= 3) return;
+    if (game->phase != PHASE_DRIVE_SELECT) return;
     game->selectedDrive = game->driveChoices[choiceIndex];
     game->difficulty = game->driveDifficulty[choiceIndex];
     const DriveInfo* drive = &DRIVE_INFO[game->selectedDrive];
@@ -1338,6 +1433,11 @@ static void PlanBoss(GameState* game, EnemyState* enemy) {
     const BossGimmickInfo* gi = GimmickInfo(game);
     int damage = info->damage + info->damageGrowth * game->floor;
     int guard = info->guard + info->guardGrowth * game->floor;
+    if (boss->gimmick == GIMMICK_SEVENTEENTH) {
+        enemy->intent = INTENT_ATTACK;
+        enemy->intentValue = damage + boss->copiedPower;
+        return;
+    }
     // 압력 한계: 예고된 강화 공격이 이번 턴 모든 주기를 대체한다.
     if (boss->empowered) {
         enemy->intent = (uint8_t)(boss->gimmick == GIMMICK_HEAP_OVERFLOW ? INTENT_CORRUPT : INTENT_HEAVY);
@@ -1513,7 +1613,7 @@ static void BeginTurn(GameState* game) {
 
 int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
     if (game->phase != PHASE_COMBAT || dieIndex < 0 || dieIndex >= 3 || slotIndex < 0 || slotIndex >= SLOT_COUNT) return 0;
-    if (game->boss.lockedSlot[slotIndex]) {
+    if (SlotLockedThisTurn(game, slotIndex)) {
         PushLog2(game, L"권한 거부: %s 슬롯은 이번 턴 잠겨 있습니다.", SLOT_NAMES[slotIndex], 0);
         return 0;
     }
@@ -1522,7 +1622,7 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
     if (oldSlot == slotIndex) game->dice[dieIndex].assignedSlot = -1;
     else {
         game->dice[dieIndex].assignedSlot = (int8_t)slotIndex;
-        if (game->selectedDrive == 2 && oldSlot >= 0 && !game->driveRule.hotSwapUsed) {
+        if (EffectiveLawDrive(game) == 2 && oldSlot >= 0 && !game->driveRule.hotSwapUsed) {
             game->dice[dieIndex].rolledFace = (uint8_t)(NextDriveRuleRandom(game) % 6u);
             game->driveRule.hotSwapUsed = 1;
             ++game->driveRule.hotSwapCount;
@@ -1627,34 +1727,35 @@ static int RollOutputSum(const GameState* game) {
 static int SlotPower(const GameState* game, int slot, int* kindOut) {
     if (kindOut) *kindOut = FACE_EMPTY;
     // 잠긴 슬롯은 배치가 거부되지만, 안전을 위해 해결 단계에서도 출력 0을 보장한다.
-    if (game->boss.lockedSlot[slot]) return 0;
+    if (SlotLockedThisTurn(game, slot)) return 0;
     int die = DieForSlot(game, slot);
     if (die < 0 || game->dice[die].disabled || game->dice[die].offline) return 0;
     const Face* face = RolledFace(game, die);
     if (!face) return 0;
-    if (kindOut) *kindOut = face->kind;
     int power = FacePower(face);
+    if (game->boss.gimmick == GIMMICK_SIGNATURE && slot == game->boss.signatureSlot && power % 2 != 0) return 0;
+    if (kindOut) *kindOut = face->kind;
     if (power > 0 && game->driveRule.boostedSlot == slot && game->driveRule.boostedDie == die) {
-        if (game->selectedDrive == 1 || game->selectedDrive == 5) power += 2;
+        if (EffectiveLawDrive(game) == 1 || EffectiveLawDrive(game) == 5) power += 2;
         else power += 1;
     }
-    if (power > 0 && game->selectedDrive == 4 && (slot == SLOT_ATTACK || slot == SLOT_AMPLIFY)) ++power;
+    if (power > 0 && EffectiveLawDrive(game) == 4 && (slot == SLOT_ATTACK || slot == SLOT_AMPLIFY)) ++power;
     return power;
 }
 
 static void DriveRulePrepareResolve(GameState* game) {
     DriveRuleRuntime* rule = &game->driveRule;
     rule->boostedDie = -1; rule->boostedSlot = -1; rule->packetChainActive = 0;
-    if (game->selectedDrive == 0) {
+    if (EffectiveLawDrive(game) == 0) {
         int bestPower = 0x7fffffff, bestSlot = -1, bestDie = -1;
         for (int s = 0; s < SLOT_COUNT; ++s) {
             int d = DieForSlot(game, s);
             if (d < 0 || game->boss.lockedSlot[s] || game->dice[d].disabled || game->dice[d].offline) continue;
-            int p = FacePower(RolledFace(game, d));
+            int p = SlotPower(game, s, 0);
             if (p > 0 && p < bestPower) { bestPower = p; bestSlot = s; bestDie = d; }
         }
         if (bestSlot >= 0) { rule->boostedSlot = (int8_t)bestSlot; rule->boostedDie = (int8_t)bestDie; }
-    } else if (game->selectedDrive == 1 && game->turn > 1) {
+    } else if (EffectiveLawDrive(game) == 1 && game->turn > 1) {
         for (int d = 0; d < 3; ++d) {
             int s = game->dice[d].assignedSlot;
             if (s >= 0 && rule->previousSlot[d] == s && !game->boss.lockedSlot[s]
@@ -1662,7 +1763,7 @@ static void DriveRulePrepareResolve(GameState* game) {
                 rule->boostedDie = (int8_t)d; rule->boostedSlot = (int8_t)s; break;
             }
         }
-    } else if (game->selectedDrive == 5) {
+    } else if (EffectiveLawDrive(game) == 5) {
         int d = rule->contrabandDie, f = rule->contrabandFace;
         if (d >= 0 && d < 3 && f >= 0 && f < 6 && game->dice[d].rolledFace == f) {
             int s = game->dice[d].assignedSlot;
@@ -1673,13 +1774,13 @@ static void DriveRulePrepareResolve(GameState* game) {
     if (rule->boostedSlot >= 0) {
         ++rule->activations;
         wchar_t line[96];
-        if (game->selectedDrive == 0) wsprintfW(line, L"[SYSTEM VERIFY] %s 기본 출력 +1", SLOT_NAMES[rule->boostedSlot]);
-        else if (game->selectedDrive == 1) wsprintfW(line, L"[SNAPSHOT] 주사위 %d 반복 배치 → 기본 출력 +2", rule->boostedDie + 1);
+        if (EffectiveLawDrive(game) == 0) wsprintfW(line, L"[SYSTEM VERIFY] %s 기본 출력 +1", SLOT_NAMES[rule->boostedSlot]);
+        else if (EffectiveLawDrive(game) == 1) wsprintfW(line, L"[SNAPSHOT] 주사위 %d 반복 배치 → 기본 출력 +2", rule->boostedDie + 1);
         else wsprintfW(line, L"[CONTRABAND] 주사위 %d 압수 면 → 기본 출력 +2", rule->boostedDie + 1);
         PushTurnTrace(game, line);
         PushLog(game, line);
     }
-    if (game->selectedDrive == 3) {
+    if (EffectiveLawDrive(game) == 3) {
         int active = 0;
         for (int s = 0; s < SLOT_COUNT; ++s) if (s != SLOT_CHAIN) {
             int d = DieForSlot(game, s);
@@ -1916,6 +2017,11 @@ static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
 }
 
 static void ResolvePlayer(GameState* game) {
+    if (game->boss.gimmick == GIMMICK_SIGNATURE) {
+        int slot = game->boss.signatureSlot, die = DieForSlot(game, slot);
+        if (die >= 0 && !game->dice[die].disabled && !game->dice[die].offline && FacePower(RolledFace(game, die)) % 2)
+            RecordFx(game, GIMMICK_SIGNATURE, slot, -1);
+    }
     ResolveContext ctx = {};
     ctx.ampKind = FACE_EMPTY;
     int reversed = ResolveOrderReversed(game);
@@ -1949,6 +2055,7 @@ static void ResolvePlayer(GameState* game) {
         if (ctx.slotOutput[s] > bestValue) { bestValue = ctx.slotOutput[s]; best = s; }
     }
     game->boss.bestSlotLastTurn = (int8_t)best;
+    if (game->boss.gimmick == GIMMICK_SEVENTEENTH) game->boss.copiedPower = bestValue;
 }
 
 static void ResolveEnemies(GameState* game) {
@@ -2141,13 +2248,20 @@ static void GenerateTsrRewards(GameState* game) {
     game->selectedReward = -1;
 }
 
+static void CompleteVolume(GameState* game) {
+    if (game->selectedDrive == DRIVE_FINAL) game->finalVolumeCleared = 1;
+    if (game->selectedDrive >= 0 && game->selectedDrive < 6)
+        game->clearedMask |= (uint8_t)(1u << game->selectedDrive);
+    BeginStory(game, STORY_BOSS, 2, PHASE_CHAPTER_CLEAR);
+    PushLog(game, L"코어가 열렸습니다. 마지막 복구 기록을 확인하십시오.");
+}
+
 static void CombatWon(GameState* game) {
     // 어떤 조기 return보다 먼저 임시 기믹 상태를 정리한다. 영구 EMPTY만 남는다.
     GimmickCombatEnd(game);
     ++game->combatsWon;
     if (game->floor == 2 && game->encounter == 2) {
-        BeginStory(game, STORY_BOSS, 2, PHASE_ENDING_CHOICE);
-        PushLog(game, L"코어가 열렸습니다. 마지막 복구 기록을 확인하십시오.");
+        CompleteVolume(game);
         return;
     }
     int heal = DrivePerkValue(game, PERK_HEAL_ON_WIN);
@@ -2187,6 +2301,36 @@ void DebugWinCombat(GameState* game) {
     CombatWon(game);
 }
 
+// 드라이브 안에 있는가. 볼륨을 통째로 접는 디버그 명령이 타이틀·결과 화면처럼
+// 진행 중인 볼륨이 없는 자리에서 판을 건드리지 않게 막는다.
+static int InsideVolume(const GameState* game) {
+    if (game->selectedDrive < 0 || game->selectedDrive >= DRIVE_COUNT) return 0;
+    switch (game->phase) {
+    case PHASE_DIRECTORY: case PHASE_COMBAT: case PHASE_REWARD:
+    case PHASE_PRUNE: case PHASE_STORY: return 1;
+    default: return 0;
+    }
+}
+
+// 관리자 터미널 전용. 층과 전투 번호를 마지막 보스 자리로 옮긴 뒤 CombatWon을
+// 그대로 부르므로, 조각 획득·최종 볼륨 표시·보스 기록 재생이 평소 완주와 같은
+// 경로로 돈다. 진행 중인 볼륨이 없으면 아무것도 하지 않고 0을 반환한다.
+int DebugWinDrive(GameState* game) {
+    if (!game || !InsideVolume(game)) return 0;
+    for (int i = 0; i < game->enemyCount; ++i) {
+        if (!game->enemies[i].alive) continue;
+        game->enemies[i].hp = 0;
+        game->enemies[i].alive = 0;
+    }
+    ClearTurnTrace(game);
+    ClearCombatFx(game);
+    RecordFx(game, GIMMICK_NONE, -1, -1);
+    game->floor = 2;
+    game->encounter = 2;
+    CombatWon(game);
+    return 1;
+}
+
 void EndTurn(GameState* game) {
     if (game->phase != PHASE_COMBAT) return;
     int assigned = 0;
@@ -2219,7 +2363,7 @@ void EndTurn(GameState* game) {
     int playerHpBefore = game->playerHp;
     ResolvePlayer(game);
     game->lastTurnBlockGained = game->playerBlock;
-    if (game->selectedDrive == 4 && game->playerBlock > 0) {
+    if (EffectiveLawDrive(game) == 4 && game->playerBlock > 0) {
         int before = game->playerBlock;
         game->playerBlock /= 2;
         if (before != game->playerBlock) {
@@ -2229,7 +2373,7 @@ void EndTurn(GameState* game) {
             ++game->driveRule.activations;
         }
     }
-    if (game->selectedDrive == 5 && game->driveRule.boostedDie >= 0) {
+    if (EffectiveLawDrive(game) == 5 && game->driveRule.boostedDie >= 0) {
         int d = game->driveRule.contrabandDie, f = game->driveRule.contrabandFace;
         if (d >= 0 && d < 3 && f >= 0 && f < 6) {
             Face* face = &game->dice[d].faces[f];
@@ -2303,7 +2447,9 @@ static void EnterNextFloor(GameState* game) {
     ++game->floor;
     game->encounter = 0;
     if (game->floor >= 3) {
-        game->phase = PHASE_VICTORY;
+        game->floor = 2;
+        game->encounter = 2;
+        CompleteVolume(game);
         return;
     }
     if (game->directory.floorCapacityBonus != 0) {

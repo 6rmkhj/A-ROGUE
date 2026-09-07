@@ -1,11 +1,133 @@
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
+#include "campaign.h"
 #include "game.h"
 #include "music.h"
 #include "localization.h"
-#include "sprites.h"   // 테스트 실행 파일에서 47종 초상화 데이터를 직접 검증한다
+#include "sprites.h"   // 테스트 실행 파일에서 53종 초상화 데이터를 직접 검증한다
 
 static int Fail(const char* message) { printf("FAIL: %s\n", message); return 1; }
+
+// Own a unique temporary file; never load or overwrite the player's AROGUE.SAV.
+struct CampaignTestFile {
+    wchar_t path[MAX_PATH];
+    CampaignTestFile() {
+        path[0] = 0;
+        wchar_t directory[MAX_PATH];
+        DWORD length = GetTempPathW(MAX_PATH, directory);
+        if (length && length < MAX_PATH) GetTempFileNameW(directory, L"ACT", 0, path);
+    }
+    ~CampaignTestFile() {
+        if (path[0]) { SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL); DeleteFileW(path); }
+    }
+};
+
+static bool WriteCampaignFixture(const wchar_t* path, const uint8_t* bytes, DWORD count) {
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    bool ok = WriteFile(file, bytes, count, &written, 0) && written == count;
+    CloseHandle(file);
+    return ok;
+}
+
+static int TestCampaignStorage() {
+    CampaignTestFile file;
+    if (!file.path[0]) return Fail("campaign temporary file creation");
+    CampaignState fresh, state, loaded;
+    InitCampaign(&fresh);
+    if (CampaignClearedMask(&fresh) || fresh.finalCleared || fresh.endingSeen[0]
+        || fresh.endingSeen[1] || fresh.endingSeen[2]) return Fail("fresh campaign must be empty");
+    // Exercise every subset, final completion and all ending flags.
+    for (int mask = 0; mask < 64; ++mask) {
+        InitCampaign(&state);
+        for (int i = 0; i < 6; ++i) state.cleared[i] = (uint8_t)((mask >> i) & 1);
+        state.finalCleared = (uint8_t)(mask & 1);
+        for (int i = 0; i < 3; ++i) state.endingSeen[i] = (uint8_t)((mask >> i) & 1);
+        if (CampaignClearedMask(&state) != mask || !SaveCampaign(&state, file.path)
+            || !LoadCampaign(&loaded, file.path) || memcmp(&state, &loaded, sizeof(state)))
+            return Fail("campaign save round trip");
+    }
+    CampaignState before = state;
+    GameState run;
+    NewRun(&run, 0xCA000001u, CampaignClearedMask(&state));
+    if (memcmp(&state, &before, sizeof(state))) return Fail("NewRun must preserve campaign state");
+
+    // 타이틀도 같은 스냅샷을 받는다. 이어하기 표시가 세이브와 어긋나면 안 되고,
+    // 런 상태는 남지 않아야 한다.
+    for (int mask = 0; mask < 64; ++mask) {
+        GameState title;
+        uint8_t seen = (uint8_t)(mask & ((1u << ENDING_COUNT) - 1u));
+        InitTitle(&title, (uint8_t)mask, seen);
+        if (title.phase != PHASE_TITLE) return Fail("InitTitle must land on the title screen");
+        if (title.clearedMask != mask || title.seenEndingMask != seen)
+            return Fail("the title must show the campaign snapshot it was given");
+        if (title.selectedDrive != -1 || title.driveChoiceCount || title.finalVolumeCleared
+            || title.combatsWon || title.floor || title.story.kind != STORY_NONE)
+            return Fail("the title must not carry run state");
+        // 범위 밖 비트는 잘라 내고 캠페인 상태 자체는 건드리지 않는다.
+        InitTitle(&title, 0xFF, 0xFF);
+        if (title.clearedMask != 0x3F || title.seenEndingMask != ((1u << ENDING_COUNT) - 1u))
+            return Fail("the title snapshot must mask off bits that do not exist");
+    }
+    if (memcmp(&state, &before, sizeof(state))) return Fail("InitTitle must preserve campaign state");
+    uint8_t bytes[21] = {};
+    HANDLE handle = CreateFileW(file.path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    DWORD read = 0;
+    bool readOk = handle != INVALID_HANDLE_VALUE && ReadFile(handle, bytes, sizeof(bytes), &read, 0);
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (!readOk || read != 20 || memcmp(bytes, "AROG\x01\x00", 6)) return Fail("campaign stable 20-byte format");
+    // Every byte, including header/version/payload/checksum, is covered.
+    for (int i = 0; i < 20; ++i) {
+        bytes[i] ^= 0x80;
+        if (!WriteCampaignFixture(file.path, bytes, 20)) return Fail("campaign corruption fixture");
+        loaded = state;
+        if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
+            return Fail("corrupt campaign must reset safely");
+        bytes[i] ^= 0x80;
+    }
+    for (DWORD size = 0; size <= 21; ++size) {
+        if (size == 20) continue;
+        if (!WriteCampaignFixture(file.path, bytes, size)) return Fail("campaign size fixture");
+        loaded = state;
+        if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
+            return Fail("truncated or oversized campaign must reset safely");
+    }
+    // Recompute checksum to verify header/version/boolean validation independently.
+    const int invalidOffsets[] = {0, 4, 6, 12, 13};
+    for (int i = 0; i < 5; ++i) {
+        uint8_t invalid[20]; memcpy(invalid, bytes, 20);
+        invalid[invalidOffsets[i]] = 2;
+        uint32_t checksum = 2166136261u;
+        for (int b = 0; b < 16; ++b) checksum = (checksum ^ invalid[b]) * 16777619u;
+        for (int b = 0; b < 4; ++b) invalid[16 + b] = (uint8_t)(checksum >> (8 * b));
+        if (!WriteCampaignFixture(file.path, invalid, 20)) return Fail("campaign invalid field fixture");
+        loaded = state;
+        if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
+            return Fail("invalid campaign fields must reset even with a valid checksum");
+    }
+    if (!SaveCampaign(&state, file.path) || !SetFileAttributesW(file.path, FILE_ATTRIBUTE_READONLY))
+        return Fail("campaign read-only fixture");
+    state.cleared[0] = 0;
+    CampaignState unsaved = state;
+    if (SaveCampaign(&state, file.path) || memcmp(&state, &unsaved, sizeof(state))
+        || !LoadCampaign(&loaded, file.path) || memcmp(&loaded, &before, sizeof(before)))
+        return Fail("failed save must preserve memory and the previous save");
+    if (!SetFileAttributesW(file.path, FILE_ATTRIBUTE_NORMAL) || !DeleteFileW(file.path))
+        return Fail("campaign missing file fixture");
+    loaded = before;
+    if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
+        return Fail("missing campaign must reset safely");
+    // A missing parent directory fails without preventing play or clearing memory.
+    wchar_t missing[MAX_PATH];
+    if (lstrlenW(file.path) + 12 >= MAX_PATH) return Fail("campaign fixture path too long");
+    lstrcpyW(missing, file.path); lstrcatW(missing, L"\\AROGUE.SAV");
+    if (SaveCampaign(&state, missing) || memcmp(&state, &unsaved, sizeof(state)))
+        return Fail("unwritable campaign path must fail safely");
+    printf("PASS: campaign storage, 64 masks, corruption fallback, failed-save preservation\n");
+    return 0;
+}
 
 // 활성 로스터에서 사용하는 테스트 기본 드라이브. 손상 주입 테스트는
 // preserveModifiers=1로 이 드라이브의 로스터만 빌리고 손상은 직접 지정한다.
@@ -37,7 +159,7 @@ static void SetAllFaces(GameState* game, int kind, int value) {
 // 보스전을 결정론적으로 준비한다. 손상은 재굴림해도 출력이 같도록
 // 배드 섹터 + 읽기 오류를 쓰고, 모든 면을 같은 숫자로 통일한다.
 static void SetupBossFight(GameState* game, int drive, int floor, uint32_t seed, int faceValue) {
-    NewRun(game, seed);
+    NewRun(game, seed, 0);
     game->modifierA = MOD_BAD_SECTOR;
     game->modifierB = MOD_READ_ERROR;
     ConfigureDriveForTest(game, drive, seed, 1);
@@ -321,7 +443,7 @@ static int CheckCombatFxTrace() {
     }
 
     // ---- 새 턴·새 전투·새 런에서 기록이 남지 않는다 -----------------------
-    GameState fresh; NewRun(&fresh, 0xFC00000Au);
+    GameState fresh; NewRun(&fresh, 0xFC00000Au, 0);
     if (fresh.combatFxCount != 0 || fresh.combatFxOverflow != 0)
         return Fail("a new run must start with no combat fx events");
     GameState carry; SetupBossFight(&carry, 0, 0, 0xFC00000Bu, 5);
@@ -384,14 +506,21 @@ static int CheckDriveRulesStoryAndMusic() {
 
     // 스토리 코퍼스: 모든 선택 경로가 실제 파일 메타데이터와 최소 세 줄의
     // 단서를 가진다. 새 볼륨을 추가할 때 한 줄짜리 설정 요약으로 퇴행하지 않게 한다.
-    const StoryFragment* fixedStories[4] = {&STORY_INTRO_DATA, &STORY_TRUTH_DATA, &STORY_ENDING_DATA[0], &STORY_ENDING_DATA[1]};
-    for (int i = 0; i < 4; ++i) {
+    const StoryFragment* fixedStories[2 + ENDING_COUNT] = {&STORY_INTRO_DATA, &STORY_TRUTH_DATA,
+        &STORY_ENDING_DATA[0], &STORY_ENDING_DATA[1], &STORY_ENDING_DATA[2]};
+    for (int i = 0; i < 2 + ENDING_COUNT; ++i) {
         const StoryFragment* f = fixedStories[i];
         if (!f->title || !f->path || !f->stamp || !f->line1 || !f->line2 || !f->line3)
             return Fail("major story fragments need metadata and at least three lines");
     }
-    if (!STORY_ENDING_DATA[0].line5 || !STORY_ENDING_DATA[1].line5 || !STORY_TRUTH_DATA.line5)
-        return Fail("both endings and the truth need complete story data");
+    if (!STORY_TRUTH_DATA.line5) return Fail("the truth needs complete story data");
+    for (int i = 0; i < ENDING_COUNT; ++i) {
+        if (!STORY_ENDING_DATA[i].line4 || !STORY_ENDING_DATA[i].line5)
+            return Fail("every ending needs complete story data");
+        for (int j = 0; j < i; ++j)
+            if (!wcscmp(STORY_ENDING_DATA[i].title, STORY_ENDING_DATA[j].title))
+                return Fail("the endings must have distinct titles");
+    }
     for (int drive = 0; drive < DRIVE_COUNT; ++drive) for (int floor = 0; floor < 3; ++floor) {
         const StoryFragment* boss = &STORY_BOSS_DATA[drive][floor];
         const StoryFragment* logs = &STORY_LOGS_DATA[drive][floor];
@@ -402,7 +531,7 @@ static int CheckDriveRulesStoryAndMusic() {
     }
 
     // 진행: 인트로, 진실, 두 엔딩 모두 명시적인 phase를 거친다.
-    GameState story; NewRun(&story, 0xA1100007u);
+    GameState story; NewRun(&story, 0xA1100007u, 0);
     if (!CurrentStoryFragment(&story)) return Fail("intro story data must be available");
     AdvanceStory(&story); if (story.phase != PHASE_DRIVE_SELECT) return Fail("intro must return to drive selection");
     story.phase = PHASE_ENDING_CHOICE; SelectEnding(&story, 1);
@@ -434,12 +563,12 @@ static int CheckDriveRulesStoryAndMusic() {
 // ---------------------------------------------------------------------------
 
 static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserveModifiers, unsigned int seed) {
-    GameState game; NewRun(&game, seed);
+    GameState game; NewRun(&game, seed, drive == DRIVE_FINAL ? 0x3F : 0);
     game.modifierA = modifierA; game.modifierB = modifierB;
     ConfigureDriveForTest(&game, drive, seed, preserveModifiers);
     game.floor = 0; game.encounter = 0; BeginDirectorySelection(&game);
     game.playerMaxHp = 999; game.playerHp = 999; int guard = 0;
-    while (game.phase != PHASE_VICTORY && guard++ < 500) {
+    while (game.phase != PHASE_CHAPTER_CLEAR && game.phase != PHASE_VICTORY && guard++ < 500) {
         if (game.phase == PHASE_DIRECTORY) {
             SelectDirectoryChoice(&game, 0);
         } else if (game.phase == PHASE_COMBAT) {
@@ -461,7 +590,7 @@ static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserve
             SelectEnding(&game, 0);
         } else if (game.phase == PHASE_GAMEOVER) return 1;
     }
-    if (game.phase != PHASE_VICTORY) {
+    if (game.phase != (drive == DRIVE_FINAL ? PHASE_VICTORY : PHASE_CHAPTER_CLEAR)) {
         printf("  stuck: phase %d floor %d encounter %d turn %d combatsWon %d\n",
             (int)game.phase, game.floor, game.encounter, game.turn, game.combatsWon);
         return 2;
@@ -478,10 +607,16 @@ static int RunCompleteGame(int drive, int modifierA, int modifierB, int preserve
 
 static int CheckRosterIntegrity() {
     int kindCount = ENEMY_KIND_COUNT;
-    if (kindCount != 47) return Fail("enemy kind count must be 47 (11 legacy + 36 active)");
+    if (kindCount != 53) return Fail("enemy kind count must be 53 (11 legacy + 42 active)");
     int active[ENEMY_KIND_COUNT] = {};
     int gimmickSeen[GIMMICK_COUNT] = {};
     for (int d = 0; d < DRIVE_COUNT; ++d) {
+        const DriveInfo* volume = &DRIVE_INFO[d];
+        if (!volume->letter || !volume->letter[0] || !volume->label || !volume->label[0]
+            || !volume->description || !volume->perkText || !volume->pathPreview
+            || !DRIVE_LAW_INFO[d].name || !DRIVE_LAW_INFO[d].brief || !DRIVE_LAW_INFO[d].description)
+            return Fail("every volume needs complete metadata and a law");
+        for (int floor = 0; floor < 3; ++floor) if (!volume->paths[floor] || !volume->paths[floor][0]) return Fail("all volume paths must exist");
         for (int i = 0; i < DRIVE_MOB_COUNT; ++i) {
             int kind = DRIVE_MOBS[d][i];
             if (kind < 0 || kind >= ENEMY_KIND_COUNT) return Fail("drive mob kind out of range");
@@ -506,14 +641,14 @@ static int CheckRosterIntegrity() {
             if (info->role != ROLE_BOSS) return Fail("drive bosses must have the boss role");
             if (!IsBossKind(kind)) return Fail("IsBossKind must agree with the role metadata");
             if (info->gimmick <= GIMMICK_NONE || info->gimmick >= GIMMICK_COUNT) return Fail("active bosses need a valid gimmick");
-            if (gimmickSeen[info->gimmick]) return Fail("all 18 boss gimmicks must be distinct");
+            if (gimmickSeen[info->gimmick]) return Fail("all 21 boss gimmicks must be distinct");
             gimmickSeen[info->gimmick] = 1;
             if (BOSS_GIMMICK_INFO[info->gimmick].family == FAM_NONE) return Fail("boss gimmicks need a family");
         }
     }
     int activeCount = 0;
     for (int k = 0; k < ENEMY_KIND_COUNT; ++k) if (active[k]) ++activeCount;
-    if (activeCount != 36) return Fail("active roster must reference exactly 36 kinds");
+    if (activeCount != 42) return Fail("active roster must reference exactly 42 kinds");
     // 레거시 검증: 로스터 미참조, 보스 3종은 GIMMICK_NONE
     for (int k = 0; k < MOB_C_DLL_HIJACKER; ++k) {
         if (active[k]) return Fail("legacy kinds must stay out of the rosters");
@@ -576,7 +711,7 @@ static int CheckSprites() {
 
 static int CheckSpawnMatrix() {
     for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
-        GameState game; NewRun(&game, 0x1000u + (unsigned int)drive);
+        GameState game; NewRun(&game, 0x1000u + (unsigned int)drive, 0);
         ConfigureDriveForTest(&game, drive, 0xABCD1234u + (unsigned int)drive, 0);
         int seen[ENEMY_KIND_COUNT] = {};
         for (int floor = 0; floor < 3; ++floor) {
@@ -601,17 +736,17 @@ static int CheckSpawnMatrix() {
     }
     // 같은 시드는 같은 순서를 재현한다
     GameState a, b;
-    NewRun(&a, 7u); ConfigureDriveForTest(&a, 2, 0xFEED0001u, 0);
-    NewRun(&b, 99u); ConfigureDriveForTest(&b, 2, 0xFEED0001u, 0);
+    NewRun(&a, 7u, 0); ConfigureDriveForTest(&a, 2, 0xFEED0001u, 0);
+    NewRun(&b, 99u, 0); ConfigureDriveForTest(&b, 2, 0xFEED0001u, 0);
     for (int i = 0; i < 6; ++i) if (a.mobSchedule[i] != b.mobSchedule[i]) return Fail("mob schedule must be seed-reproducible");
     // 유효하지 않은 드라이브는 적을 만들지 않고 드라이브 선택으로 복귀한다
-    GameState bad; NewRun(&bad, 5u);
+    GameState bad; NewRun(&bad, 5u, 0);
     bad.floor = 0; bad.encounter = 0;
     if (StartCombat(&bad) != 0) return Fail("invalid drive must fail to start combat");
     if (bad.phase != PHASE_DRIVE_SELECT || bad.enemyCount != 0) return Fail("invalid drive must return to drive select with no enemies");
     // 일반 몹은 층 성장식으로 강해진다: 스폰된 체력이 base + growth × floor와 일치
     for (int floor = 0; floor < 3; ++floor) {
-        GameState g; NewRun(&g, 11u); ConfigureDriveForTest(&g, 0, 0xC0DE01u, 1);
+        GameState g; NewRun(&g, 11u, 0); ConfigureDriveForTest(&g, 0, 0xC0DE01u, 1);
         g.modifierA = MOD_READ_ERROR; g.modifierB = MOD_CHECKSUM;
         g.floor = floor; g.encounter = 0; StartCombat(&g);
         const EnemyInfo* info = &ENEMY_INFO[g.enemies[0].kind];
@@ -742,7 +877,7 @@ static int CheckOfflineGimmicks() {
     if (g.dice[announced].offline) return Fail("offline must recover on the next turn");
 
     // 오프라인 턴 조각화 억제 + DEFRAG 무관성
-    GameState f; NewRun(&f, 0xE0E0E002u);
+    GameState f; NewRun(&f, 0xE0E0E002u, 0);
     f.modifierA = MOD_FRAGMENTATION; f.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&f, 2, 0xE0E0E002u, 1);
     f.floor = 0; f.encounter = 2; f.playerMaxHp = 999; f.playerHp = 999;
@@ -754,7 +889,7 @@ static int CheckOfflineGimmicks() {
     if (f.boss.offlineDie < 0) return Fail("autoplay must fire on turn 3");
     for (int d = 0; d < 3; ++d) if (f.dice[d].disabled) return Fail("fragmentation must be suppressed on the offline turn");
     // DEFRAG는 기존 조각화만 무효화하고 오프라인은 막지 않는다
-    GameState dfr; NewRun(&dfr, 0xE0E0E003u);
+    GameState dfr; NewRun(&dfr, 0xE0E0E003u, 0);
     dfr.modifierA = MOD_FRAGMENTATION; dfr.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&dfr, 2, 0xE0E0E003u, 1);
     dfr.tsrInstalled[TSR_DEFRAG] = 1;
@@ -1129,7 +1264,7 @@ static int AutoAdvanceToDirectory(GameState* game, int guardLimit) {
 static int CheckDirectoryGeneration() {
     for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
         for (unsigned int seed = 1; seed <= 40; ++seed) {
-            GameState g; NewRun(&g, 0xD1A00000u + seed * 131u + (unsigned int)drive);
+            GameState g; NewRun(&g, 0xD1A00000u + seed * 131u + (unsigned int)drive, drive == DRIVE_FINAL ? 0x3F : 0);
             g.driveChoices[0] = drive;
             SelectDrive(&g, 0);
             if (g.phase != PHASE_DIRECTORY) return Fail("mounting a volume must open the directory choice");
@@ -1171,7 +1306,7 @@ static int CheckDirectoryGeneration() {
 
 // 별도 난수열: 조회·잘못된 입력은 상태를 바꾸지 않고, 같은 seed는 같은 카드를 낸다.
 static int CheckDirectoryRng() {
-    GameState g; NewRun(&g, 0xD1B00001u); g.driveChoices[0] = 0;
+    GameState g; NewRun(&g, 0xD1B00001u, 0); g.driveChoices[0] = 0;
     uint32_t combatRngBefore = g.rng;
     SelectDrive(&g, 0);
     if (g.rng == combatRngBefore) return Fail("mounting must still consume the schedule seed");
@@ -1195,13 +1330,13 @@ static int CheckDirectoryRng() {
     SelectDirectoryChoice(&g, 99);
     if (memcmp(&snapshot, &g, sizeof(GameState)) != 0) return Fail("an invalid directory index must not change the state");
     // 잘못된 phase에서도 마찬가지다.
-    GameState wrongPhase; NewRun(&wrongPhase, 0xD1B00002u);
+    GameState wrongPhase; NewRun(&wrongPhase, 0xD1B00002u, 0);
     GameState wrongPhaseCopy = wrongPhase;
     SelectDirectoryChoice(&wrongPhase, 0);
     if (memcmp(&wrongPhaseCopy, &wrongPhase, sizeof(GameState)) != 0) return Fail("selecting a directory outside its phase must be ignored");
 
     // 생성 자체는 전투 난수열을 소비하지 않는다.
-    GameState quiet; NewRun(&quiet, 0xD1B00004u); quiet.driveChoices[0] = 0; SelectDrive(&quiet, 0);
+    GameState quiet; NewRun(&quiet, 0xD1B00004u, 0); quiet.driveChoices[0] = 0; SelectDrive(&quiet, 0);
     uint32_t rngBeforeGeneration = quiet.rng;
     uint32_t dirRngBefore = quiet.directory.rng;
     quiet.phase = PHASE_DIRECTORY;
@@ -1211,8 +1346,8 @@ static int CheckDirectoryRng() {
 
     // 같은 seed·드라이브면 같은 선택지가 재현된다.
     GameState a1, a2;
-    NewRun(&a1, 0xD1B00003u); a1.driveChoices[0] = 3; SelectDrive(&a1, 0);
-    NewRun(&a2, 0xD1B00003u); a2.driveChoices[0] = 3; SelectDrive(&a2, 0);
+    NewRun(&a1, 0xD1B00003u, 0); a1.driveChoices[0] = 3; SelectDrive(&a1, 0);
+    NewRun(&a2, 0xD1B00003u, 0); a2.driveChoices[0] = 3; SelectDrive(&a2, 0);
     for (int step = 0; step < 4; ++step) {
         if (a1.phase != PHASE_DIRECTORY || a2.phase != PHASE_DIRECTORY) break;
         if (memcmp(a1.directory.choices, a2.directory.choices, sizeof(a1.directory.choices)) != 0)
@@ -1225,7 +1360,7 @@ static int CheckDirectoryRng() {
 
 // 진행: 드라이브 → 디렉터리 → 일반전 → 보상 → 디렉터리 → 일반전 → 보상 → 보스 → 전리품 → 다음 층
 static int CheckDirectoryProgression() {
-    GameState g; NewRun(&g, 0xD1C00001u); g.driveChoices[0] = 0;
+    GameState g; NewRun(&g, 0xD1C00001u, 0); g.driveChoices[0] = 0;
     SelectDrive(&g, 0);
     if (g.phase != PHASE_DIRECTORY || g.encounter != 0) return Fail("the first directory must sit before encounter 0");
     if (!ForceDirectoryNode(&g, DIR_NODE_PROCESS)) return Fail("choosing a directory must start the scheduled combat");
@@ -1251,8 +1386,8 @@ static int CheckDirectoryProgression() {
     if (g.phase != PHASE_DIRECTORY || g.floor != 1 || g.encounter != 0) return Fail("the next floor must open with a directory choice");
     if (g.directory.intelThisFloor) return Fail("intel must not carry across floors");
 
-    // 최종 보스는 진실과 엔딩 선택을 모두 거친 뒤 승리로 간다.
-    GameState last; NewRun(&last, 0xD1C00002u); last.modifierA = MOD_BAD_SECTOR; last.modifierB = MOD_CHECKSUM;
+    // 일반 볼륨의 마지막 보스는 조각 복구와 챕터 클리어로 이어진다.
+    GameState last; NewRun(&last, 0xD1C00002u, 0); last.modifierA = MOD_BAD_SECTOR; last.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&last, TEST_DRIVE, TEST_SEED, 1);
     last.floor = 2; last.encounter = 2; last.playerMaxHp = 999; last.playerHp = 999;
     StartCombat(&last);
@@ -1260,20 +1395,18 @@ static int CheckDirectoryProgression() {
     AssignDieToSlot(&last, 0, SLOT_ATTACK); EndTurn(&last);
     if (last.phase != PHASE_STORY || last.story.kind != STORY_BOSS) return Fail("the final boss must reveal its drive story");
     AdvanceStory(&last);
-    if (last.phase != PHASE_STORY || last.story.kind != STORY_TRUTH) return Fail("the final boss story must reveal the truth");
+    if (last.phase != PHASE_STORY || last.story.kind != STORY_SHARD) return Fail("regular boss story must reveal its shard");
     AdvanceStory(&last);
-    if (last.phase != PHASE_ENDING_CHOICE) return Fail("truth must lead to the ending choice");
+    if (last.phase != PHASE_CHAPTER_CLEAR) return Fail("shard must lead to chapter clear");
     SelectEnding(&last, 0);
-    if (last.phase != PHASE_STORY || last.story.kind != STORY_ENDING_RESTORE) return Fail("ending selection must show its story");
-    AdvanceStory(&last);
-    if (last.phase != PHASE_VICTORY) return Fail("ending story must lead to victory");
+    if (last.phase != PHASE_CHAPTER_CLEAR) return Fail("regular volume must not offer an ending");
     return 0;
 }
 
 // 노드별 효과
 static int CheckDirectoryNodes() {
     // TEMP: 회복 상한, 보상 후보 2개, 그리고 다음 전투에서의 복귀
-    GameState temp; NewRun(&temp, 0xD1D00001u); temp.driveChoices[0] = 0; SelectDrive(&temp, 0);
+    GameState temp; NewRun(&temp, 0xD1D00001u, 0); temp.driveChoices[0] = 0; SelectDrive(&temp, 0);
     temp.playerHp = temp.playerMaxHp - 2;
     if (!ForceDirectoryNode(&temp, DIR_NODE_TEMP)) return Fail("temp must start the combat");
     if (temp.playerHp != temp.playerMaxHp) return Fail("temp must never overheal");
@@ -1294,12 +1427,12 @@ static int CheckDirectoryNodes() {
     AssignDieToSlot(&temp, 0, SLOT_ATTACK); EndTurn(&temp);
     if (temp.rewardChoiceCount != 3) return Fail("the reward candidate count must reset after temp");
 
-    GameState full; NewRun(&full, 0xD1D00002u); full.driveChoices[0] = 0; SelectDrive(&full, 0);
+    GameState full; NewRun(&full, 0xD1D00002u, 0); full.driveChoices[0] = 0; SelectDrive(&full, 0);
     full.playerHp = full.playerMaxHp;
     if (DirectoryNodeAllowed(&full, DIR_NODE_TEMP)) return Fail("temp must not be offered at full health");
 
     // CACHE: 임시 한도 +20B, 층 이동 시 해제, 그 결과 초과하면 정리 화면
-    GameState cache; NewRun(&cache, 0xD1D00003u); cache.driveChoices[0] = 0; SelectDrive(&cache, 0);
+    GameState cache; NewRun(&cache, 0xD1D00003u, 0); cache.driveChoices[0] = 0; SelectDrive(&cache, 0);
     int capacityBefore = EffectiveCapacity(&cache);
     if (!ForceDirectoryNode(&cache, DIR_NODE_CACHE)) return Fail("cache must start the combat");
     if (EffectiveCapacity(&cache) != capacityBefore + DIR_CACHE_BYTES) return Fail("cache must lift the floor capacity");
@@ -1327,7 +1460,7 @@ static int CheckDirectoryNodes() {
     if (cache.phase != PHASE_DIRECTORY || cache.floor != 1) return Fail("confirming that prune must open the new floor's directory");
 
     // LOGS: 판독 기록은 건드리지 않고 임시 정보만 연다
-    GameState logs; NewRun(&logs, 0xD1D00004u); logs.driveChoices[0] = 3; SelectDrive(&logs, 0);
+    GameState logs; NewRun(&logs, 0xD1D00004u, 0); logs.driveChoices[0] = 3; SelectDrive(&logs, 0);
     uint8_t scannedBefore[ENEMY_KIND_COUNT];
     memcpy(scannedBefore, logs.enemyScanned, sizeof(scannedBefore));
     if (!ForceDirectoryNode(&logs, DIR_NODE_LOGS)) return Fail("logs must start the combat");
@@ -1342,10 +1475,10 @@ static int CheckDirectoryNodes() {
     if (DirectoryNodeAllowed(&logs, DIR_NODE_LOGS)) return Fail("logs must not be offered twice on one floor");
 
     // INFECTED: 적 최대 체력 +20%와 강화 보상
-    GameState plain; NewRun(&plain, 0xD1D00005u); plain.driveChoices[0] = 0; SelectDrive(&plain, 0);
+    GameState plain; NewRun(&plain, 0xD1D00005u, 0); plain.driveChoices[0] = 0; SelectDrive(&plain, 0);
     if (!ForceDirectoryNode(&plain, DIR_NODE_PROCESS)) return Fail("the control run must start combat");
     int plainHp = plain.enemies[0].maxHp;
-    GameState infected; NewRun(&infected, 0xD1D00005u); infected.driveChoices[0] = 0; SelectDrive(&infected, 0);
+    GameState infected; NewRun(&infected, 0xD1D00005u, 0); infected.driveChoices[0] = 0; SelectDrive(&infected, 0);
     if (!ForceDirectoryNode(&infected, DIR_NODE_INFECTED)) return Fail("infected must start combat");
     if (infected.enemies[0].maxHp != plainHp * DIR_INFECTED_HP_PERCENT / 100)
         return Fail("infected must raise the enemy max hp by the fixed percent");
@@ -1367,7 +1500,7 @@ static int CheckDirectoryNodes() {
     }
 
     // CORRUPTED: 대상 면은 비용을 유지하고 출력만 0, 전투가 끝나면 풀린다
-    GameState corrupted; NewRun(&corrupted, 0xD1D00006u); corrupted.driveChoices[0] = 5; SelectDrive(&corrupted, 0);
+    GameState corrupted; NewRun(&corrupted, 0xD1D00006u, 0); corrupted.driveChoices[0] = 5; SelectDrive(&corrupted, 0);
     corrupted.floor = 1;
     int target = FirstUsableFaceIndex(&corrupted);
     if (target < 0) return Fail("the corrupted test needs a usable face");
@@ -1387,7 +1520,7 @@ static int CheckDirectoryNodes() {
     if (corrupted.rewardTier != 1) return Fail("corrupted must produce a tuned reward");
 
     // 사망해도 격리가 남지 않는다
-    GameState doomed; NewRun(&doomed, 0xD1D00007u); doomed.driveChoices[0] = 5; SelectDrive(&doomed, 0);
+    GameState doomed; NewRun(&doomed, 0xD1D00007u, 0); doomed.driveChoices[0] = 5; SelectDrive(&doomed, 0);
     doomed.floor = 1;
     if (!ForceDirectoryNode(&doomed, DIR_NODE_CORRUPTED)) return Fail("the death test must enter the corrupted combat");
     doomed.playerHp = 1;
@@ -1398,7 +1531,7 @@ static int CheckDirectoryNodes() {
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f)
         if (doomed.dice[d].faces[f].quarantined != QUAR_NONE) return Fail("dying must release the directory quarantine too");
     // 새 런은 경로 상태를 물려받지 않는다.
-    NewRun(&doomed, 0xD1D00008u);
+    NewRun(&doomed, 0xD1D00008u, 0);
     if (doomed.directory.activeKind != DIR_NODE_NONE || doomed.directory.previousKind != DIR_NODE_NONE
         || doomed.directory.intelThisFloor || doomed.directory.floorCapacityBonus != 0)
         return Fail("a new run must not inherit any directory state");
@@ -1406,7 +1539,7 @@ static int CheckDirectoryNodes() {
         if (doomed.directory.history[f][i] != DIR_NODE_NONE) return Fail("a new run must clear the directory history");
 
     // 면을 전부 지운 채로는 디렉터리로 진행할 수 없고, 같은 칸을 다시 누르면 복원된다.
-    GameState wiped; NewRun(&wiped, 0xD1D0000Au); wiped.driveChoices[0] = 0; SelectDrive(&wiped, 0);
+    GameState wiped; NewRun(&wiped, 0xD1D0000Au, 0); wiped.driveChoices[0] = 0; SelectDrive(&wiped, 0);
     wiped.phase = PHASE_PRUNE; wiped.pendingContinuation = CONTINUE_DIRECTORY;
     Face firstFace = wiped.dice[0].faces[0];
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) PruneFace(&wiped, d, f);
@@ -1419,14 +1552,14 @@ static int CheckDirectoryNodes() {
     ConfirmPrune(&wiped);
     if (wiped.phase != PHASE_DIRECTORY) return Fail("one restored face must let the prune resume the directory");
 
-    GameState originallyEmpty; NewRun(&originallyEmpty, 0xD1D0000Bu); originallyEmpty.phase = PHASE_PRUNE;
+    GameState originallyEmpty; NewRun(&originallyEmpty, 0xD1D0000Bu, 0); originallyEmpty.phase = PHASE_PRUNE;
     originallyEmpty.dice[0].faces[0].kind = FACE_EMPTY; originallyEmpty.dice[0].faces[0].value = 0;
     PruneFace(&originallyEmpty, 0, 0);
     if (CanUndoPrunedFace(&originallyEmpty, 0, 0) || originallyEmpty.dice[0].faces[0].kind != FACE_EMPTY)
         return Fail("a face that was already empty must not become undoable");
 
     // CORRUPTED는 출력 가능한 면이 모자라면 아예 등장하지 않는다.
-    GameState bare; NewRun(&bare, 0xD1D00009u); bare.driveChoices[0] = 5; SelectDrive(&bare, 0);
+    GameState bare; NewRun(&bare, 0xD1D00009u, 0); bare.driveChoices[0] = 5; SelectDrive(&bare, 0);
     bare.floor = 1;
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
         bare.dice[d].faces[f].kind = FACE_EMPTY; bare.dice[d].faces[f].value = 0;
@@ -1441,7 +1574,7 @@ static int CheckDirectoryPath() {
     for (int k = DIR_NODE_PROCESS; k < DIR_NODE_COUNT; ++k)
         if (wcslen(DIRECTORY_NODE_INFO[k].segment) > 11) return Fail("a directory segment must stay within 11 characters");
 
-    GameState g; NewRun(&g, 0xD1E00001u); g.driveChoices[0] = 0; SelectDrive(&g, 0);
+    GameState g; NewRun(&g, 0xD1E00001u, 0); g.driveChoices[0] = 0; SelectDrive(&g, 0);
     wchar_t path[96];
     FormatCurrentDirectory(&g, path, 96);
     if (wcscmp(path, DRIVE_INFO[0].paths[0]) != 0) return Fail("an unvisited floor must show only its own path");
@@ -1462,7 +1595,307 @@ static int CheckDirectoryPath() {
     return 0;
 }
 
+static int TestCampaignDriveChoices() {
+    // Exhaust every progress subset with enough seeds to cover both late-game
+    // volume choices and all five difficulty grades, without touching save I/O.
+    for (int mask = 0; mask < 64; ++mask) {
+        int remaining = 0, seenVolumes = 0, seenGrades = 0;
+        for (int d = 0; d < 6; ++d) if (!(mask & (1 << d))) ++remaining;
+        for (uint32_t seed = 0; seed < 256; ++seed) {
+            GameState game, repeat;
+            NewRun(&game, seed, (uint8_t)mask);
+            NewRun(&repeat, seed, (uint8_t)(mask | 0xC0));
+            if (memcmp(&game, &repeat, sizeof(game))) return Fail("campaign choices must be deterministic and ignore unused mask bits");
+            if (game.driveChoiceCount != (remaining ? 3 : 1)) return Fail("campaign candidate count");
+            for (int i = 0; i < game.driveChoiceCount; ++i) {
+                int d = game.driveChoices[i], grade = game.driveDifficulty[i];
+                if (remaining ? (d < 0 || d >= DRIVE_SELECTABLE_COUNT || (mask & (1 << d))) : (d != DRIVE_FINAL || grade != DIFF_EXPERT))
+                    return Fail("candidate must be an uncleared regular volume or unlocked final volume");
+                if (grade < 0 || grade >= DIFFICULTY_COUNT) return Fail("campaign difficulty range");
+                if (d < DRIVE_SELECTABLE_COUNT) seenVolumes |= 1 << d;
+                seenGrades |= 1 << grade;
+                for (int j = 0; j < i; ++j) {
+                    if (game.driveDifficulty[j] == grade) return Fail("campaign cards must offer distinct difficulties");
+                    if ((remaining >= 3) == (game.driveChoices[j] == d)) return Fail("campaign volume uniqueness or late-game repetition");
+                }
+                GameState mounted = game;
+                SelectDrive(&mounted, i);
+                if (mounted.phase != PHASE_DIRECTORY || mounted.selectedDrive != d || mounted.difficulty != grade)
+                    return Fail("each campaign card must mount its own volume and difficulty");
+            }
+            for (int i = game.driveChoiceCount; i < 3; ++i)
+                if (game.driveChoices[i] != -1 || game.driveDifficulty[i] != -1)
+                    return Fail("unused drive cards must have invalid sentinels");
+            SelectDrive(&game, -1); SelectDrive(&game, game.driveChoiceCount); SelectDrive(&game, 99);
+            if (memcmp(&game, &repeat, sizeof(game))) return Fail("invalid drive choices must not skip story or mutate state");
+            if (!remaining) {
+                AdvanceStory(&game); repeat = game;
+                for (int i = 1; i < 3; ++i) SelectDrive(&game, i);
+                if (game.phase != PHASE_DRIVE_SELECT || memcmp(&game, &repeat, sizeof(game)))
+                    return Fail("unlocked final volume must have only one selectable card");
+            }
+        }
+        if (seenVolumes != ((~mask) & 63)) return Fail("all remaining volumes must be reachable across seeds");
+        if (remaining && seenGrades != ((1 << DIFFICULTY_COUNT) - 1)) return Fail("all difficulty grades must remain available");
+    }
+    // Future single-card layouts must reject hidden card slots even if populated.
+    GameState single, before;
+    NewRun(&single, 7u, 0); single.driveChoiceCount = 1; before = single;
+    SelectDrive(&single, 1); SelectDrive(&single, 2);
+    if (memcmp(&single, &before, sizeof(single))) return Fail("hidden drive cards must not mount");
+    SelectDrive(&single, 0);
+    if (single.phase != PHASE_DIRECTORY) return Fail("single visible drive card must mount");
+    SelectDrive(0, 0);
+    printf("PASS: campaign choices, 64 masks x 256 seeds, distinct grades, mount and boundary checks\n");
+    return 0;
+}
+
+static int TestCampaignProgression() {
+    CampaignTestFile file;
+    if (!file.path[0]) return Fail("campaign progression temporary file");
+    for (int order = 0; order < 12; ++order) {
+        CampaignState campaign;
+        InitCampaign(&campaign);
+        for (int chapter = 0; chapter < 6; ++chapter) {
+            int drive = order < 6 ? (order + chapter) % 6 : (order - 6 + 6 - chapter) % 6;
+            uint8_t beforeMask = CampaignClearedMask(&campaign);
+            GameState game;
+            NewRun(&game, 0xCA030000u + (uint32_t)(order * 100 + chapter), beforeMask);
+            const StoryFragment* intro = CurrentStoryFragment(&game);
+            const StoryFragment* expected = chapter ? &STORY_RESUME_DATA : &STORY_INTRO_DATA;
+            if (!intro || lstrcmpW(intro->title, expected->title)) return Fail("first/resume intro branch");
+            if (RecoveredShardCount(game.clearedMask) != chapter) return Fail("resume shard count");
+            game.driveChoices[0] = drive; SelectDrive(&game, 0);
+            int guard = 0, shards = 0;
+            while (game.phase != PHASE_CHAPTER_CLEAR && guard++ < 100) {
+                if (game.phase == PHASE_COMBAT) {
+                    bool finalBoss = game.floor == 2 && game.encounter == 2;
+                    DebugWinCombat(&game);
+                    uint8_t expectedMask = finalBoss ? (uint8_t)(beforeMask | (1u << drive)) : beforeMask;
+                    if (game.clearedMask != expectedMask) return Fail("only a volume's final boss awards its shard");
+                    bool changed = RecordCampaignClears(&campaign, game.clearedMask);
+                    if (changed != finalBoss) return Fail("campaign merge must report each new clear once");
+                    if (finalBoss) {
+                        // Persist before the player reads the boss/shard records.
+                        if (!SaveCampaign(&campaign, file.path)) return Fail("checkpoint save on final boss defeat");
+                        CampaignState reloaded;
+                        if (!LoadCampaign(&reloaded, file.path) || CampaignClearedMask(&reloaded) != expectedMask)
+                            return Fail("closing on the boss story must preserve the clear");
+                        if (RecordCampaignClears(&campaign, game.clearedMask)) return Fail("repeated clear notification must be idempotent");
+                    }
+                } else if (game.phase == PHASE_DIRECTORY) SelectDirectoryChoice(&game, 0);
+                else if (game.phase == PHASE_REWARD) SkipReward(&game);
+                else if (game.phase == PHASE_PRUNE) {
+                    while (UsedBytes(&game) > EffectiveCapacity(&game)) {
+                        int face = MostExpensiveFace(&game); if (face < 0) return Fail("campaign prune fixture");
+                        PruneFace(&game, face / 6, face % 6);
+                    }
+                    ConfirmPrune(&game);
+                } else if (game.phase == PHASE_STORY) {
+                    if (game.story.kind == STORY_TRUTH || game.story.kind == STORY_ENDING_RESTORE || game.story.kind == STORY_ENDING_ROGUE)
+                        return Fail("regular campaign must not reveal truth or endings");
+                    if (game.story.kind == STORY_SHARD) {
+                        const StoryFragment* shard = CurrentStoryFragment(&game);
+                        if (!shard || lstrcmpW(shard->path, STORY_SHARD_DATA[drive].path) || !shard->line4)
+                            return Fail("every volume must recover its fixed shard record");
+                        ++shards;
+                    }
+                    AdvanceStory(&game);
+                } else return Fail("unexpected campaign phase");
+            }
+            if (game.phase != PHASE_CHAPTER_CLEAR || game.combatsWon != 9 || shards != 1
+                || RecoveredShardCount(CampaignClearedMask(&campaign)) != chapter + 1)
+                return Fail("each chapter must finish nine combats and recover one shard");
+            if (campaign.finalCleared || campaign.endingSeen[0] || campaign.endingSeen[1] || campaign.endingSeen[2])
+                return Fail("regular clears must not mark the final volume or endings");
+            // Reboot and verify that the next selection never includes this volume.
+            if (!LoadCampaign(&campaign, file.path)) return Fail("between-chapter reload");
+            NewRun(&game, 123u, CampaignClearedMask(&campaign));
+            for (int i = 0; i < game.driveChoiceCount; ++i)
+                if (game.clearedMask & (1u << game.driveChoices[i])) return Fail("continued campaign must exclude all recovered volumes");
+        }
+        GameState complete;
+        NewRun(&complete, 42u, CampaignClearedMask(&campaign));
+        if (lstrcmpW(CurrentStoryFragment(&complete)->title, STORY_RECOVERED_DATA.title)) return Fail("complete intro branch");
+        AdvanceStory(&complete);
+        if (complete.phase != PHASE_DRIVE_SELECT || complete.driveChoiceCount != 1 || complete.driveChoices[0] != DRIVE_FINAL)
+            return Fail("six fragments must unlock the final volume");
+    }
+    CampaignState campaign; InitCampaign(&campaign); RecordCampaignClears(&campaign, 0x15);
+    GameState dead; NewRun(&dead, 123u, CampaignClearedMask(&campaign));
+    SelectDrive(&dead, 0); StartCombat(&dead);
+    dead.playerHp = 1; dead.playerBlock = 0;
+    for (int i = 0; i < dead.enemyCount; ++i) {
+        dead.enemies[i].hp = dead.enemies[i].maxHp = 999;
+        dead.enemies[i].intent = INTENT_ATTACK; dead.enemies[i].intentValue = 999;
+    }
+    AssignDieToSlot(&dead, 0, SLOT_ATTACK);
+    EndTurn(&dead);
+    if (dead.phase != PHASE_GAMEOVER || dead.clearedMask != 0x15 || RecordCampaignClears(&campaign, dead.clearedMask))
+        return Fail("death must not award or erase campaign progress");
+    NewRun(&dead, 124u, CampaignClearedMask(&campaign));
+    if (dead.clearedMask != 0x15 || dead.playerHp != dead.playerMaxHp) return Fail("retry must keep progress and reset the run");
+    printf("PASS: 12 complete six-volume campaigns, checkpoint reloads, fixed shards, death/retry, no early endings\n");
+    return 0;
+}
+
+static int CheckFinalVolume() {
+    GameState locked; NewRun(&locked, 17u, 0x1F);
+    locked.driveChoices[0] = DRIVE_FINAL;
+    GameState before = locked; SelectDrive(&locked, 0);
+    if (memcmp(&locked, &before, sizeof(locked))) return Fail("final volume must reject an incomplete campaign");
+    GameState g; SetupBossFight(&g, DRIVE_FINAL, 0, 0xA400001u, 3);
+    if (g.boss.gimmick != GIMMICK_SIGNATURE || EffectiveLawDrive(&g) != 0) return Fail("final floor one signature/system law");
+    g.enemies[0].hp = g.enemies[0].maxHp = 999;
+    AssignDieToSlot(&g, 0, SLOT_ATTACK);
+    TurnPreview preview; PreviewTurn(&g, &preview);
+    if (preview.slotOutput[SLOT_ATTACK]) return Fail("odd signature preview must be zero");
+    int hp = g.enemies[0].hp; g.enemies[0].block = 0; EndTurn(&g);
+    if (g.enemies[0].hp != hp || g.boss.firedFx != GIMMICK_SIGNATURE) return Fail("odd signature must reject output and fire FX");
+    if (g.boss.signatureSlot != SLOT_DEFEND) return Fail("signature must rotate each turn");
+    SetAllFaces(&g, FACE_WILD, 3); AssignDieToSlot(&g, 0, SLOT_DEFEND); PreviewTurn(&g, &preview);
+    if (FacePower(RolledFace(&g, 0)) % 2 && preview.slotOutput[SLOT_DEFEND]) return Fail("rejected signature must suppress special face bonuses");
+    SetupBossFight(&g, DRIVE_FINAL, 0, 0xA400001u, 4);
+    g.enemies[0].block = 0; hp = g.enemies[0].hp; AttackTurn(&g);
+    if (g.enemies[0].hp != hp - 5) return Fail("even signature must receive system law bonus");
+
+    SetupBossFight(&g, DRIVE_FINAL, 1, 0xA400002u, 4);
+    if (EffectiveLawDrive(&g) != 1 || g.boss.gimmick != GIMMICK_SEVENTEENTH) return Fail("final floor two copy/archive law");
+    g.enemies[0].hp = g.enemies[0].maxHp = 999;
+    int baseAttack = g.enemies[0].intentValue;
+    AttackTurn(&g);
+    if (g.boss.copiedPower != 4 || g.enemies[0].intentValue != baseAttack + 4) return Fail("copy must add previous highest output to next attack");
+    AttackTurn(&g);
+    if (g.boss.copiedPower != 6 || g.enemies[0].intentValue != baseAttack + 6) return Fail("copy must include archive placement bonus");
+    AssignDieToSlot(&g, 0, SLOT_DEFEND); AssignDieToSlot(&g, 1, SLOT_AMPLIFY);
+    PreviewTurn(&g, &preview);
+    int best = 0; for (int s = 0; s < SLOT_COUNT; ++s) if (preview.slotOutput[s] > best) best = preview.slotOutput[s];
+    EndTurn(&g);
+    if (g.boss.copiedPower != best) return Fail("copy must also sample non-attack outputs");
+
+    SetupBossFight(&g, DRIVE_FINAL, 2, 0xA400003u, 1);
+    if (EffectiveLawDrive(&g) != 3 || g.boss.countdown != 4) return Fail("final floor three network law/countdown");
+    g.enemies[0].hp = g.enemies[0].maxHp = 999;
+    for (int t = 0; t < 3; ++t) AttackTurn(&g);
+    if (g.permanentSlotMask || !SlotLockedNextTurn(&g, SLOT_AMPLIFY)) return Fail("seal must announce before firing");
+    SetAllFaces(&g, FACE_NUMBER, 12); AttackTurn(&g);
+    if (g.boss.countdown != 1 || g.permanentSlotMask) return Fail("twelve damage must pause the seal countdown");
+    SetAllFaces(&g, FACE_NUMBER, 1); AttackTurn(&g);
+    if (!SlotLockedThisTurn(&g, SLOT_AMPLIFY) || AssignDieToSlot(&g, 1, SLOT_AMPLIFY)) return Fail("permanent seal must reject placement");
+    for (int t = 0; t < 8; ++t) AttackTurn(&g);
+    if (g.permanentSlotMask != ((1 << SLOT_AMPLIFY) | (1 << SLOT_CHAIN) | (1 << SLOT_DEFEND)) || SlotLockedThisTurn(&g, SLOT_ATTACK))
+        return Fail("last write must preserve attack after all three seals");
+    g.clearedMask = 0x3F;
+    DebugWinCombat(&g);
+    if (!g.finalVolumeCleared || g.clearedMask != 0x3F || !SlotLockedThisTurn(&g, SLOT_AMPLIFY)) return Fail("final kill must preserve seals and mark only final clear");
+    if (g.story.kind != STORY_BOSS) return Fail("final boss record must precede completion");
+    AdvanceStory(&g);
+    if (g.phase != PHASE_STORY || g.story.kind != STORY_TRUTH)
+        return Fail("the final boss record must open the truth instead of a seventh shard");
+    if (CommittedEnding(&g) >= 0) return Fail("the truth must not commit an ending on its own");
+    AdvanceStory(&g);
+    if (g.phase != PHASE_ENDING_CHOICE) return Fail("the truth must lead to the final command");
+    CampaignState campaign; InitCampaign(&campaign); RecordCampaignClears(&campaign, g.clearedMask);
+    campaign.finalCleared = g.finalVolumeCleared;
+    CampaignTestFile file;
+    if (!SaveCampaign(&campaign, file.path) || !LoadCampaign(&campaign, file.path) || !campaign.finalCleared
+        || campaign.endingSeen[0] || campaign.endingSeen[1] || campaign.endingSeen[2]) return Fail("final clear must persist independently of endings");
+
+    // 최종 명령 3종이 각각 다른 에필로그를 열고, 고른 것만 기록으로 남는다.
+    for (int ending = 0; ending < ENDING_COUNT; ++ending) {
+        GameState pick = g;
+        pick.phase = PHASE_ENDING_CHOICE;
+        SelectEnding(&pick, ending);
+        if (pick.phase != PHASE_STORY || pick.story.selectedEnding != ending)
+            return Fail("every final command must open its own epilogue");
+        // 헤더의 static 데이터는 번역 단위마다 복제되므로 포인터 대신 내용으로 확인한다.
+        const StoryFragment* epilogue = CurrentStoryFragment(&pick);
+        if (!epilogue || wcscmp(epilogue->title, STORY_ENDING_DATA[ending].title)
+            || wcscmp(epilogue->path, STORY_ENDING_DATA[ending].path))
+            return Fail("epilogue text must match the chosen command");
+        if (CommittedEnding(&pick) != ending) return Fail("choosing a command must commit that ending");
+        AdvanceStory(&pick);
+        if (pick.phase != PHASE_VICTORY || CommittedEnding(&pick) != ending)
+            return Fail("the epilogue must finish at victory with its ending still committed");
+        CampaignState seen; InitCampaign(&seen);
+        if (!RecordCampaignEnding(&seen, ending) || RecordCampaignEnding(&seen, ending))
+            return Fail("an ending must be recorded exactly once");
+        if (CampaignSeenEndingMask(&seen) != (1u << ending)) return Fail("only the chosen ending may be marked seen");
+    }
+    GameState reject = g;
+    reject.phase = PHASE_ENDING_CHOICE;
+    SelectEnding(&reject, ENDING_COUNT);
+    SelectEnding(&reject, -1);
+    if (reject.phase != PHASE_ENDING_CHOICE) return Fail("out-of-range commands must leave the choice untouched");
+    CampaignState guard; InitCampaign(&guard);
+    if (RecordCampaignEnding(&guard, -1) || RecordCampaignEnding(&guard, ENDING_COUNT) || CampaignSeenEndingMask(&guard))
+        return Fail("out-of-range endings must not be recorded");
+    NewRun(&g, 18u, CampaignClearedMask(&campaign));
+    if (g.permanentSlotMask || g.finalVolumeCleared || g.driveChoices[0] != DRIVE_FINAL) return Fail("final retry must reset combat state and remain unlocked");
+    SelectDrive(&g, 0); StartCombat(&g); g.playerHp = 1;
+    for (int e = 0; e < g.enemyCount; ++e) { g.enemies[e].hp = 999; g.enemies[e].intent = INTENT_ATTACK; g.enemies[e].intentValue = 999; }
+    AssignDieToSlot(&g, 0, SLOT_DEFEND); EndTurn(&g);
+    if (g.phase != PHASE_GAMEOVER || g.finalVolumeCleared || g.clearedMask != 0x3F) return Fail("final death must keep all shards without awarding a clear");
+    MusicState a, b, x; MusicInit(&a); MusicInit(&b); MusicInit(&x);
+    MusicSetDrive(&a, DRIVE_FINAL); MusicSetDrive(&b, DRIVE_FINAL); MusicSetDrive(&x, 5);
+    MusicSetScene(&a, MUSIC_SCENE_PLAY); MusicSetScene(&b, MUSIC_SCENE_PLAY); MusicSetScene(&x, MUSIC_SCENE_PLAY);
+    MusicSetIntensity(&a, 2); MusicSetIntensity(&b, 2); MusicSetIntensity(&x, 2);
+    static int32_t ab[40000] = {}, bb[40000] = {}, xb[40000] = {};
+    MusicRender(&a, ab, 40000); MusicRender(&b, bb, 40000); MusicRender(&x, xb, 40000);
+    int nonzero = 0; for (int i = 0; i < 40000; ++i) nonzero |= ab[i];
+    if (DRIVE_COUNT != MUSIC_DRIVE_COUNT || !nonzero || memcmp(ab, bb, sizeof(ab)) || !memcmp(ab, xb, sizeof(ab))
+        || a.currentDrive != DRIVE_FINAL || a.stepCount != 16) return Fail("final BGM must be distinct, audible and deterministic");
+    printf("PASS: final volume gating, three gimmicks, rotating laws, permanent seals, clear persistence, death/retry and seventh BGM\n");
+    return 0;
+}
+
+// Admin terminal `winwin`. It must fold the mounted volume through the ordinary
+// clear path (shard, boss record, chapter close) and refuse everywhere else.
+static int CheckDebugWinDrive() {
+    GameState idle; NewRun(&idle, 0xD1000000u, 0);
+    GameState untouched = idle;
+    if (DebugWinDrive(&idle)) return Fail("winwin must refuse before a volume is mounted");
+    if (memcmp(&idle, &untouched, sizeof(idle))) return Fail("a refused winwin must not touch the board");
+
+    for (int drive = 0; drive < 6; ++drive) {
+        GameState g; NewRun(&g, 0xD1000001u + (uint32_t)drive, 0);
+        g.driveChoices[0] = drive; SelectDrive(&g, 0);
+        if (g.selectedDrive != drive) return Fail("winwin fixture must mount the requested volume");
+        if (!DebugWinDrive(&g)) return Fail("winwin must fold the mounted volume");
+        if (g.clearedMask != (uint8_t)(1u << drive)) return Fail("winwin must award exactly the mounted volume's shard");
+        if (g.finalVolumeCleared) return Fail("a regular volume must not mark the final clear");
+        if (g.phase != PHASE_STORY || g.story.kind != STORY_BOSS) return Fail("winwin must open the boss record like a real clear");
+        int guard = 0, shards = 0;
+        while (g.phase == PHASE_STORY && guard++ < 8) {
+            if (g.story.kind == STORY_SHARD) ++shards;
+            AdvanceStory(&g);
+        }
+        if (g.phase != PHASE_CHAPTER_CLEAR || shards != 1) return Fail("winwin must close the chapter on one recovered shard");
+        GameState closed = g;
+        if (DebugWinDrive(&g)) return Fail("winwin must refuse once the chapter is closed");
+        if (memcmp(&g, &closed, sizeof(g))) return Fail("a refused winwin must leave the closed chapter alone");
+    }
+
+    GameState fin; NewRun(&fin, 0xD1000100u, 0x3F);
+    fin.driveChoices[0] = DRIVE_FINAL; SelectDrive(&fin, 0);
+    if (fin.selectedDrive != DRIVE_FINAL) return Fail("winwin fixture must mount the final volume");
+    if (!DebugWinDrive(&fin)) return Fail("winwin must fold the final volume too");
+    if (!fin.finalVolumeCleared || fin.clearedMask != 0x3F) return Fail("folding the final volume must mark only the final clear");
+    int guard = 0;
+    while (fin.phase == PHASE_STORY && guard++ < 8) AdvanceStory(&fin);
+    if (fin.phase != PHASE_ENDING_CHOICE) return Fail("the folded final volume must still open the final command");
+    if (CommittedEnding(&fin) >= 0) return Fail("folding must not commit an ending on its own");
+
+    printf("PASS: terminal winwin folds six volumes and the final one through the normal clear path\n");
+    return 0;
+}
+
 int main() {
+    if (TestCampaignStorage()) return 1;
+    if (TestCampaignDriveChoices()) return 1;
+    if (TestCampaignProgression()) return 1;
+    if (CheckFinalVolume()) return 1;
+    if (CheckDebugWinDrive()) return 1;
     LoadTranslations();
     SetUiLanguage(LANGUAGE_ENGLISH);
     if (lstrcmpW(LocalizeText(L"설정"), L"Settings") != 0)
@@ -1491,7 +1924,7 @@ int main() {
     if (CheckDirectoryNodes()) return 1;
     if (CheckDirectoryPath()) return 1;
 
-    GameState base; NewRun(&base, 0x12345678u);
+    GameState base; NewRun(&base, 0x12345678u, 0);
     if (DeckBytes(&base) != 63) return Fail("starting deck must be 63 bytes");
     if (base.phase != PHASE_STORY || base.story.kind != STORY_INTRO) return Fail("new run must begin with the boot story");
     if (base.driveChoices[0] == base.driveChoices[1] || base.driveChoices[0] == base.driveChoices[2]
@@ -1514,16 +1947,16 @@ int main() {
     base.floor = 2; base.modifierA = MOD_OVERALLOC; base.modifierB = MOD_CHECKSUM; base.selectedDrive = -1;
     if (EffectiveCapacity(&base) != 190) return Fail("overallocation must add 60 bytes");
 
-    GameState capPerk; NewRun(&capPerk, 0xD01D01u);
+    GameState capPerk; NewRun(&capPerk, 0xD01D01u, 0);
     capPerk.driveChoices[0] = 1; // D:\ ARCHIVE - 용량 +15B, 손상에 과잉 할당 포함
     SelectDrive(&capPerk, 0);
     if (EffectiveCapacity(&capPerk) != 240 + 60 + DRIVE_INFO[1].perkValue) return Fail("capacity perk must add its bonus");
-    GameState hpPerk; NewRun(&hpPerk, 0xD02D02u);
+    GameState hpPerk; NewRun(&hpPerk, 0xD02D02u, 0);
     hpPerk.driveChoices[0] = 0; // C:\ SYSTEM - 시작 최대 체력 +6
     SelectDrive(&hpPerk, 0);
     if (hpPerk.playerMaxHp != 40 + DRIVE_INFO[0].perkValue || hpPerk.playerHp != hpPerk.playerMaxHp) return Fail("hp perk must raise starting hp");
 
-    GameState prune; NewRun(&prune, 0xCAFEBABEu); prune.floor = 2; prune.modifierA = MOD_CHECKSUM; prune.modifierB = MOD_FRAGMENTATION; prune.phase = PHASE_PRUNE;
+    GameState prune; NewRun(&prune, 0xCAFEBABEu, 0); prune.floor = 2; prune.modifierA = MOD_CHECKSUM; prune.modifierB = MOD_FRAGMENTATION; prune.phase = PHASE_PRUNE;
     ConfigureDriveForTest(&prune, TEST_DRIVE, TEST_SEED, 1);
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
         prune.dice[d].faces[f].kind = FACE_WILD; prune.dice[d].faces[f].value = (uint8_t)FACE_INFO[FACE_WILD].power; prune.dice[d].faces[f].damaged = 0;
@@ -1534,13 +1967,13 @@ int main() {
     }
     ConfirmPrune(&prune); if (prune.phase != PHASE_COMBAT) return Fail("valid pruned deck must continue");
 
-    GameState burn; NewRun(&burn, 0xB0010001u); burn.modifierA = MOD_BAD_SECTOR; burn.modifierB = MOD_CHECKSUM;
+    GameState burn; NewRun(&burn, 0xB0010001u, 0); burn.modifierA = MOD_BAD_SECTOR; burn.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&burn, TEST_DRIVE, TEST_SEED, 1); StartCombat(&burn);
     burn.enemies[0].hp = 3; burn.enemies[0].burn = 1; burn.enemies[0].intent = INTENT_GUARD; burn.enemies[0].intentValue = 0;
     AssignDieToSlot(&burn, 0, SLOT_DEFEND); EndTurn(&burn);
     if (burn.phase != PHASE_REWARD || burn.combatsWon != 1) return Fail("burn killing the last enemy must end combat immediately");
 
-    GameState corrupt; NewRun(&corrupt, 0xC0110001u); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM;
+    GameState corrupt; NewRun(&corrupt, 0xC0110001u, 0); corrupt.modifierA = MOD_BAD_SECTOR; corrupt.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&corrupt, TEST_DRIVE, TEST_SEED, 1); StartCombat(&corrupt);
     SetAllFaces(&corrupt, FACE_NUMBER, 6);   // 어떤 면이 나와도 방어도는 6
     corrupt.enemies[0].hp = corrupt.enemies[0].maxHp; corrupt.enemies[0].intent = INTENT_CORRUPT; corrupt.enemies[0].intentValue = 12;
@@ -1550,7 +1983,7 @@ int main() {
     if (hpBeforeCorrupt - corrupt.playerHp != 9) return Fail("corrupt intent must only be halved by player block");
     if (corrupt.playerBlock != 0) return Fail("blocking corrupt damage must spend twice what it absorbs");
 
-    GameState grades; NewRun(&grades, 0xD1FF0001u);
+    GameState grades; NewRun(&grades, 0xD1FF0001u, 0);
     if (grades.difficulty != -1) return Fail("difficulty must stay unset until a volume is mounted");
     for (int i = 0; i < 3; ++i) {
         if (grades.driveDifficulty[i] < 0 || grades.driveDifficulty[i] >= DIFFICULTY_COUNT)
@@ -1561,7 +1994,7 @@ int main() {
     SelectDrive(&grades, 2);
     if (grades.difficulty != grades.driveDifficulty[2]) return Fail("mounting must store the chosen card's difficulty");
 
-    GameState scale; NewRun(&scale, 0xD1FF0002u);
+    GameState scale; NewRun(&scale, 0xD1FF0002u, 0);
     scale.difficulty = DIFF_BEGINNER;
     if (CorruptPercent(&scale) != 25) return Fail("beginner must take a quarter of the corrupt damage");
     if (ScaleCorruptDamage(&scale, 12) != 3) return Fail("corrupt damage must scale by the difficulty percent");
@@ -1593,7 +2026,7 @@ int main() {
         return Fail("the telegraphed corrupt value must already carry the difficulty multiplier");
 
     // 판독: 처치한 종류만 열리고, 미리보기나 새 런으로는 열리지 않는다.
-    GameState codex; NewRun(&codex, 0x5CA40001u); codex.modifierA = MOD_BAD_SECTOR; codex.modifierB = MOD_CHECKSUM;
+    GameState codex; NewRun(&codex, 0x5CA40001u, 0); codex.modifierA = MOD_BAD_SECTOR; codex.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&codex, TEST_DRIVE, TEST_SEED, 1); StartCombat(&codex);
     int scanKind = codex.enemies[0].kind;
     if (IsEnemyScanned(&codex, scanKind)) return Fail("a fresh run must start with nothing scanned");
@@ -1610,11 +2043,11 @@ int main() {
     if (!IsEnemyScanned(&codex, scanKind)) return Fail("killing an enemy must scan its kind");
     for (int k = 0; k < ENEMY_KIND_COUNT; ++k)
         if (k != scanKind && IsEnemyScanned(&codex, k)) return Fail("killing one enemy must not scan any other kind");
-    NewRun(&codex, 0x5CA40001u);
+    NewRun(&codex, 0x5CA40001u, 0);
     if (IsEnemyScanned(&codex, scanKind)) return Fail("a new run must clear every scan");
 
     // 미리보기는 원본을 한 바이트도 건드리지 않고, 실제 실행과 같은 숫자를 내야 한다.
-    GameState preview; NewRun(&preview, 0x9E1E0001u); preview.modifierA = MOD_BAD_SECTOR; preview.modifierB = MOD_CHECKSUM;
+    GameState preview; NewRun(&preview, 0x9E1E0001u, 0); preview.modifierA = MOD_BAD_SECTOR; preview.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&preview, TEST_DRIVE, TEST_SEED, 1); StartCombat(&preview);
     SetAllFaces(&preview, FACE_NUMBER, 4);
     preview.enemies[0].hp = 99; preview.enemies[0].maxHp = 99;
@@ -1638,7 +2071,7 @@ int main() {
         if (ahead.slotOutput[s] != preview.lastTurnSlotOutput[s]) return Fail("preview slot output must match the real turn");
 
     // 치명타·사망 예고도 미리 보여야 한다.
-    GameState lethal; NewRun(&lethal, 0x9E1E0002u); lethal.modifierA = MOD_BAD_SECTOR; lethal.modifierB = MOD_CHECKSUM;
+    GameState lethal; NewRun(&lethal, 0x9E1E0002u, 0); lethal.modifierA = MOD_BAD_SECTOR; lethal.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&lethal, TEST_DRIVE, TEST_SEED, 1); StartCombat(&lethal);
     SetAllFaces(&lethal, FACE_NUMBER, 6);
     lethal.enemies[0].hp = 1; lethal.enemies[0].block = 0;
@@ -1647,7 +2080,7 @@ int main() {
     if (!kill.combatEnds || kill.playerDies) return Fail("a lethal placement must preview the kill");
     if (lethal.phase != PHASE_COMBAT) return Fail("previewing a kill must not end the real combat");
 
-    GameState doomed; NewRun(&doomed, 0x9E1E0003u); doomed.modifierA = MOD_BAD_SECTOR; doomed.modifierB = MOD_CHECKSUM;
+    GameState doomed; NewRun(&doomed, 0x9E1E0003u, 0); doomed.modifierA = MOD_BAD_SECTOR; doomed.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&doomed, TEST_DRIVE, TEST_SEED, 1); StartCombat(&doomed);
     SetAllFaces(&doomed, FACE_NUMBER, 1);
     doomed.enemies[0].hp = 999; doomed.enemies[0].maxHp = 999;
@@ -1659,7 +2092,7 @@ int main() {
     if (doomed.phase != PHASE_COMBAT || doomed.playerHp != 3) return Fail("previewing a loss must not kill the real run");
 
     // 읽기 오류가 걸린 주사위가 있으면 미리보기는 확정이 아니라고 밝혀야 한다.
-    GameState shaky; NewRun(&shaky, 0x9E1E0004u); shaky.modifierA = MOD_READ_ERROR; shaky.modifierB = MOD_CHECKSUM;
+    GameState shaky; NewRun(&shaky, 0x9E1E0004u, 0); shaky.modifierA = MOD_READ_ERROR; shaky.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&shaky, TEST_DRIVE, TEST_SEED, 1); StartCombat(&shaky);
     SetAllFaces(&shaky, FACE_NUMBER, 4);
     shaky.enemies[0].hp = 99; shaky.enemies[0].maxHp = 99;
@@ -1688,7 +2121,7 @@ int main() {
 
     // 증폭은 뒤에 해결될 공격·방어에 보너스를 얹고, 연쇄는 그 공격을 반복한다.
     // 증폭에 놓인 불안정 주사위 하나가 세 슬롯을 전부 모르게 만들어야 한다.
-    GameState spread; NewRun(&spread, 0x9E1E0005u); spread.modifierA = MOD_READ_ERROR; spread.modifierB = MOD_BAD_SECTOR;
+    GameState spread; NewRun(&spread, 0x9E1E0005u, 0); spread.modifierA = MOD_READ_ERROR; spread.modifierB = MOD_BAD_SECTOR;
     ConfigureDriveForTest(&spread, TEST_DRIVE, TEST_SEED, 1); StartCombat(&spread);
     SetAllFaces(&spread, FACE_NUMBER, 4);
     spread.enemies[0].hp = 99; spread.enemies[0].maxHp = 99;
@@ -1712,7 +2145,7 @@ int main() {
     for (int s = 0; s < SLOT_COUNT; ++s)
         if (certain.slotUnknown[s]) return Fail("an offline unstable die must leave every slot certain");
 
-    GameState badSector; NewRun(&badSector, 0xBADD5EC7u); badSector.phase = PHASE_REWARD;
+    GameState badSector; NewRun(&badSector, 0xBADD5EC7u, 0); badSector.phase = PHASE_REWARD;
     ConfigureDriveForTest(&badSector, TEST_DRIVE, TEST_SEED, 1);
     badSector.dice[0].faces[0].kind = FACE_FIRE; badSector.dice[0].faces[0].value = 8; badSector.dice[0].faces[0].damaged = 1;
     badSector.rewardKinds[0] = FACE_SHIELD; badSector.rewardValues[0] = FACE_INFO[FACE_SHIELD].power;
@@ -1720,7 +2153,7 @@ int main() {
     if (!badSector.dice[0].faces[0].damaged) return Fail("installing a reward onto a bad sector must not repair it");
     if (badSector.dice[0].faces[0].kind != FACE_SHIELD) return Fail("installing a reward onto a bad sector must still swap the face kind");
 
-    GameState repair; NewRun(&repair, 0x5EC70001u); repair.driveChoices[0] = 0; SelectDrive(&repair, 0);
+    GameState repair; NewRun(&repair, 0x5EC70001u, 0); repair.driveChoices[0] = 0; SelectDrive(&repair, 0);
     repair.phase = PHASE_REWARD; repair.floor = 0; repair.encounter = 0; repair.playerHp = 12;
     int repairHeal = SectorRepairAmount(&repair);
     if (repairHeal != SECTOR_REPAIR_HEAL[0]) return Fail("repair amount must follow the floor table");
@@ -1730,25 +2163,25 @@ int main() {
     if (repair.facesInstalled != 0) return Fail("sector repair must not install a face");
     if (repair.phase != PHASE_DIRECTORY || repair.encounter != 1) return Fail("sector repair must advance the run");
 
-    GameState repairCap; NewRun(&repairCap, 0x5EC70002u); repairCap.driveChoices[0] = 0; SelectDrive(&repairCap, 0);
+    GameState repairCap; NewRun(&repairCap, 0x5EC70002u, 0); repairCap.driveChoices[0] = 0; SelectDrive(&repairCap, 0);
     repairCap.phase = PHASE_REWARD; repairCap.floor = 2; repairCap.playerHp = repairCap.playerMaxHp - 2;
     RepairSector(&repairCap);
     if (repairCap.playerHp != repairCap.playerMaxHp) return Fail("sector repair must not overheal");
 
-    GameState repairFull; NewRun(&repairFull, 0x5EC70003u); repairFull.driveChoices[0] = 0; SelectDrive(&repairFull, 0);
+    GameState repairFull; NewRun(&repairFull, 0x5EC70003u, 0); repairFull.driveChoices[0] = 0; SelectDrive(&repairFull, 0);
     repairFull.phase = PHASE_REWARD; repairFull.playerHp = repairFull.playerMaxHp;
     RepairSector(&repairFull);
     if (repairFull.phase != PHASE_REWARD || repairFull.sectorsRepaired != 0) return Fail("sector repair at full hp must be rejected");
 
     int fragmentationShown = 0;
     for (unsigned int seed = 1; seed <= 256 && !fragmentationShown; ++seed) {
-        GameState fragmented; NewRun(&fragmented, seed); fragmented.modifierA = MOD_FRAGMENTATION; fragmented.modifierB = MOD_CHECKSUM;
+        GameState fragmented; NewRun(&fragmented, seed, 0); fragmented.modifierA = MOD_FRAGMENTATION; fragmented.modifierB = MOD_CHECKSUM;
         ConfigureDriveForTest(&fragmented, TEST_DRIVE, seed, 1); StartCombat(&fragmented);
         for (int d = 0; d < 3; ++d) if (fragmented.dice[d].disabled) fragmentationShown = 1;
     }
     if (!fragmentationShown) return Fail("fragmentation must be marked before the player executes the turn");
 
-    GameState firstFloorCap; NewRun(&firstFloorCap, 0xCA900001u); firstFloorCap.modifierA = MOD_BAD_SECTOR; firstFloorCap.modifierB = MOD_CHECKSUM;
+    GameState firstFloorCap; NewRun(&firstFloorCap, 0xCA900001u, 0); firstFloorCap.modifierA = MOD_BAD_SECTOR; firstFloorCap.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&firstFloorCap, TEST_DRIVE, TEST_SEED, 1);
     firstFloorCap.phase = PHASE_REWARD; firstFloorCap.floor = 0; firstFloorCap.encounter = 0;
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
@@ -1763,7 +2196,7 @@ int main() {
     ConfirmPrune(&firstFloorCap);
     if (firstFloorCap.phase != PHASE_DIRECTORY || firstFloorCap.floor != 0 || firstFloorCap.encounter != 1) return Fail("floor 1 prune must resume at the next encounter");
 
-    GameState tsr; NewRun(&tsr, 0x75720001u); tsr.modifierA = MOD_BAD_SECTOR; tsr.modifierB = MOD_CHECKSUM;
+    GameState tsr; NewRun(&tsr, 0x75720001u, 0); tsr.modifierA = MOD_BAD_SECTOR; tsr.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&tsr, TEST_DRIVE, TEST_SEED, 1);
     tsr.encounter = 2; StartCombat(&tsr);
     tsr.playerHp = 999; tsr.playerMaxHp = 999; tsr.enemies[0].hp = 1;
@@ -1783,12 +2216,12 @@ int main() {
     if (UsedBytes(&tsr) != usedBeforeLoot + TSR_INFO[lootKind].cost) return Fail("resident programs must consume capacity");
     if (tsr.floor != 1 || tsr.phase != PHASE_DIRECTORY) return Fail("boss loot must advance to the next floor");
 
-    GameState himem; NewRun(&himem, 0x75720002u); himem.modifierA = MOD_BAD_SECTOR; himem.modifierB = MOD_CHECKSUM;
+    GameState himem; NewRun(&himem, 0x75720002u, 0); himem.modifierA = MOD_BAD_SECTOR; himem.modifierB = MOD_CHECKSUM;
     himem.tsrInstalled[TSR_HIMEM] = 1;
     if (EffectiveCapacity(&himem) != 240 + TSR_INFO[TSR_HIMEM].value) return Fail("himem must extend the capacity");
     if (UsedBytes(&himem) != 63 + TSR_INFO[TSR_HIMEM].cost) return Fail("used bytes must include resident programs");
 
-    GameState smart; NewRun(&smart, 0x75720003u); smart.modifierA = MOD_BAD_SECTOR; smart.modifierB = MOD_CHECKSUM;
+    GameState smart; NewRun(&smart, 0x75720003u, 0); smart.modifierA = MOD_BAD_SECTOR; smart.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&smart, TEST_DRIVE, TEST_SEED, 1);
     smart.tsrInstalled[TSR_SMARTDRV] = 1; StartCombat(&smart);
     if (smart.playerBlock != TSR_INFO[TSR_SMARTDRV].value) return Fail("smartdrv must grant first-turn block");
@@ -1797,20 +2230,20 @@ int main() {
     if (smart.turn != 2 || smart.playerBlock != 0) return Fail("smartdrv block must last only the first turn");
 
     for (unsigned int seed = 1; seed <= 64; ++seed) {
-        GameState defrag; NewRun(&defrag, seed); defrag.modifierA = MOD_FRAGMENTATION; defrag.modifierB = MOD_CHECKSUM;
+        GameState defrag; NewRun(&defrag, seed, 0); defrag.modifierA = MOD_FRAGMENTATION; defrag.modifierB = MOD_CHECKSUM;
         ConfigureDriveForTest(&defrag, TEST_DRIVE, seed, 1);
         defrag.tsrInstalled[TSR_DEFRAG] = 1; StartCombat(&defrag);
         for (int d = 0; d < 3; ++d) if (defrag.dice[d].disabled) return Fail("defrag must suppress fragmentation");
     }
 
-    GameState scan; NewRun(&scan, 0x75720004u); scan.modifierA = MOD_BAD_SECTOR; scan.modifierB = MOD_CHECKSUM;
+    GameState scan; NewRun(&scan, 0x75720004u, 0); scan.modifierA = MOD_BAD_SECTOR; scan.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&scan, TEST_DRIVE, TEST_SEED, 1);
     scan.tsrInstalled[TSR_SCANDISK] = 1; scan.phase = PHASE_REWARD; scan.encounter = 2;
     SkipReward(&scan);
     int scanDamaged = 0;
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (scan.dice[d].faces[f].damaged) ++scanDamaged;
     if (scan.floor != 1 || scanDamaged != 0) return Fail("scandisk must block descent damage");
-    GameState noScan; NewRun(&noScan, 0x75720004u); noScan.modifierA = MOD_BAD_SECTOR; noScan.modifierB = MOD_CHECKSUM;
+    GameState noScan; NewRun(&noScan, 0x75720004u, 0); noScan.modifierA = MOD_BAD_SECTOR; noScan.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&noScan, TEST_DRIVE, TEST_SEED, 1);
     noScan.phase = PHASE_REWARD; noScan.encounter = 2;
     SkipReward(&noScan);
@@ -1818,14 +2251,14 @@ int main() {
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (noScan.dice[d].faces[f].damaged) ++rawDamaged;
     if (rawDamaged != 1) return Fail("bad sector descent must damage one face without scandisk");
 
-    GameState undel; NewRun(&undel, 0x75720005u); undel.modifierA = MOD_BAD_SECTOR; undel.modifierB = MOD_CHECKSUM;
+    GameState undel; NewRun(&undel, 0x75720005u, 0); undel.modifierA = MOD_BAD_SECTOR; undel.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&undel, TEST_DRIVE, TEST_SEED, 1);
     undel.tsrInstalled[TSR_UNDELETE] = 1; StartCombat(&undel);
     undel.playerHp = 20; undel.enemies[0].hp = 1;
     AssignDieToSlot(&undel, 0, SLOT_ATTACK); EndTurn(&undel);
     if (undel.playerHp != 20 + TSR_INFO[TSR_UNDELETE].value) return Fail("undelete must heal after a win");
 
-    GameState keyb; NewRun(&keyb, 0x75720006u); keyb.modifierA = MOD_BAD_SECTOR; keyb.modifierB = MOD_CHECKSUM;
+    GameState keyb; NewRun(&keyb, 0x75720006u, 0); keyb.modifierA = MOD_BAD_SECTOR; keyb.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&keyb, TEST_DRIVE, TEST_SEED, 1);
     keyb.tsrInstalled[TSR_KEYB] = 1; StartCombat(&keyb);
     KeybReroll(&keyb, 0);
@@ -1836,12 +2269,12 @@ int main() {
     keyb.enemies[0].hp = 999; keyb.enemies[0].maxHp = 999; keyb.enemies[0].intent = INTENT_GUARD; keyb.enemies[0].intentValue = 0;
     AssignDieToSlot(&keyb, 0, SLOT_ATTACK); EndTurn(&keyb);
     if (keyb.phase != PHASE_COMBAT || keyb.keybUsedThisTurn) return Fail("keyb charge must reset each turn");
-    GameState noKeyb; NewRun(&noKeyb, 0x75720007u); noKeyb.modifierA = MOD_BAD_SECTOR; noKeyb.modifierB = MOD_CHECKSUM;
+    GameState noKeyb; NewRun(&noKeyb, 0x75720007u, 0); noKeyb.modifierA = MOD_BAD_SECTOR; noKeyb.modifierB = MOD_CHECKSUM;
     ConfigureDriveForTest(&noKeyb, TEST_DRIVE, TEST_SEED, 1); StartCombat(&noKeyb);
     KeybReroll(&noKeyb, 0);
     if (noKeyb.keybUsedThisTurn) return Fail("keyb reroll requires the resident program");
 
-    GameState unin; NewRun(&unin, 0x75720008u); unin.modifierA = MOD_BAD_SECTOR; unin.modifierB = MOD_CHECKSUM;
+    GameState unin; NewRun(&unin, 0x75720008u, 0); unin.modifierA = MOD_BAD_SECTOR; unin.modifierB = MOD_CHECKSUM;
     unin.tsrInstalled[TSR_SMARTDRV] = 1; unin.phase = PHASE_PRUNE;
     int usedBeforeUninstall = UsedBytes(&unin);
     UninstallTsr(&unin, TSR_SMARTDRV);
@@ -1864,5 +2297,5 @@ int main() {
         if (result != 0) { printf("FAIL: drive %d seed %d result %d\n", drive, seed, result); return 1; }
         ++runs;
     }
-    printf("PASS: roster, sprites, drive laws, story, music clock, 18 gimmicks, directory routing, %d complete runs\n", runs); return 0;
+    printf("PASS: roster, sprites, drive laws, story, music clock, 21 gimmicks, directory routing, %d complete runs\n", runs); return 0;
 }

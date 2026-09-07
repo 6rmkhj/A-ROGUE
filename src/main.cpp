@@ -6,9 +6,11 @@
 #include "audio.h"
 #include "music.h"
 #include "localization.h"
+#include "campaign.h"
 
 // 게임 상태와 창·입력을 담당한다. 그리기는 screens.cpp, 소리는 audio.cpp가 맡는다.
 GameState gGame;
+CampaignState gCampaign;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
@@ -21,6 +23,7 @@ int gTermInputLen;
 static int gVolumeDragging;
 int gGuidePage;
 int gRestartArmed;
+int gCampaignResetArmed;
 int gFxLevel = FX_FULL;
 
 // 직접 조작 연출은 게임 판정과 분리된 마지막 사건 하나만 기억한다. 연타가 가능한
@@ -351,7 +354,7 @@ static void FinishDeath() {
 // 체력이 0이 된 직후. 전장이 그대로 노이즈에 잠기고, 다 덮이면 재시작 화면이 나온다.
 static void BeginDeath() {
     // 설정 화면을 강제로 닫으므로 "정말 다시 시작?" 확인 상태도 같이 풀어 준다.
-    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
     gDeathStart = GetTickCount();
     gDeathActive = 1;
     PlaySfx(SFX_CRASH);
@@ -428,7 +431,7 @@ static void BeginGimmickFx(int kind, int a, int b) {
     PlaySfxPitched(FAMILY_SFX[family], depth == 0 ? 2 : depth == 1 ? 1 : 0);
     gFxImpactPlayed = 0;
     // 흔들림은 임팩트(히트스톱) 시점에 건다. 매턴 반복되는 것들은 흔들지 않는다.
-    int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || (kind == GIMMICK_TIMEOUT && !b);
+    int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || kind == GIMMICK_SIGNATURE || kind == GIMMICK_SEVENTEENTH || (kind == GIMMICK_TIMEOUT && !b);
     gFxShakeAt = 0;
     gFxShakePeak = perTurn ? 0 : (kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
                 || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5);
@@ -545,14 +548,15 @@ static void FinishBootInsert() {
     gBootActive = 0;
     KillTimer(gWindow, 10);
     FxSnapshotRelease();
-    NewRun(&gGame, gBootSeed);
+    NewRun(&gGame, gBootSeed, CampaignClearedMask(&gCampaign));
+    SetSeenEndings(&gGame, CampaignSeenEndingMask(&gCampaign));
     PlaySfx(SFX_BOOT);
     InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void BeginBootInsert() {
     if (gBootActive) return;
-    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0;
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
     // 다른 연출이 붙잡아 둔 판이 남아 있으면 삽입 연출이 그 낡은 그림을 디스크에
     // 싣게 된다. 놓아 주고 첫 프레임에서 지금 화면을 새로 잡는다.
     if (FxSnapshotHeld()) FxSnapshotRelease();
@@ -662,10 +666,33 @@ int VictoryElapsed() {
     return elapsed < 0 ? 0 : elapsed;
 }
 
+static void PersistCampaignProgress() {
+    bool changed = RecordCampaignClears(&gCampaign, gGame.clearedMask);
+    if (gGame.finalVolumeCleared && !gCampaign.finalCleared) { gCampaign.finalCleared = 1; changed = true; }
+    if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
+    if (changed) SaveCampaign(&gCampaign);
+}
+
+// 세이브를 비우고 타이틀로 돌아간다. 진행 중이던 런의 clearedMask가 살아남으면
+// 다음 클리어가 지운 조각을 다시 써 넣게 되므로, 런까지 함께 끝낸다.
+static void ResetCampaignProgress() {
+    FinishDeath();
+    FinishDirectoryEnter();
+    FinishUiFx();
+    gUiFxPendingDescent = -1;
+    gVictoryStart = 0;
+    InitCampaign(&gCampaign);
+    SaveCampaign(&gCampaign);
+    InitTitle(&gGame, 0, 0);
+}
+
 static void AdvanceStoryUi() {
-    int wasEnding = gGame.phase == PHASE_STORY
-        && (gGame.story.kind == STORY_ENDING_RESTORE || gGame.story.kind == STORY_ENDING_ROGUE);
+    // 세 엔딩을 일일이 나열하면 넷째가 생길 때 조용히 빠진다. 규칙 계층이 이미
+    // 답을 알고 있으므로 그쪽에 묻는다 (에필로그를 넘기는 순간이 결과 화면의 시작이다).
+    int wasEnding = gGame.phase == PHASE_STORY && CommittedEnding(&gGame) >= 0;
     AdvanceStory(&gGame);
+    PersistCampaignProgress();
+    if (gGame.phase == PHASE_CHAPTER_CLEAR) PlaySfx(SFX_VICTORY);
     if (wasEnding && gGame.phase == PHASE_VICTORY) {
         gVictoryStart = GetTickCount();
         PlaySfx(SFX_VICTORY);
@@ -678,7 +705,7 @@ static void SyncAudioScene() {
     if (gGame.phase == PHASE_TITLE || gGame.phase == PHASE_DRIVE_SELECT) scene = MUSIC_SCENE_TITLE;
     else if (gGame.phase == PHASE_STORY || gGame.phase == PHASE_ENDING_CHOICE) scene = MUSIC_SCENE_STORY;
     else if (gGame.phase == PHASE_GAMEOVER) scene = MUSIC_SCENE_GAMEOVER;
-    else if (gGame.phase == PHASE_VICTORY) scene = MUSIC_SCENE_VICTORY;
+    else if (gGame.phase == PHASE_VICTORY || gGame.phase == PHASE_CHAPTER_CLEAR) scene = MUSIC_SCENE_VICTORY;
     if (gGame.phase == PHASE_COMBAT) {
         intensity = 1;
         for (int i = 0; i < gGame.enemyCount; ++i) if (gGame.enemies[i].alive && IsBossKind(gGame.enemies[i].kind)) {
@@ -703,6 +730,16 @@ static void BeginNewRun() {
     BeginBootInsert(); InvalidateRect(gWindow, 0, FALSE);
 }
 
+static int IsEndScreen() {
+    return gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY
+        || gGame.phase == PHASE_CHAPTER_CLEAR;
+}
+
+static void ContinueFromEnd() {
+    PersistCampaignProgress();
+    BeginNewRun();
+}
+
 static void ExecuteCombatTurn() {
     FinishUiFx();
     int floor = gGame.floor, encounter = gGame.encounter;
@@ -710,6 +747,7 @@ static void ExecuteCombatTurn() {
     GamePhase before = gGame.phase;
     for (int i = 0; i < 3; ++i) gTraceDice[i] = gGame.dice[i];
     EndTurn(&gGame);
+    PersistCampaignProgress();
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
     int cleared = LivingEnemyCount(&gGame) == 0;
     if (resolved) BeginTurnTrace(floor, encounter, cleared);
@@ -800,7 +838,7 @@ static void ClickDirectory(int x, int y) {
 }
 
 static void ClickDriveSelect(int x, int y) {
-    for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) {
+    for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
         if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, i); }
         return;
@@ -869,6 +907,7 @@ static int HoverId(int x, int y) {
         if (Inside(VolumeSliderRect(), x, y)) return 940;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
+        if (Inside(CampaignResetRect(), x, y)) return 922;
         return -1;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
@@ -883,14 +922,14 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (gGame.phase == PHASE_DRIVE_SELECT) {
-        for (int i = 0; i < 3; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
+        for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
         return -1;
     }
     if (gGame.phase == PHASE_ENDING_CHOICE) {
-        for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
+        for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
         return -1;
     }
-    if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
+    if (IsEndScreen()
         && Inside(EndingRestartRect(), x, y)) return 70;
     if (gGame.phase == PHASE_DIRECTORY) {
         for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i) if (Inside(DirectoryChoiceRect(i), x, y)) return 80 + i;
@@ -932,13 +971,19 @@ static void HandleClick(int x, int y) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
         if (Inside(RestartButtonRect(), x, y)) {
+            gCampaignResetArmed = 0;
             if (gRestartArmed) { gRestartArmed = 0; gSettingsOpen = 0; BeginNewRun(); InvalidateRect(gWindow, 0, FALSE); return; }
             gRestartArmed = 1; InvalidateRect(gWindow, 0, FALSE); return;
         }
-        gRestartArmed = 0;
+        if (Inside(CampaignResetRect(), x, y)) {
+            gRestartArmed = 0;
+            if (gCampaignResetArmed) { gCampaignResetArmed = 0; gSettingsOpen = 0; ResetCampaignProgress(); InvalidateRect(gWindow, 0, FALSE); return; }
+            gCampaignResetArmed = 1; InvalidateRect(gWindow, 0, FALSE); return;
+        }
+        gRestartArmed = 0; gCampaignResetArmed = 0;
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < LANGUAGE_COUNT; ++i) if (Inside(LanguageOptionRect(i), x, y)) {
             // Re-read the external table when a language is selected so copy
@@ -962,27 +1007,27 @@ static void HandleClick(int x, int y) {
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 1; gGuideOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
         else if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage > 0) { --gGuidePage; PlaySfx(SFX_UI_CLICK); }
         else if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage < 1) { ++gGuidePage; PlaySfx(SFX_UI_CLICK); }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     else if (gGame.phase == PHASE_STORY) AdvanceStoryUi();
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
-        for (int i = 0; i < 2; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
+        for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
     }
     else if (gGame.phase == PHASE_DRIVE_SELECT) ClickDriveSelect(x, y);
     else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
-    else if ((gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY)
-        && Inside(EndingRestartRect(), x, y)) BeginNewRun();
+    else if (IsEndScreen() && Inside(EndingRestartRect(), x, y)) ContinueFromEnd();
+    PersistCampaignProgress();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
         if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
@@ -1032,10 +1077,25 @@ static void TermRun() {
         if (gGame.phase != PHASE_COMBAT) { TermPrint(L"  전투 중이 아닙니다."); return; }
         int floor = gGame.floor, encounter = gGame.encounter;
         DebugWinCombat(&gGame);
+        PersistCampaignProgress();
         PlaySfx(SFX_ENEMY_DOWN);
         TermPrint(L"  적 전멸. 전투 종료 처리 완료.");
         gTermOpen = 0;
         BeginCombatClear(floor, encounter);
+        return;
+    }
+    // 드라이브 하나를 통째로 접는다. 마지막 보스를 이긴 것과 같은 자리로 보내므로
+    // 조각 회수와 챕터 종료 기록이 평소 완주와 똑같이 이어진다.
+    if (lstrcmpW(cmd, L"winwin") == 0) {
+        if (TermBusy()) { TermPrint(L"  연출이 끝난 뒤에 다시 실행하십시오."); return; }
+        if (!DebugWinDrive(&gGame)) { TermPrint(L"  드라이브 안이 아닙니다."); return; }
+        PersistCampaignProgress();
+        PlaySfx(SFX_ENEMY_DOWN);
+        wchar_t done[TERM_LOG_CAP];
+        wsprintfW(done, L"  %s 드라이브 클리어 처리 완료.", DRIVE_INFO[gGame.selectedDrive].letter);
+        TermPrint(done);
+        gTermOpen = 0;
+        BeginCombatClear(gGame.floor, gGame.encounter);
         return;
     }
     if (lstrcmpW(cmd, L"hp") == 0) {
@@ -1051,6 +1111,7 @@ static void TermRun() {
     }
     if (lstrcmpW(cmd, L"help") == 0) {
         TermPrint(L"  win       현재 전투를 즉시 승리 처리한다");
+        TermPrint(L"  winwin    현재 드라이브를 즉시 클리어 처리한다");
         TermPrint(L"  hp [n]    체력을 n으로 (생략하면 최대치)");
         TermPrint(L"  perf      페인트 시간과 오디오 언더런");
         TermPrint(L"  clear     기록 지우기");
@@ -1109,17 +1170,17 @@ static void HandleKey(WPARAM key) {
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
-    if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
-    if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
-        if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; }
+        if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; }
         // 마우스로 정확히 맞추기 어려운 값을 위해 5씩 움직인다.
         else if (key == VK_LEFT)  { SetAudioVolume(AudioVolume() - 5); PlaySfx(SFX_UI_CLICK); }
         else if (key == VK_RIGHT) { SetAudioVolume(AudioVolume() + 5); PlaySfx(SFX_UI_CLICK); }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
-    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; gRestartArmed = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+    if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gGuideOpen) {
         if (key == VK_ESCAPE) gGuideOpen = 0;
         else if (key == VK_LEFT && gGuidePage > 0) --gGuidePage;
@@ -1130,9 +1191,9 @@ static void HandleKey(WPARAM key) {
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
     else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
-    else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key == '1' || key == '2') { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
+    else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key >= '1' && key < '1' + ENDING_COUNT) { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
-        if (key >= '1' && key <= '3') {
+        if (key >= '1' && key <= '0' + gGame.driveChoiceCount) {
             SelectDrive(&gGame, (int)(key - '1'));
             if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, (int)(key - '1')); }
         }
@@ -1162,7 +1223,8 @@ static void HandleKey(WPARAM key) {
         else if (key == '4') TakeRepairReward();
         else if (key == VK_ESCAPE) SkipReward(&gGame);
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
-    else if (gGame.phase == PHASE_GAMEOVER || gGame.phase == PHASE_VICTORY) { if (key == 'R' || key == VK_RETURN) BeginNewRun(); }
+    else if (IsEndScreen()) { if (key == 'R' || key == VK_RETURN) ContinueFromEnd(); }
+    PersistCampaignProgress();
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
         if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
         else BeginDescent(gGame.floor, -1);
@@ -1263,6 +1325,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_DESTROY:
+        SaveCampaign(&gCampaign);
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
         KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID);
@@ -1278,8 +1341,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
     // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
     timeBeginPeriod(1);
+    LoadCampaign(&gCampaign);
     LoadTranslations();
-    InitTitle(&gGame); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
+    InitTitle(&gGame, CampaignClearedMask(&gCampaign), CampaignSeenEndingMask(&gCampaign)); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
     RECT desired = {0, 0, 1120, 760}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;

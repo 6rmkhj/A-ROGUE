@@ -174,12 +174,12 @@ static void ChooseDirectory(GameState* game, int* runChosen) {
 }
 
 static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
-    GameState game; NewRun(&game, seed);
+    GameState game; NewRun(&game, seed, drive == DRIVE_FINAL ? 0x3F : 0);
     game.driveChoices[0] = drive;   // 검사 대상 드라이브를 강제로 첫 카드에 놓는다
     *difficulty = game.driveDifficulty[0];
     int runChosen[DIR_NODE_COUNT] = {};
     int steps = 0;
-    while (game.phase != PHASE_VICTORY && game.phase != PHASE_GAMEOVER && steps++ < 600) {
+    while (game.phase != PHASE_VICTORY && game.phase != PHASE_CHAPTER_CLEAR && game.phase != PHASE_GAMEOVER && steps++ < 600) {
         if (game.phase == PHASE_DRIVE_SELECT) {
             SelectDrive(&game, 0);
         } else if (game.phase == PHASE_DIRECTORY) {
@@ -204,7 +204,7 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
         } else if (game.phase == PHASE_STORY) {
             AdvanceStory(&game);
         } else if (game.phase == PHASE_ENDING_CHOICE) {
-            SelectEnding(&game, seed & 1u);
+            SelectEnding(&game, (int)(seed % (unsigned int)ENDING_COUNT));
         }
     }
     gLawActivations[drive] += game.driveRule.activations;
@@ -212,10 +212,14 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
     gPacketChains[drive] += game.driveRule.packetChainCount;
     gContrabandUses[drive] += game.driveRule.contrabandUses;
     *combats = game.combatsWon;
-    int won = game.phase == PHASE_VICTORY;
+    int won = game.phase == PHASE_VICTORY || game.phase == PHASE_CHAPTER_CLEAR;
     if (won) for (int k = 0; k < DIR_NODE_COUNT; ++k) if (runChosen[k]) ++gChosenWins[k];
     return won;
 }
+
+// 최종 볼륨의 목표 승률 구간. 일반 볼륨의 20~80%보다 좁고 낮게 잡는다.
+#define FINAL_WIN_MIN_PERCENT 15
+#define FINAL_WIN_MAX_PERCENT 40
 
 int main() {
     const int runsPerDrive = 300;
@@ -225,7 +229,7 @@ int main() {
     int gradeRuns[DIFFICULTY_COUNT] = {}, gradeWins[DIFFICULTY_COUNT] = {};
     int driveWins[DRIVE_COUNT] = {};
     printf("BALANCE per-drive (%d seeds each)\n", runsPerDrive);
-    for (int drive = 0; drive < DRIVE_COUNT; ++drive) {
+    for (int drive = 0; drive < DRIVE_SELECTABLE_COUNT; ++drive) {
         int wins = 0, totalCombats = 0;
         int bossReached[3] = {}, bossKilled[3] = {};
         for (int i = 0; i < runsPerDrive; ++i) {
@@ -259,7 +263,7 @@ int main() {
         if (gLawActivations[drive] == 0) { printf("  GATE FAIL: drive %d law never activates\n", drive); failed = 1; }
     }
     int minWins = driveWins[0], maxWins = driveWins[0];
-    for (int d = 1; d < DRIVE_COUNT; ++d) { if (driveWins[d] < minWins) minWins = driveWins[d]; if (driveWins[d] > maxWins) maxWins = driveWins[d]; }
+    for (int d = 1; d < DRIVE_SELECTABLE_COUNT; ++d) { if (driveWins[d] < minWins) minWins = driveWins[d]; if (driveWins[d] > maxWins) maxWins = driveWins[d]; }
     if (maxWins - minWins > runsPerDrive * 30 / 100) { printf("  GATE FAIL: drive win spread is %d points (limit %d)\n", maxWins - minWins, runsPerDrive * 30 / 100); failed = 1; }
     for (int g = 0; g < DIFFICULTY_COUNT; ++g) {
         printf("  difficulty %d (corrupt %d%%): wins %d/%d\n",
@@ -309,6 +313,41 @@ int main() {
     printf("  prune screens entered: %d\n", gPruneCount);
 
     printf("BALANCE: %d/%d total heuristic wins, %.2f average combats\n",
-        totalWins, runsPerDrive * DRIVE_COUNT, totalAvg / DRIVE_COUNT);
+        totalWins, runsPerDrive * DRIVE_SELECTABLE_COUNT, totalAvg / DRIVE_SELECTABLE_COUNT);
+    // 최종 볼륨은 일반 볼륨과 같은 줄자로 재되 목표 구간이 다르다. 클라이맥스라
+    // 상한을 일반 볼륨의 하한 아래에 두어, 여섯 볼륨을 지나온 덱으로도 만만하지
+    // 않게 유지한다. 하한은 "도달할 수 있는 결말"을 보장하는 선이다.
+    int finalWins = 0, finalCombats = 0;
+    int finalBossReached[3] = {}, finalBossKilled[3] = {};
+    for (int i = 0; i < runsPerDrive; ++i) {
+        int combats = 0, grade = 0;
+        int won = Run(DRIVE_FINAL, 0xA4000000u + (uint32_t)i * 7919u, &combats, &grade);
+        finalWins += won;
+        finalCombats += combats;
+        for (int f = 0; f < 3; ++f) {
+            if (combats >= f * 3 + 2) ++finalBossReached[f];
+            if (combats >= f * 3 + 3) ++finalBossKilled[f];
+        }
+    }
+    printf("FINAL VOLUME: wins %d/%d, avg combats %.2f, boss reach %d/%d/%d, boss kill %d/%d/%d\n",
+        finalWins, runsPerDrive, (double)finalCombats / runsPerDrive,
+        finalBossReached[0], finalBossReached[1], finalBossReached[2],
+        finalBossKilled[0], finalBossKilled[1], finalBossKilled[2]);
+    printf("    turns %lu, avg damage %.2f, avg block %.2f, law %lu\n",
+        gTurns[DRIVE_FINAL], gTurns[DRIVE_FINAL] ? (double)gDamage[DRIVE_FINAL] / gTurns[DRIVE_FINAL] : 0.0,
+        gTurns[DRIVE_FINAL] ? (double)gBlock[DRIVE_FINAL] / gTurns[DRIVE_FINAL] : 0.0,
+        gLawActivations[DRIVE_FINAL]);
+    printf("    slots attack %lu defend %lu amplify %lu chain %lu\n",
+        gSlotChosen[DRIVE_FINAL][0], gSlotChosen[DRIVE_FINAL][1],
+        gSlotChosen[DRIVE_FINAL][2], gSlotChosen[DRIVE_FINAL][3]);
+    if (finalWins < runsPerDrive * FINAL_WIN_MIN_PERCENT / 100 || finalWins > runsPerDrive * FINAL_WIN_MAX_PERCENT / 100) {
+        printf("  GATE FAIL: final volume must stay within %d-%d%% wins\n", FINAL_WIN_MIN_PERCENT, FINAL_WIN_MAX_PERCENT);
+        failed = 1;
+    }
+    // 클라이맥스가 앞선 볼륨보다 쉬우면 캠페인의 순서가 무너진다.
+    if (finalWins >= minWins) { printf("  GATE FAIL: final volume must be harder than every regular volume\n"); failed = 1; }
+    if (gLawActivations[DRIVE_FINAL] == 0) { printf("  GATE FAIL: final volume law never activates\n"); failed = 1; }
+    for (int f = 0; f < 3; ++f)
+        if (!finalBossKilled[f]) { printf("  GATE FAIL: final boss %d is never killed\n", f + 1); failed = 1; }
     return failed;
 }

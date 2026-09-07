@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #define MUSIC_RATE 22050
+#define MUSIC_DRIVE_COUNT 7
 #define MUSIC_CHANNELS 4   // 베이스 · 리드 · 아르페지오 · 코드(60Hz 고속 아르페지오)
 
 enum MusicScene { MUSIC_SCENE_TITLE = 0, MUSIC_SCENE_PLAY, MUSIC_SCENE_STORY, MUSIC_SCENE_GAMEOVER, MUSIC_SCENE_VICTORY };

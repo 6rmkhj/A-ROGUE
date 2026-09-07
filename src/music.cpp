@@ -27,7 +27,7 @@ struct MusicSong {
     uint16_t kick[2], snare[2], hat[2];
 };
 
-static const MusicSong SONG[6] = {
+static const MusicSong SONG[MUSIC_DRIVE_COUNT] = {
     { // C:\ SYSTEM
       0, 118, 16, 25, 200, 0x0000,
       {0,-4,3,-2,5,0,-4,-5}, {3,4,4,4,3,3,4,4},
@@ -81,6 +81,15 @@ static const MusicSong SONG[6] = {
       {{12,-128,-128,15,-128,-128,13,-128,-128,12,-128,-128,-128,-128,-128,-128,13,-128,-128,17,-128,-128,20,-128,-128,17,-128,-128,13,-128,-128,-128,12,-128,-128,15,-128,-128,17,-128,-128,19,-128,-128,15,-128,-128,-128,17,-128,-128,22,-128,-128,24,-128,-128,22,-128,-128,17,-128,-128,-128},
        {17,-128,-128,20,-128,-128,24,-128,-128,20,-128,-128,17,-128,-128,-128,13,-128,-128,17,-128,-128,20,-128,-128,13,-128,-128,25,-128,-128,-128,22,-128,-128,26,-128,-128,29,-128,-128,26,-128,-128,22,-128,-128,-128,12,-128,-128,13,-128,-128,12,-128,-128,-128,-128,-128,-128,-128,-128,-128}},
       {0x0249, 0x0249}, {0x1040, 0x1040}, {0x2492, 0x2492}
+    },
+    { // A:\ ROGUE
+      0, 132, 16, 25, 210, 0x0000,
+      {0,-4,5,-2,3,0,-5,0}, {3,4,3,4,4,3,4,3},
+      {{0,-128,0,-128,-128,-128,7,-128,0,-128,-128,-128,5,-128,7,-128}, {0,-128,0,-128,7,-128,0,-128,3,-128,5,-128,7,-128,-128,-128}},
+      {{0,2,3,2,0,2,4,2,0,2,3,5,3,2,1,2}, {3,2,0,2,3,5,4,2,3,2,0,2,1,2,3,-128}},
+      {{12,-128,-128,-128,15,-128,17,-128,19,-128,-128,-128,17,-128,15,-128,12,-128,-128,-128,19,-128,-128,-128,17,-128,15,-128,12,-128,-128,-128,17,-128,-128,-128,20,-128,22,-128,24,-128,-128,-128,22,-128,20,-128,19,-128,17,-128,15,-128,-128,-128,14,-128,-128,-128,19,-128,-128,-128},
+       {24,-128,-128,-128,22,-128,20,-128,19,-128,-128,-128,17,-128,15,-128,20,-128,19,-128,17,-128,15,-128,12,-128,-128,-128,15,-128,-128,-128,19,-128,-128,-128,23,-128,-128,-128,26,-128,-128,-128,23,-128,19,-128,24,-128,-128,-128,19,-128,-128,-128,15,-128,-128,-128,14,-128,-128,-128}},
+      {0x1111, 0x1191}, {0x1010, 0x1010}, {0x5555, 0xD555}
     }
 };
 
@@ -145,12 +154,13 @@ void MusicInit(MusicState* m) {
     m->driveFade = 65536; m->sceneFade = 65536; m->currentScene = MUSIC_SCENE_TITLE;
     m->pendingStep = 1;   // 첫 샘플에서 0번 스텝을 트리거한다
 }
-void MusicSetDrive(MusicState* m, int d) { if (m) m->targetDrive = d < 0 ? 0 : d > 5 ? 5 : d; }
+void MusicSetDrive(MusicState* m, int d) { if (m) m->targetDrive = d < 0 ? 0 : d >= MUSIC_DRIVE_COUNT ? MUSIC_DRIVE_COUNT - 1 : d; }
 void MusicSetScene(MusicState* m, int s) { if (m) m->scene = s; }
 void MusicSetIntensity(MusicState* m, int v) { if (m) m->targetIntensity = v < 0 ? 0 : v > 3 ? 3 : v; }
 void MusicSetCritical(MusicState* m, int v) { if (m) m->critical = v != 0; }
 void MusicSetEnabled(MusicState* m, int v) { if (m) m->enabled = v != 0; }
-void MusicSetEnding(MusicState* m, int v) { if (m) m->ending = v != 0; }
+// 0/1/2 = RESTORE / EXEC / MERGE. 필터 분기가 번호를 구분해야 하므로 bool로 접지 않는다.
+void MusicSetEnding(MusicState* m, int v) { if (m) m->ending = v < 0 ? 0 : v; }
 
 // 스텝이 바뀐 샘플에서 한 번. 이번 스텝의 음과 타악기를 건다.
 static void TriggerStep(MusicState* m, const MusicSong* s, int crit) {
@@ -234,7 +244,7 @@ void MusicRender(MusicState* m, int32_t* out, int frames) {
 
         // 필터는 위험할수록 열리고, 위독하면 어두워진다. EXEC ROGUE 엔딩은 어둡게 끝난다.
         int cut = s->cut + (255 - s->cut) * g3 / 65536;
-        if (m->currentScene == MUSIC_SCENE_VICTORY && m->ending) cut = cut * 2 / 5;
+        if (m->currentScene == MUSIC_SCENE_VICTORY && m->ending == 1) cut = cut * 2 / 5;
         cut -= (cut - 24) * crit / 65536;
 
         int sample = 0;

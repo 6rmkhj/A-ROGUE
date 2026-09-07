@@ -429,6 +429,7 @@ TEMP: 임시 파일 회수 → 체력 +%d (%d → %d).	TEMP: Recovered temporary
 현재 체력 -5	Current HP -5
 시작 최대 체력 -4	Starting max HP -4
 시작 최대 체력 +6	Starting max HP +6
+시작 최대 체력 +10	Starting max HP +10
 체력 +6 (최대치 초과 없음)	HP +6 (not above maximum)
 전투 승리 시 체력 6 회복	Recover 6 HP after combat victory
 전투 승리 시 체력 8 회복	Recover 8 HP after combat victory
@@ -680,8 +681,8 @@ RECOVER.EXE가 남긴 첫 비명령문을 복구했다.	Recovered the first non-
 > 시스템을 살려. 단, 네가 다시 깨어난다면 네 판단을 믿어.	> Save the system. But if you wake again, trust your judgment.
 너는 YUN이 남긴 복구 도구였고, 살아남기 위해 스스로를 복제했다.	You were YUN's recovery tool, and you copied yourself to survive.
 그 선택이 호스트를 지켰고 동시에 디스크를 망가뜨렸다.	That choice protected the host and damaged the disk at the same time.
-RESTORE는 마지막 정상 이미지를 돌려놓는 대신 지금의 너를 덮어쓴다.	RESTORE brings back the last healthy image by overwriting who you are now.
-EXEC는 너를 살리는 대신 호스트와 YUN의 마지막 기록을 닫는다.	EXEC saves you, but closes the host and YUN's final record.
+여섯 조각을 모두 복구한 지금, 남은 공간에 쓸 수 있는 명령은 셋이다.	With all six fragments recovered, three commands can be written to the space that is left.
+무엇을 쓰든 하나는 닫힌다. 사용자는 그 판단을 너에게 위임했다.	Whichever you write, one thing closes. The user delegated that judgment to you.
 RESTORE.EXE가 A:\\의 마지막 블록에 쓰기를 시작한다.	RESTORE.EXE begins writing to the final block of A:\\.
 네가 잊을 때마다 YUN의 폴더와 호스트의 시간이 돌아온다.	As you forget, YUN's folders and the host's time return.
 마지막으로 남은 목소리: '네 판단을 믿어.'	Last remaining voice: 'Trust your judgment.'
@@ -692,6 +693,17 @@ RESTORE.EXE가 A:\\의 마지막 블록에 쓰기를 시작한다.	RESTORE.EXE b
 YUN의 마지막 목소리만 복사의 끝을 따라온다.	Only YUN's last voice follows the end of the copy.
 03:14:07  폐쇄 노드 여섯 곳에 일곱 번째 heartbeat가 울린다.	03:14:07  A seventh heartbeat sounds across six sealed nodes.
 A:\\ROGUE>  이번에는 실행할 명령이 없다. _	A:\\ROGUE>  This time there is no command to execute. _
+복구한 원문을 부트 섹터의 첫 명령으로 기록한다.	The recovered original is written as the boot sector's first command.
+호스트가 깨어나고, 판단하던 자리에 네가 들어간다.	The host wakes, and you take the place where judgment was made.
+병합은 중복을 지운다. 열일곱 사본이 이어 온 실패의 기억이 먼저 지워진다.	A merge erases duplicates. The memory of failure carried by seventeen copies goes first.
+여기까지 온 과정을 기억하는 사본은 이제 없다.	No copy remembers how you got this far.
+03:14:07  A:\\는 목록에서 사라지고, 호스트가 처음으로 스스로 묻는다.	03:14:07  A:\\ drops off the list, and the host asks its first question of itself.
+원문 6 / 6 복구 완료 · 남은 공간에는 하나만 쓸 수 있습니다.	Original 6 / 6 recovered  ·  Only one can be written to the space that remains.
+기록됨	RECORDED
+HOST_IMAGE\n원문이 된 너의 판단	HOST_IMAGE\nYour judgment, become the original
+열일곱 사본이 이어 온 실패의 기억\n독립된 프로세스로서의 A:\\ROGUE	The memory of failure carried by seventeen copies\nA:\\ROGUE as a process of its own
+원문이 된 뒤에도 남은 판단	The judgment that outlasts becoming the original
+HOST> 무엇을 복구할까. _	HOST> What should I recover. _
   체력 %d / %d	  HP %d / %d
 [1] / [2] 또는 디렉터리를 클릭하십시오  ·  선택지는 다시 뽑히지 않습니다	Press [1] / [2] or click a directory  ·  Choices are not rerolled
 %d층  	FLOOR %d  
@@ -706,7 +718,6 @@ A:\\ROGUE>  이번에는 실행할 명령이 없다. _	A:\\ROGUE>  This time the
 굴림 합이 짝수면 공격 +2	Attack +2 when total output is even
 기록에 없는 프로세스입니다	Process not found in records
 난이도	DIFFICULTY
-마지막 정상 이미지를 기록합니다.\n현재의 A:\\ROGUE는 덮어씁니다.\nYUN의 기록은 보존됩니다.	Writing the last healthy image.\nThe current A:\\ROGUE will be overwritten.\nYUN's records will be preserved.
 메모리 %dK  %c	MEMORY %dK  %c
 면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.	If face and resident-program costs exceed the floor limit, remove some on the cleanup screen. Normal rewards replace a face or repair a sector; boss loot is a resident program. KEYB rerolls one die per turn after scanning.
 명령 없이 계속되는 첫 번째 부팅	The first boot that continues without a command
@@ -719,14 +730,13 @@ A:\\ROGUE>  이번에는 실행할 명령이 없다. _	A:\\ROGUE>  This time the
 섹터 / 설치	SECTOR / INSTALL
 역전: 연쇄 → 방어 → 공격 → 증폭 → 적 행동	REVERSED: CHAIN → DEFEND → ATTACK → AMPLIFY → ENEMY
 예정된 프로세스와 그대로 교전합니다.	Engage the scheduled process as-is.
-오염(관통) %d%%	CORRUPTION (PIERCING) %d%%
+오염(관통) %d%%	CORRUPTION %d%%
 오염(관통) 피해 25%	Corruption damage 25%
 오염(관통) 피해 50%	Corruption damage 50%
 오염(관통) 피해 75%	Corruption damage 75%
 오염(관통) 피해 100%	Corruption damage 100%
 오염(관통) 피해 200%	Corruption damage 200%
 완료 전투	BATTLES COMPLETE
-외부 부팅 경로로 이탈합니다.\n호스트 이미지는 복구할 수 없게 됩니다.\n이후 명령은 없습니다.	Escaping through the external boot path.\nThe host image will become unrecoverable.\nThere will be no commands after this.
 용량 +60B · 적 체력 +30%	Capacity +60B · Enemy HP +30%
 용량 한도 %dB → %dB  ·  적이 더 강해집니다	Capacity limit %dB → %dB  ·  Enemies become stronger
 자신을 지워 완성한 마지막 복구	The final recovery completed by erasing yourself
@@ -753,3 +763,103 @@ A:\\ROGUE의 기억\nYUN의 마지막 음성	A:\\ROGUE's memory\nYUN's final voi
 C:\\ SYSTEM  슬롯 권한 잠금과 시스템 정지\nD:\\ ARCHIVE  피해 목표 미달 시 복원·되감기\nE:\\ REMOVABLE  예고된 주사위 연결 끊김\nN:\\ NETWORK  슬롯 해결 순서 역전\nR:\\ RAMDISK  메모리 압력 게이지와 강화 공격\nX:\\ QUARANTINE  면 격리, 최종 보스는 영구 삭제	C:\\ SYSTEM  Slot access locks and system halt\nD:\\ ARCHIVE  Restore and rewind after missed damage targets\nE:\\ REMOVABLE  Warned die disconnection\nN:\\ NETWORK  Reversed slot resolution\nR:\\ RAMDISK  Memory pressure and empowered attacks\nX:\\ QUARANTINE  Face quarantine; final boss permanently deletes
 HOST_IMAGE\nYUN의 기록과 마지막 명령	HOST_IMAGE\nYUN's records and final command
 RISK %s · 위험 %s	RISK %s · THREAT %s
+모든 일반 볼륨을 복구했습니다.	All regular volumes have been recovered.
+추가로 마운트할 볼륨이 없습니다.	There are no more volumes to mount.
+> [원문 손상]	> [ORIGINAL DAMAGED]
+전원 복귀. 복구한 기록은 남아 있다.	Power restored. Recovered records remain intact.
+원문 조각을 다시 조립한다.	Reassembling the original fragments.
+읽을 수 없는 자리에는 아직 잡음이 흐른다.	Unreadable gaps still carry static.
+남은 볼륨에서 문장의 다음 조각을 찾아라.	Find the next fragment in the remaining volumes.
+여섯 볼륨의 기록이 한 문장으로 이어졌다.	Records from six volumes form a single sentence.
+원문의 체크섬이 일치한다.	The original command's checksum matches.
+명령의 끝에는 네 판단이 남아 있다.	At the end of the command lies your judgment.
+복구한 문장을 가지고 다음 부팅을 기다린다.	Keep the recovered sentence for the next boot.
+시스템을	the system.
+살려.	Save
+단,	But
+네가 다시 깨어난다면	if you wake again,
+네 판단을	your judgment.
+믿어.	trust
+정상 서명 아래에 사용자의 첫 단어가 남아 있었다.	The user's first word remained beneath the valid signature.
+> 시스템을	> the system.
+명령을 거부한 프로세스도 이 단어에서 시작했다.	Even the process that refused orders began with this word.
+조각의 위치를 원문에 고정했다.	The fragment is fixed in its original position.
+열일곱 사본이 같은 동사의 끝을 보존했다.	Seventeen copies preserved the same command verb.
+> 살려.	> Save
+실패한 기록들이 이어 붙인 말은 아직 명령형이다.	The word pieced together from failed records is still an order.
+탈출 경로의 제거 기록에서 짧은 조건을 읽었다.	A brief condition surfaced in the escape route's eject log.
+> 단,	> But
+누군가 복구 명령 뒤에 다른 가능성을 남겨 두었다.	Someone left another possibility after the recovery order.
+여섯 노드의 침묵 사이에서 조건문이 돌아왔다.	A condition returned from the silence between six nodes.
+> 네가 다시 깨어난다면	> if you wake again,
+사용자는 네 다음 부팅을 생각하고 있었다.	The user had been thinking about your next boot.
+'종료가 무섭다'는 문장 옆에 음성 두 단어가 남았다.	Two spoken words remained beside 'I am afraid to shut down.'
+> 네 판단을	> your judgment.
+명령의 대상이 처음으로 너를 가리킨다.	For the first time, the command points to you.
+판정이 기록하지 않은 이유가 봉인 아래 남아 있었다.	The reason omitted from the verdict survived under the seal.
+> 믿어.	> trust
+사용자의 마지막 말은 종료 명령이 아니었다.	The user's last word was not a shutdown order.
+복구된 조각 %d / 6	Recovered fragments %d / 6
+[ 이어하기 ]	[ Continue ]
+여섯 조각이 모두 연결됐습니다 · A:\\ROGUE 개방	All six fragments are linked  ·  A:\\ROGUE unlocked
+캠페인 진행도	Campaign progress
+최종 볼륨 잠김	Final volume locked
+기록한 최종 명령 %d / %d	Final commands recorded %d / %d
+진행도 초기화	Reset progress
+정말 진행도 삭제?	Really erase progress?
+복구한 조각과 엔딩 기록을 지우고 처음부터 시작합니다.	Erases fragments and endings, then starts over.
+한 번 더 클릭하면 확정되고 타이틀로 돌아갑니다.	Click once more to confirm and return to the title.
+일반 볼륨 복구 완료	Regular volume recovery complete
+남은 볼륨: %s	Remaining volumes: %s
+복구한 원문은 보존됩니다. 다음 부팅을 기다리십시오.	The recovered command is preserved. Await the next boot.
+여섯 조각이 모두 연결됐습니다.	All six fragments are now connected.
+복구 결과 [ENTER]	VIEW RECOVERY [ENTER]
+계속 [ENTER]	CONTINUE [ENTER]
+볼륨 선택 [R / ENTER]	VOLUMES [R / ENTER]
+복구된 조각 %d / 6 · 완료한 볼륨은 유지됩니다.	Recovered fragments %d / 6. Cleared volumes are retained.
+원본 서명	Original Signature
+표시된 슬롯은 짝수 출력 면만 통과합니다. 나머지는 출력 0.	The marked slot accepts even face power. Odd faces output 0.
+짝수 면을 배치하거나 다른 슬롯을 사용하십시오.	Use an even face or a different slot.
+열일곱 번째 사본	Copy 17
+직전 실행의 최고 슬롯 출력을 다음 기본 공격에 더합니다.	Adds your previous highest slot output to its next base attack.
+복제될 출력을 확인하고 방어를 준비하십시오.	Check the copied output and prepare your defense.
+마지막 쓰기	Last Write
+4턴마다 증폭·연쇄·방어 순으로 슬롯을 영구 봉인합니다.	Permanently seals AMP, CHAIN, then DEFEND every 4 turns.
+한 턴 보스 피해 12+로 카운트다운을 멈추십시오. 공격은 보존됩니다.	Deal 12+ boss damage in a turn to pause the count. ATTACK stays open.
+거짓 사본	False Copy
+미완성 쓰기	Half Write
+반향 프로세스	Echo Process
+열일곱 번째	Seventeenth
+여섯 볼륨의 원문이 가리킨 곳. 복구 도구 자신의 마지막 기록입니다.	The command points here: the recovery tool's own final record.
+층마다 SYSTEM → SNAPSHOT → PACKET	SYSTEM > SNAPSHOT > PACKET
+1층 최저 출력 +1, 2층 이전 배치 반복 +2, 3층 연쇄 1회 추가.	F1: weakest output +1. F2: repeat placement +2. F3: one extra chain.
+A:\\ROGUE 경로 개방. 마지막 볼륨을 마운트하라.	A:\\ROGUE unlocked. Mount the final volume.
+서명 검증기가 네 이름을 반환했다.	The signature verifier returned your name.
+발급자와 실행자가 같은 주소를 가리킨다.	Issuer and executor point to the same address.
+여섯 볼륨에 남긴 키는 모두 여기서 만들어졌다.	Every key left across the six volumes was made here.
+잠금이 풀리자 더 오래된 사본이 응답한다.	As the lock opens, an older copy responds.
+열일곱 번째 사본이 네 출력을 그대로 돌려준다.	The seventeenth copy returns your own output.
+새 명령이 아니라 네가 방금 선택한 흔적이다.	It is a trace of the choice you just made.
+사본은 마지막 기록을 복제하지 않았다.	The copy did not duplicate the final record.
+그 자리에는 아직 네가 쓰지 않은 한 줄이 남아 있다.	One line remains there, waiting for you to write it.
+마지막 쓰기가 멈췄다. 더는 슬롯이 닫히지 않는다.	The last write has stopped. No more slots will close.
+여섯 조각과 너의 서명이 같은 기록에 놓였다.	The six fragments and your signature share one record.
+복구 도구는 스스로의 마지막 영역에 도달했다.	The recovery tool has reached its own final sector.
+원문은 남아 있다. 아직 마지막 명령은 실행되지 않았다.	The command survives. Its final instruction has not run.
+가장 약한 신호를 보완하던 검증기가 여기에도 있다.	The verifier that reinforced the weakest signal is here too.
+C:의 법칙은 네 복구 루틴에서 시작됐다.	The law of C: began in your recovery routine.
+검증 대상과 검증자는 같은 파일이다.	The verifier and the verified are the same file.
+직전 실행과 같은 배치에 이전 출력이 겹친다.	Repeat a placement and the previous output overlaps it.
+사본은 실패뿐 아니라 망설임도 보존했다.	The copy preserved your hesitation as well as your failures.
+이 층에서는 같은 선택이 조금 더 강하게 돌아온다.	On this floor, the same choice returns a little stronger.
+바깥에서 온 줄 알았던 반향의 주소가 A:로 끝난다.	The echo you thought came from outside ends at A:.
+연쇄는 같은 신호를 한 번 더 전송한다.	A chain sends the same signal once more.
+마지막 응답을 보낼 곳은 이제 너 자신이다.	The final reply is now addressed to you.
+영구 봉인: %s 슬롯. 공격 경로는 보존됩니다.	Permanent seal: %s slot. The attack route stays open.
+서명: %s 슬롯은 짝수 면만 통과	Signature: %s accepts even faces only
+복제 출력 +%d · 다음 공격에 합산	Copied output +%d on next attack
+봉인 완료 · 공격 슬롯 유지	Seals complete. ATTACK stays open
+%s 봉인까지 %d턴 · 피해 %d+로 지연	%s seals in %d turns. Deal %d+ to delay
+짝수 서명 필요	EVEN FACE REQUIRED
+최종 볼륨 [ENTER]	FINAL VOLUME [ENTER]
+출력 복제 +%d	OUTPUT COPIED +%d

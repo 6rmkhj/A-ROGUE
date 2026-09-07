@@ -3,7 +3,7 @@
 #
 #   python tools/gen_music.py
 #
-# 아래 SONGS 를 고치고 실행하면 music.cpp 안의 `static const MusicSong SONG[6] = { ... };`
+# 아래 SONGS 를 고치고 실행하면 music.cpp 안의 `static const MusicSong SONG[MUSIC_DRIVE_COUNT] = { ... };`
 # 블록만 제자리에서 다시 쓴다. 재생기 코드는 건드리지 않는다.
 #
 # 표기: 마디당 16토큰(X:\는 15개만 쓰이고 16번째는 무시). 숫자 = 반음, "." = 쉼표,
@@ -157,6 +157,26 @@ SONGS.append(dict(
     kick=[0x0249, 0x0249], snare=[0x1040, 0x1040], hat=[0x2492, 0x2492],
 ))
 
+# A: ROGUE -- the opening motif returns, but resolves through the archive's
+# descending phrase into a new, unfinished cadence.
+SONGS.append(dict(
+    name='A:\\ ROGUE', tonic=0, bpm=132, steps=16, duty=25, cut=210, drop=0,
+    root=[0, -4, 5, -2, 3, 0, -5, 0], third=[m, M, m, M, M, m, M, m],
+    bass=[tokens('0 . 0 . . . 7 . 0 . . . 5 . 7 .', 16),
+          tokens('0 . 0 . 7 . 0 . 3 . 5 . 7 . . .', 16)],
+    arp=[tokens('0 2 3 2 0 2 4 2 0 2 3 5 3 2 1 2', 16),
+         tokens('3 2 0 2 3 5 4 2 3 2 0 2 1 2 3 .', 16)],
+    lead=[bars('12 . . . 15 . 17 . 19 . . . 17 . 15 .',
+               '12 . . . 19 . . . 17 . 15 . 12 . . .',
+               '17 . . . 20 . 22 . 24 . . . 22 . 20 .',
+               '19 . 17 . 15 . . . 14 . . . 19 . . .'),
+          bars('24 . . . 22 . 20 . 19 . . . 17 . 15 .',
+               '20 . 19 . 17 . 15 . 12 . . . 15 . . .',
+               '19 . . . 23 . . . 26 . . . 23 . 19 .',
+               '24 . . . 19 . . . 15 . . . 14 . . .')],
+    kick=[0x1111, 0x1191], snare=[0x1010, 0x1010], hat=[0x5555, 0xD555],
+))
+
 def song_init(s):
     assert len(s['root']) == 8 and len(s['third']) == 8
     for k in ('bass', 'arp'): assert len(s[k]) == 2 and all(len(v) == 16 for v in s[k])
@@ -172,7 +192,7 @@ def song_init(s):
 
 def main():
     src = io.open(TARGET, 'rb').read().decode('utf-8').replace('\r\n', '\n')
-    head = 'static const MusicSong SONG[6] = {\n'
+    head = 'static const MusicSong SONG[MUSIC_DRIVE_COUNT] = {\n'
     i = src.index(head) + len(head)
     j = src.index('\n};\n', i)
     data = ',\n'.join(song_init(s) for s in SONGS)
