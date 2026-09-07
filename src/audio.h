@@ -17,6 +17,7 @@ enum SfxId {
     // 플레이어 공격이 적에게 닿는 순간. 계열 SFX와 달리 매 턴 울리므로 짧고 건조하다.
     SFX_HIT_IMPACT,
     SFX_CHARGE, SFX_HEAVY_HIT, SFX_SHIELD_RISE, SFX_SHIELD_BLOCK, SFX_CHAIN_ARC,
+    SFX_UI_FOCUS, SFX_BOSS_ARRIVE, SFX_LOOT_REVEAL, SFX_REPAIR,
     SFX_COUNT
 };
 
@@ -26,6 +27,10 @@ void AudioClose();
 int AudioUnderruns();
 void PlaySfx(int id);
 void PlaySfxPitched(int id, int semitones);
+// The same deterministic PCM synthesis used by the live mixer. No device,
+// window, game RNG, or playback is required for offline waveform verification.
+// Returns samples written: mono signed 16-bit PCM at 22050 Hz, at most 17640.
+int RenderSfx(int id, int semitones, short* out, int capacity);
 
 // 모든 효과음에 함께 걸리는 마스터 볼륨 (0~100). 합성 단계가 아니라 믹서에서
 // 걸리므로 이미 울리고 있는 소리에도 곧바로 적용되고, 파형을 다시 만들 필요가 없다.

@@ -87,7 +87,34 @@ int FxScale(int amount) {
     if (gFxLevel == FX_OFF) return 0;
     return gFxLevel == FX_REDUCED ? amount / 2 : amount;
 }
-static int gHoverId = -1;
+static int gMouseInClient;
+static void SyncUiFocus();
+
+// This clock follows one actionable target, not mouse-move frequency. Keeping
+// the reducer free of window/audio calls also makes dwell and reset rules
+// testable with a fixed presentation clock.
+struct UiFocusState {
+    int id, scene, scope, turn, cued;
+    DWORD since;
+};
+static UiFocusState gUiFocus = {-1, -1, -1, -1, 0, 0};
+static int UpdateUiFocusState(UiFocusState* focus, int id, int scene, int scope, int turn, DWORD now) {
+    if (focus->id == id && focus->scene == scene && focus->scope == scope && focus->turn == turn) return 0;
+    focus->id = id; focus->scene = scene; focus->scope = scope; focus->turn = turn;
+    focus->since = now; focus->cued = 0;
+    return 1;
+}
+static int UiFocusAge(const UiFocusState& focus, DWORD now) {
+    if (focus.id < 0) return -1;
+    DWORD age = now - focus.since;
+    return age > 0x7fffffffu ? 0x7fffffff : (int)age;
+}
+static int UiFocusCueDue(UiFocusState* focus, DWORD now) {
+    if (focus->cued || UiFocusAge(*focus, now) < 170) return 0;
+    focus->cued = 1;
+    return 1;
+}
+int UiFocusElapsed() { return UiFocusAge(gUiFocus, GetTickCount()); }
 
 // ---- corrupted-sector dice reveal (display only) --------------------------
 // The turn's real result is already fixed in gGame.dice[].rolledFace by the
@@ -646,15 +673,34 @@ int EnemyBob(int index) {
 }
 
 static int gIdleActive;
+static int gSceneKey = -1;
+static DWORD gSceneStart;
+static int VisibleSceneKey() {
+    int phase = (gTurnTraceActive || gDeathActive || gCombatClearActive) ? PHASE_COMBAT : gGame.phase;
+    return phase + 16 * (gGame.floor + 4 * gGame.encounter)
+        + (phase == PHASE_STORY ? 256 * (gGame.story.kind + 16 * gGame.story.fragment + 256 * gGame.story.page) : 0);
+}
+int SceneElapsed() { return gSceneKey < 0 ? 1200 : (int)(GetTickCount() - gSceneStart); }
 void SyncIdleAnimation() {
+    SyncUiFocus();
+    int key = VisibleSceneKey();
+    // Count from the first visible frame, not while descent/install covers it.
+    if (gDescentActive || gDirEnterActive || gBootActive || UiFxSnapshotActive()) gSceneKey = -1;
+    else if (key != gSceneKey) {
+        gSceneKey = key; gSceneStart = GetTickCount();
+        if (gWindow && !gTurnTraceActive && !gCombatClearActive && !gDeathActive) {
+            if (gGame.phase == PHASE_COMBAT && gGame.encounter == 2) PlaySfx(SFX_BOSS_ARRIVE);
+            else if (gGame.phase == PHASE_REWARD) PlaySfx(SFX_LOOT_REVEAL);
+        }
+    }
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
     // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
-    int wanted = ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT
+    int wanted = ((FxDecorOn() || gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_DRIVE_SELECT
         || gGame.phase == PHASE_DIRECTORY || gGame.phase == PHASE_VICTORY || AmbientNoiseLevel() > 0)
         && !gGuideOpen && !gSettingsOpen && !gDeckOpen) || GuideNoiseActive();
     if (wanted == gIdleActive) return;
     gIdleActive = wanted;
-    if (wanted) SetTimer(gWindow, 2, 55, 0); else KillTimer(gWindow, 2);
+    if (wanted) SetTimer(gWindow, 2, 33, 0); else KillTimer(gWindow, 2);
 }
 
 // 마지막 에필로그를 닫는 순간부터 결과 화면의 기록이 차례로 올라온다.
@@ -821,7 +867,7 @@ static void TakeRepairReward() {
     if (animated) { gUiFx.rewardIndex = REWARD_REPAIR; gUiFx.valueBefore = before; }
     RepairSector(&gGame);
     if (animated) gUiFx.valueAfter = gGame.playerHp;
-    PlaySfx(SFX_REWARD_SET);
+    PlaySfx(SFX_REPAIR);
 }
 
 // 디렉터리 카드를 고른다. 실패(잘못된 index)면 아무 일도 일어나지 않는다.
@@ -895,6 +941,8 @@ static void ClickPrune(int x, int y) {
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
 // -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
 static int HoverId(int x, int y) {
+    if (gTermOpen || gDeathActive || gBootActive || UiFxBlocksInput() || gTurnTraceActive
+        || gDescentActive || gDirEnterActive || gCombatClearActive) return -1;
     if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) return 1000;
     if (gDeckOpen) return Inside(DeckCloseRect(BASE_WIDTH), x, y) ? 1001 : -1;
     if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) return 900;
@@ -913,10 +961,11 @@ static int HoverId(int x, int y) {
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y)) return 801;
-        if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 802;
-        if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 803;
+        if (gGuidePage > 0 && Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 802;
+        if (gGuidePage < 1 && Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 803;
         return -1;
     }
+    if (RollBlocking()) return -1;
     if (gGame.phase == PHASE_TITLE) {
         if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
         return -1;
@@ -936,27 +985,60 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (gGame.phase == PHASE_COMBAT) {
-        for (int i = 0; i < gGame.enemyCount; ++i) if (Inside(EnemyRect(i), x, y)) return 100 + i;
+        if (!gRolled && !gReadActive && Inside(ReadButtonRect(), x, y)) return 420;
+        if (!gRolled) return -1;
+        for (int i = 0; i < gGame.enemyCount; ++i)
+            if (gGame.enemies[i].alive && !GimmickSummonPending(i) && Inside(EnemyRect(i), x, y)) return 100 + i;
         for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) return 200 + i;
-        for (int i = 0; i < SLOT_COUNT; ++i) if (Inside(SlotRect(i), x, y)) return 300 + i;
+        for (int i = 0; i < SLOT_COUNT; ++i)
+            if ((gGame.selectedDie >= 0 ? !SlotLockedThisTurn(&gGame, i) : DieForSlotUI(i) >= 0)
+                && Inside(SlotRect(i), x, y)) return 300 + i;
         if (Inside(EndTurnRect(), x, y)) return 400;
-        if (IsTsrInstalled(&gGame, TSR_KEYB) && Inside(KeybButtonRect(), x, y)) return 410;
+        if (IsTsrInstalled(&gGame, TSR_KEYB) && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0
+            && Inside(KeybButtonRect(), x, y)) return 410;
         return -1;
     }
     if (gGame.phase == PHASE_REWARD) {
-        for (int i = 0; i < REWARD_CARD_COUNT; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) return 500 + i;
-        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
+        for (int i = 0; i < 3; ++i) {
+            int tsr = gGame.rewardKinds[i];
+            int usable = !gGame.rewardIsTsr || (tsr >= 0 && tsr < TSR_COUNT && !gGame.tsrInstalled[tsr]);
+            if (usable && Inside(RewardRect(i, BASE_WIDTH), x, y)) return 500 + i;
+        }
+        if (CanRepairSector() && Inside(RewardRect(REWARD_REPAIR, BASE_WIDTH), x, y)) return 500 + REWARD_REPAIR;
+        if (!gGame.rewardIsTsr && gGame.selectedReward >= 0)
+            for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f)
+                if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
         return -1;
     }
     if (gGame.phase == PHASE_PRUNE) {
         int tsrCount = InstalledTsrCount(&gGame);
         for (int i = 0; i < tsrCount && i < 4; ++i) if (Inside(PruneTsrRect(i), x, y)) return 640 + i;
-        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
-        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
+        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f)
+            if ((gGame.dice[d].faces[f].kind != FACE_EMPTY || CanUndoPrunedFace(&gGame, d, f))
+                && Inside(FaceGridRect(d, f), x, y)) return 600 + d * 6 + f;
+        if (UsedBytes(&gGame) <= EffectiveCapacity(&gGame) && NonEmptyFaceCount(&gGame) > 0
+            && Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 700;
         return -1;
     }
     return -1;
+}
+
+static void SyncUiFocus() {
+    int scope = gDeckOpen | (gSettingsOpen << 1) | (gGuideOpen << 2) | (gTermOpen << 3)
+        | (gGuidePage << 4) | (gDeathActive << 6) | (gBootActive << 7)
+        | (UiFxSnapshotActive() << 8) | (gTurnTraceActive << 9) | (gDescentActive << 10)
+        | (gDirEnterActive << 11) | (gCombatClearActive << 12) | (gReadActive << 13);
+    int hover = gMouseInClient && !gVolumeDragging ? HoverId(gMouse.x, gMouse.y) : -1;
+    if (UpdateUiFocusState(&gUiFocus, hover, VisibleSceneKey(), scope,
+            gGame.phase == PHASE_COMBAT ? gGame.turn : -1, GetTickCount())) {
+        if (gWindow) InvalidateRect(gWindow, 0, FALSE);
+    }
+}
+
+static void TickUiFocus() {
+    SyncUiFocus();
+    if (UiFocusCueDue(&gUiFocus, GetTickCount())) PlaySfx(SFX_UI_FOCUS);
 }
 
 static void HandleClick(int x, int y) {
@@ -1242,24 +1324,41 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        if (!gMouseInClient) {
+            TRACKMOUSEEVENT track = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
+            TrackMouseEvent(&track); gMouseInClient = 1;
+        }
         if (gVolumeDragging) { SetAudioVolume(VolumeFromX(gMouse.x)); InvalidateRect(window, 0, FALSE); return 0; }
-        int hover = HoverId(gMouse.x, gMouse.y);
-        if (hover != gHoverId) { gHoverId = hover; InvalidateRect(window, 0, FALSE); }
+        SyncUiFocus();
         return 0;
     }
+    case WM_MOUSELEAVE:
+        gMouseInClient = 0; gMouse.x = gMouse.y = -1;
+        SyncUiFocus(); InvalidateRect(window, 0, FALSE); return 0;
+    case WM_ACTIVATEAPP:
+        if (!wParam) { gMouseInClient = 0; gMouse.x = gMouse.y = -1; SyncUiFocus(); }
+        return 0;
     case WM_LBUTTONUP:
         if (gVolumeDragging) {
             gVolumeDragging = 0;
             ReleaseCapture();
             PlaySfx(SFX_CONFIRM);          // 맞춘 크기를 귀로 확인시킨다
+            SyncUiFocus(); gUiFocus.cued = 1;
             InvalidateRect(window, 0, FALSE);
         }
         return 0;
     case WM_CAPTURECHANGED: gVolumeDragging = 0; return 0;
-    case WM_LBUTTONDOWN: { POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); HandleClick(p.x, p.y); return 0; }
-    case WM_KEYDOWN: if ((lParam & (1u << 30)) == 0) HandleKey(wParam); return 0;
+    case WM_LBUTTONDOWN: {
+        POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        HandleClick(p.x, p.y); SyncUiFocus();
+        // An immediate click has its own cue; do not trail it with a hover tick.
+        gUiFocus.cued = 1; return 0;
+    }
+    case WM_KEYDOWN:
+        if ((lParam & (1u << 30)) == 0) { HandleKey(wParam); SyncUiFocus(); }
+        return 0;
     case WM_TIMER:
-        if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); return 0; }   // 믹싱은 오디오 스레드가 한다
+        if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); TickUiFocus(); return 0; }   // 믹싱은 오디오 스레드가 한다
         if (wParam == 1u) TickRollAnimation();
         else if (wParam == 2u) InvalidateRect(window, 0, FALSE);
         else if (wParam == 3u) {

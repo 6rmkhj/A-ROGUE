@@ -55,18 +55,21 @@ static const SfxSpec SFX[SFX_COUNT] = {
     {{ 82,  48,   0}, { 65,120,  0},  -34, WAVE_TRI,   50,  1, 68, 100,  58,  65,   1},  // HEAVY_HIT: crack + low body
     {{260, 520, 780}, { 38, 42, 95},   20, WAVE_TRI,   50,  2, 45,  58,   5, 120,   1},  // SHIELD_RISE
     {{920, 460,   0}, { 32,110,  0},  -45, WAVE_TRI,   50,  1, 70,  72,  20, 150,   1},  // SHIELD_BLOCK: glass ping
-    {{440, 660, 880}, { 25, 25, 65},   80, WAVE_PULSE, 25,  1, 60,  56,  18, 110,   1}   // CHAIN_ARC
+    {{440, 660, 880}, { 25, 25, 65},   80, WAVE_PULSE, 25,  1, 60,  56,  18, 110,   1},  // CHAIN_ARC
+    // These four cues use authored material layers in RenderMaterialSfx below.
+    {{430,   0,   0}, { 42,  0,  0},    0, WAVE_TRI,   50,  2, 90,  14,   0, 100,   1},  // UI_FOCUS: felt detent
+    {{ 92,   0,   0}, {590,  0,  0},  -36, WAVE_TRI,   50,  8, 90,  72,   0,  60,   1},  // BOSS_ARRIVE: heavy latch + pressure
+    {{784,   0,   0}, {420,  0,  0},    0, WAVE_TRI,   50,  3, 90,  43,   0, 130,   1},  // LOOT_REVEAL: struck glass + small catch
+    {{330,   0,   0}, {460,  0,  0},    0, WAVE_TRI,   50, 10, 90,  46,   0, 110,   1}   // REPAIR: soft seal + warm resonance
 };
-
-static uint32_t gNoiseSeed = 0x13579BDFu;
 
 // 2^(n/12) in 1/256ths, for pitching a cue up by whole semitones
 static const int SEMITONE[8] = {256, 271, 287, 304, 323, 342, 362, 384};
 
-static int SfxOsc(int wave, int phase, int period, int duty) {
+static int SfxOsc(int wave, int phase, int period, int duty, uint32_t* noiseSeed) {
     if (wave == WAVE_NOISE) {
-        gNoiseSeed = gNoiseSeed * 1664525u + 1013904223u;
-        return (int)((gNoiseSeed >> 16) & 0xFFFFu) - 32768;
+        *noiseSeed = *noiseSeed * 1664525u + 1013904223u;
+        return (int)((*noiseSeed >> 16) & 0xFFFFu) - 32768;
     }
     if (period < 2) period = 2;
     int pos = phase % period;
@@ -81,6 +84,77 @@ static int SfxOsc(int wave, int phase, int period, int duty) {
     int cap = hi > -lo ? hi : -lo;
     if (cap > 26000) { hi = hi * 26000 / cap; lo = lo * 26000 / cap; }
     return pos * 100 < period * duty ? hi : lo;
+}
+
+// A phase-continuous, rounded triangle: bends do not jump between integer
+// periods. These event cues are single physical gestures with overlapping
+// resonances, so each has its own weight and decay instead of a note ladder.
+static int MaterialTone(uint32_t* phase, int hz) {
+    *phase += (uint32_t)hz * 65536u / SFX_RATE;
+    int p = (int)(*phase & 65535u);
+    int tri = p < 32768 ? p * 2 - 32768 : 98304 - p * 2;
+    int a = tri < 0 ? -tri : tri;
+    return tri * (65536 - a) / 32768;
+}
+
+static int MaterialEnvelope(int sample, int startMs, int lengthMs, int attackMs) {
+    int at = sample - SFX_RATE * startMs / 1000;
+    int length = SFX_RATE * lengthMs / 1000;
+    if (at < 0 || at >= length) return 0;
+    int attack = SFX_RATE * attackMs / 1000;
+    if (attack < 1) attack = 1;
+    if (at < attack) return at * 256 / attack;
+    int tail = (length - at) * 256 / (length - attack);
+    return tail * tail / 256;
+}
+
+static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
+    if (id < SFX_UI_FOCUS || id > SFX_REPAIR) return 0;
+    int count = SFX_RATE * SFX[id].ms[0] / 1000;
+    if (count > capacity) count = capacity;
+    uint32_t phase[3] = {}, noise = 0x5f31a129u + (uint32_t)id * 7919u;
+    int filtered = 0;
+    for (int i = 0; i < count; ++i) {
+        noise = noise * 1664525u + 1013904223u;
+        int hiss = (int)((noise >> 16) & 65535u) - 32768;
+        filtered += (hiss - filtered) * 52 / 256;
+        int ms = i * 1000 / SFX_RATE, value;
+        if (id == SFX_UI_FOCUS) {
+            int body = MaterialTone(&phase[0], 430 * shift / 256);
+            value = body * MaterialEnvelope(i, 0, 42, 2) / 256 * 14 / 100
+                + filtered * MaterialEnvelope(i, 0, 11, 1) / 256 * 9 / 100;
+        } else if (id == SFX_BOSS_ARRIVE) {
+            int fall = ms < 80 ? ms : 80;
+            int body = MaterialTone(&phase[0], (104 - fall * 48 / 80) * shift / 256);
+            int metal = MaterialTone(&phase[1], 173 * shift / 256);
+            value = body * MaterialEnvelope(i, 18, 565, 5) / 256 * 58 / 100
+                + metal * MaterialEnvelope(i, 20, 210, 2) / 256 * 13 / 100
+                + filtered * MaterialEnvelope(i, 0, 116, 14) / 256 * 36 / 100
+                + filtered * MaterialEnvelope(i, 146, 46, 1) / 256 * 19 / 100;
+        } else if (id == SFX_LOOT_REVEAL) {
+            int glass = MaterialTone(&phase[0], 784 * shift / 256);
+            int overtone = MaterialTone(&phase[1], 1309 * shift / 256);
+            value = glass * MaterialEnvelope(i, 24, 396, 2) / 256 * 28 / 100
+                + overtone * MaterialEnvelope(i, 26, 233, 3) / 256 * 11 / 100
+                + filtered * MaterialEnvelope(i, 0, 28, 1) / 256 * 18 / 100;
+        } else {
+            int settle = ms < 200 ? ms : 200;
+            int warm = MaterialTone(&phase[0], (286 + settle * 44 / 200) * shift / 256);
+            int paired = MaterialTone(&phase[1], 334 * shift / 256);
+            value = warm * MaterialEnvelope(i, 0, 460, 48) / 256 * 29 / 100
+                + paired * MaterialEnvelope(i, 94, 366, 34) / 256 * 13 / 100
+                + filtered * MaterialEnvelope(i, 0, 185, 22) / 256 * 26 / 100
+                + filtered * MaterialEnvelope(i, 208, 31, 2) / 256 * 12 / 100;
+        }
+        if (value > 32767) value = 32767; else if (value < -32767) value = -32767;
+        out[i] = (short)value;
+    }
+    return count;
+}
+
+static void FadeSfxTail(short* samples, int count) {
+    for (int i = 0; i < 32 && i < count; ++i)
+        samples[count - 1 - i] = (short)((int)samples[count - 1 - i] * i / 32);
 }
 
 // ---- output mixer ---------------------------------------------------------
@@ -221,32 +295,21 @@ void AudioClose() {
     gWaveOut = 0;
 }
 
-void PlaySfxPitched(int id, int semitones) {
-    if (id < 0 || id >= SFX_COUNT || !gWaveOut) return;
-    AudioGuard guard;   // 믹서가 같은 슬롯을 읽는 중에 갈아 끼우지 않는다
+int RenderSfx(int id, int semitones, short* out, int capacity) {
+    if (id < 0 || id >= SFX_COUNT || !out || capacity < 8) return 0;
+    if (capacity > SFX_MAX_SAMPLES) capacity = SFX_MAX_SAMPLES;
     const SfxSpec* s = &SFX[id];
-    if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER
-        || id == SFX_PLAYER_HIT || id == SFX_CRASH || id >= SFX_FX_LOCK)
-        gDuckFrames = SFX_RATE * 160 / 1000;
     if (semitones < 0) semitones = 0; else if (semitones > 7) semitones = 7;
     int shift = SEMITONE[semitones];
-
-    int slot = -1;
-    for (int v = 0; v < MIX_VOICES; ++v) if (gVoice[v].length <= 0) { slot = v; break; }
-    if (slot < 0) {                       // all busy: steal the one that started first
-        slot = 0;
-        for (int v = 1; v < MIX_VOICES; ++v) if (gVoiceAge[v] < gVoiceAge[slot]) slot = v;
-    }
-    MixVoice* voice = &gVoice[slot];
-    voice->length = 0;                    // park it while the samples are written
-    gVoiceAge[slot] = ++gVoiceClock;
-    short* out = voice->data;
+    int material = RenderMaterialSfx(id, shift, out, capacity);
+    if (material) { FadeSfxTail(out, material); return material; }
+    uint32_t noiseSeed = 0x13579BDFu + (uint32_t)id * 7919u;
 
     int total = 0;
     for (int n = 0; n < SFX_NOTES && s->hz[n] > 0; ++n) {
         int hz = (int)s->hz[n] * shift / 256;
         int count = SFX_RATE * s->ms[n] / 1000;
-        if (total + count > SFX_MAX_SAMPLES) count = SFX_MAX_SAMPLES - total;
+        if (total + count > capacity) count = capacity - total;
         if (count <= 0) break;
         int pulses = s->pulses < 1 ? 1 : s->pulses, span = count;
         if (pulses > 1) { span = count / pulses; if (span < 8) { span = count; pulses = 1; } }
@@ -256,10 +319,12 @@ void PlaySfxPitched(int id, int semitones) {
         int phase = 0, lp = 0;
         for (int i = 0; i < count; ++i) {
             int nowHz = hz + (int)s->bend * i / count; if (nowHz < 20) nowHz = 20;
-            int period = SFX_RATE / nowHz;
-            int value = SfxOsc(s->wave, phase, period, s->duty);
+            // Integrate frequency instead of taking a growing sample index
+            // modulo a changing period. The latter makes a downward bend
+            // stall or reverse, leaving a large DC offset in heavy impacts.
+            int value = SfxOsc(s->wave, phase, 16384, s->duty, &noiseSeed);
             if (s->noise > 0 && s->wave != WAVE_NOISE) {
-                int hiss = SfxOsc(WAVE_NOISE, 0, 0, 0);
+                int hiss = SfxOsc(WAVE_NOISE, 0, 0, 0, &noiseSeed);
                 value = (value * (100 - s->noise) + hiss * s->noise) / 100;
             }
             // one-pole low-pass: white noise and narrow pulses are all high
@@ -278,15 +343,43 @@ void PlaySfxPitched(int id, int semitones) {
             int o = value * env / 256 * s->volume / 100;
             if (o > 32767) o = 32767; else if (o < -32767) o = -32767;
             out[total + i] = (short)o;
-            phase += 1;
+            phase = (phase + nowHz * 16384 / SFX_RATE) & 16383;
         }
         total += count;
     }
-    if (total < 8) return;
-    for (int i = 0; i < 32 && i < total; ++i)
-        out[total - 1 - i] = (short)((int)out[total - 1 - i] * i / 32);
+    if (total < 8) return 0;
+    FadeSfxTail(out, total);
+    return total;
+}
+
+static int SfxDuckDuration(int id) {
+    if (id == SFX_BOSS_ARRIVE) return 260;
+    if (id == SFX_LOOT_REVEAL || id == SFX_REPAIR) return 90;
+    if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER
+        || id == SFX_PLAYER_HIT || id == SFX_CRASH || (id >= SFX_FX_LOCK && id <= SFX_CHAIN_ARC)) return 160;
+    return 0; // A focus detent never pumps the music underneath the cursor.
+}
+
+void PlaySfxPitched(int id, int semitones) {
+    if (id < 0 || id >= SFX_COUNT || !gWaveOut) return;
+    AudioGuard guard;
+    int duck = SFX_RATE * SfxDuckDuration(id) / 1000;
+    if (duck > gDuckFrames) gDuckFrames = duck;
+    int slot = -1;
+    for (int v = 0; v < MIX_VOICES; ++v) if (gVoice[v].length <= 0) { slot = v; break; }
+    if (slot < 0) {
+        // Hover feedback is expendable when the mix is full. A cursor must
+        // never cut off a strike, boss arrival, or another deliberate action.
+        if (id == SFX_UI_FOCUS) return;
+        slot = 0;
+        for (int v = 1; v < MIX_VOICES; ++v) if (gVoiceAge[v] < gVoiceAge[slot]) slot = v;
+    }
+    MixVoice* voice = &gVoice[slot];
+    voice->length = 0;
+    gVoiceAge[slot] = ++gVoiceClock;
+    int total = RenderSfx(id, semitones, voice->data, SFX_MAX_SAMPLES);
     voice->position = 0;
-    voice->length = total;                // published last so the mixer never sees a partial voice
+    voice->length = total; // Publish only after the complete cue is available.
 }
 
 void PlaySfx(int id) { PlaySfxPitched(id, 0); }

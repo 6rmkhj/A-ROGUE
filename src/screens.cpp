@@ -3,6 +3,7 @@
 #include "render.h"
 #include "audio.h"
 #include "fx_draw.h"
+#include "presentation.h"
 #include "localization.h"
 
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
@@ -279,8 +280,21 @@ static void DrawHeader(HDC dc, int width) {
         int shownHp = PlayerDisplayHp();
         wsprintfW(b, L"체력 %d/%d", shownHp, gGame.playerMaxHp);
         Text(dc, width - 440, 14, b, shownHp <= 10 ? C_RED : C_TEXT, gFontMedium);
+        int ghostHp = shownHp;
+        for (int i = gGame.combatFxCount - 1; i >= 0 && CombatFxPlaying(); --i) {
+            const CombatFxEvent* fx = &gGame.combatFx[i];
+            int age = CombatFxElapsed(i);
+            if (fx->type != CFX_ENEMY_STRIKE || age < 0) continue;
+            if (fx->beforeValue > shownHp && age < 680)
+                ghostHp = Lerp(fx->beforeValue, shownHp, EaseOutCubic(Track(age, 130, 680)));
+            break;
+        }
+        DrawGhostBar(dc, MakeRect(width - 440, 44, width - 322, 51), shownHp, ghostHp,
+            gGame.playerMaxHp, shownHp <= 10 ? C_RED : C_GREEN, MixColor(C_BG, C_RED, 70));
         wsprintfW(b, L"용량 %dB / %dB", UsedBytes(&gGame), EffectiveCapacity(&gGame));
         Text(dc, width - 305, 14, b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontSmall);
+        DrawGhostBar(dc, MakeRect(width - 305, 44, width - 165, 51), UsedBytes(&gGame), UsedBytes(&gGame),
+            EffectiveCapacity(&gGame), UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_BLUE, C_LINE);
     }
     RECT guide = GuideButtonRect(width); int hover = Inside(guide, gMouse.x, gMouse.y);
     Panel(dc, guide, gGuideOpen ? RGB(32, 82, 67) : hover ? RGB(27, 48, 52) : C_PANEL_2, gGuideOpen || hover ? C_GREEN : C_LINE);
@@ -299,13 +313,20 @@ static void DrawHeader(HDC dc, int width) {
 
 RECT StartButtonRect(int width, int height) { return MakeRect(width / 2 - 150, height / 2 + 92, width / 2 + 150, height / 2 + 154); }
 static void DrawTitle(HDC dc, int width, int height) {
-    for (int y = 70; y < height; y += 4) Fill(dc, MakeRect(0, y, width, y + 1), RGB(11, 17, 23));
+    DrawSceneField(dc, PHASE_TITLE, C_GREEN, width, height);
+    if (FxDecorOn()) {
+        int settle = EaseOutCubic(Track(SceneElapsed(), 0, 620));
+        int drop = FxScale(12 * (1000 - settle) / 1000);
+        DrawTitleDisk(dc, 82, 278 - drop, 0, C_GREEN);
+        DrawTitleDisk(dc, width - 222, 278 + drop, 1, C_BLUE);
+    }
     TextRect(dc, MakeRect(0, height / 2 - 170, width, height / 2 - 80), L"A:\\ROGUE", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(120, height / 2 - 72, width - 120, height / 2 + 70),
         L"18개의 주사위 면이 당신의 덱이자 디스크입니다.\n강한 면은 더 많은 바이트를 차지합니다.\n층이 내려갈수록 줄어드는 용량 안에서 시스템을 복구하십시오.",
         C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
     RECT start = StartButtonRect(width, height); int hover = Inside(start, gMouse.x, gMouse.y);
     Panel(dc, start, hover ? RGB(32, 82, 67) : C_PANEL_2, hover ? C_GREEN : C_LINE);
+    DrawCardMotion(dc, start, C_GREEN, 1, hover);
     // 진행도가 있으면 "새 게임"이 아니라 남은 볼륨을 이어서 고르는 것이다.
     int resuming = gGame.clearedMask != 0;
     TextRect(dc, start, resuming ? L"[ 이어하기 ]" : L"[ 새 게임 ]", C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -671,6 +692,14 @@ static void DrawCombatFxFront(HDC dc) {
     if (!CombatFxPlaying()) return;
     for (int i = 0; i < gGame.combatFxCount; ++i) {
         const CombatFxEvent* fx = &gGame.combatFx[i];
+        if (fx->targetEnemy >= 0 && fx->targetEnemy < gGame.enemyCount) {
+            if (fx->type == CFX_ATTACK_LAUNCH)
+                DrawEnergyLance(dc, SlotTopAnchor(SLOT_ATTACK), EnemyHitAnchor(fx->targetEnemy),
+                    CombatFxElapsed(i), CFX_LAUNCH_MS, C_RED, 0, i);
+            if (fx->type == CFX_CHAIN && !(fx->flags & CFXF_DEFEND_CHAIN))
+                DrawEnergyLance(dc, SlotTopAnchor(SLOT_CHAIN), EnemyHitAnchor(fx->targetEnemy),
+                    CombatFxLeadElapsed(i, CFX_LAUNCH_MS), CFX_LAUNCH_MS, C_YELLOW, 1, i);
+        }
         int t = CombatFxElapsed(i);
         if (t < 0) continue;
 
@@ -729,6 +758,9 @@ static void DrawCombatFxFront(HDC dc) {
         RECT card = EnemyRect(enemy);
         RECT portrait = PortraitRect(card);
         int cx = (portrait.left + portrait.right) / 2, cy = (portrait.top + portrait.bottom) / 2;
+        if ((fx->flags & (CFXF_BIG_HIT | CFXF_KILL)) && !(fx->flags & CFXF_BLOCKED))
+            DrawFracture(dc, portrait, t, i + enemy * 31, (fx->flags & CFXF_KILL) ? C_YELLOW : C_RED,
+                (fx->flags & CFXF_KILL) != 0);
 
         if (FxDecorOn()) {
             int saved = SaveDC(dc);
@@ -804,6 +836,10 @@ static void DrawEnemy(HDC dc, int index) {
     // "부서지는 장면"이 아니라 "이미 끝난 장면"으로 읽힌다.
     DrawPortrait(dc, portrait, enemy->kind, shownAlive, selected, EnemyFxFlash(index),
         (shownAlive ? EnemyBob(index) : 0) + drop + knock, shift, 1000 + squash, 1000 - squash);
+    if (isBoss && shownAlive && !collapsing)
+        DrawBossHalo(dc, portrait, (COLORREF)info->color, index,
+            enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT);
+    DrawCardMotion(dc, r, isBoss ? (COLORREF)info->color : C_RED, index, 0);
     if (selected && shownAlive && FxDecorOn())
         DrawOrbitCorners(dc, portrait, (int)(GetTickCount() % 2400), C_YELLOW, FxScale(75));
     if (collapsing) {
@@ -905,6 +941,7 @@ static void DrawSlot(HDC dc, int slot) {
         return;
     }
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
+    DrawCardMotion(dc, r, SlotAccent(slot), slot, hover && gGame.selectedDie >= 0);
     if (gGame.boss.gimmick == GIMMICK_SIGNATURE && gGame.boss.signatureSlot == slot) {
         Outline(dc, r, C_YELLOW, 2);
         TextRect(dc, MakeRect(r.left + 4, r.top + 88, r.right - 4, r.top + 108), L"짝수 서명 필요", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -984,6 +1021,7 @@ static void DrawDie(HDC dc, int index) {
     if (noise > 0) border = (step & 1) ? C_RED : RGB(96, 58, 58);
     else if (flash > 0) border = C_GREEN;
     Panel(dc, r, selected ? RGB(42, 36, 18) : C_PANEL, border);
+    DrawCardMotion(dc, r, selected ? C_YELLOW : C_BLUE, index, selected || hover);
     // 판독 연출의 붉은·초록 테두리가 선택 표시를 덮어 버리므로, 선택은 그 위에
     // 두께 2로 덧그려 어느 상태에서도 사라지지 않게 한다.
     if (selected) Outline(dc, r, C_YELLOW, 2);
@@ -1080,24 +1118,28 @@ static void DrawCombatAtmosphere(HDC dc) {
     int tick = (int)(GetTickCount() % 60000);
     int saved = SaveDC(dc);
     IntersectClipRect(dc, 22, 82, 698, 714);
-    // A faint volume-specific field remains visible in unoccupied board space.
-    int cx = 356, cy = 258;
-    for (int k = 0; k < 5; ++k) {
-        int r = 42 + k * 45;
-        COLORREF dim = MixColor(C_BG, tone, FxScale(8 + k));
-        if (drive == 1 || drive == 4) DrawGlowRing(dc, cx, cy, r, r / 2, dim, 1);
-        else if (drive == 2 || drive == 5) {
-            DrawLine(dc, cx, cy - r / 2, cx + r, cy, dim, 1);
-            DrawLine(dc, cx + r, cy, cx, cy + r / 2, dim, 1);
-            DrawLine(dc, cx, cy + r / 2, cx - r, cy, dim, 1);
-            DrawLine(dc, cx - r, cy, cx, cy - r / 2, dim, 1);
-        } else Outline(dc, MakeRect(cx - r, cy - r / 2, cx + r, cy + r / 2), dim, 1);
+    // Power follows the actual sockets. Empty arena space stays quiet.
+    COLORREF dim = MixColor(C_BG, tone, FxScale(18));
+    DrawLine(dc, 24, 88, 694, 88, dim, 1);
+    for (int i = 0; i < gGame.enemyCount; ++i) {
+        if (GimmickSummonPending(i)) continue;
+        RECT r = EnemyRect(i); int cx = (r.left + r.right) / 2;
+        DrawLine(dc, cx, 88, cx, r.top, dim, 1);
+        if (EnemyDisplayHp(i) > 0) {
+            int head = (tick + i * 630) % 3100;
+            int pulse = head < 180 ? 54 : 19;
+            Fill(dc, MakeRect(cx - 4, 86, cx + 5, 89), MixColor(C_BG, tone, FxScale(pulse)));
+        }
     }
-    for (int lane = 0; lane < 7; ++lane) {
-        int y = 88 + lane * 88;
-        DrawLine(dc, 24, y, 694, y, MixColor(C_BG, tone, FxScale(8)), 1);
-        int x = 24 + (tick / (gTurnTraceActive ? 3 : 10) + lane * 109 + drive * 31) % 665;
-        Fill(dc, MakeRect(x, y, x + 7, y + 2), MixColor(C_BG, tone, FxScale(48)));
+    for (int d = 0; d < 3; ++d) {
+        const DieState* die = DisplayDie(d);
+        if (die->assignedSlot < 0 || die->assignedSlot >= SLOT_COUNT) continue;
+        RECT from = DieRect(d), to = SlotRect(die->assignedSlot);
+        int x0 = (from.left + from.right) / 2, x1 = (to.left + to.right) / 2, y = 551 + d * 4;
+        COLORREF wire = MixColor(C_BG, SlotAccent(die->assignedSlot), FxScale(25));
+        DrawLine(dc, x0, from.top, x0, y, wire, 1);
+        DrawLine(dc, x0, y, x1, y, wire, 1);
+        DrawLine(dc, x1, y, x1, to.bottom, wire, 1);
     }
     RestoreDC(dc, saved);
 }
@@ -1144,9 +1186,11 @@ static void DrawCombat(HDC dc, int width, int height) {
     if (gTurnTraceActive) return;   // 재생 중에는 조작 영역을 계산 패널이 쓴다
     RECT read = ReadButtonRect(); int readHover = Inside(read, gMouse.x, gMouse.y), canRead = !gRolled && !gReadActive;
     Panel(dc, read, canRead ? (readHover ? RGB(34, 86, 70) : RGB(24, 58, 49)) : C_PANEL, canRead ? C_GREEN : C_LINE);
+    DrawCardMotion(dc, read, C_GREEN, 0, canRead);
     TextRect(dc, read, L"판독 [R]", canRead ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y) && gRolled;
     Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
+    DrawCardMotion(dc, end, C_RED, 0, gRolled && !gReadActive);
     if (gPreview.valid && gPreview.combatEnds && !gPreview.uncertain && !gPreview.playerDies && FxDecorOn())
         DrawOrbitCorners(dc, end, (int)(GetTickCount() % 2400), C_GREEN, FxScale(85));
     TextRect(dc, end, L"실행 [스페이스]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1188,6 +1232,7 @@ static void DrawDriveModifier(HDC dc, const RECT& card, int top, int modifier) {
 }
 
 static void DrawDriveSelect(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_DRIVE_SELECT, C_BLUE, width, height);
     if (!gGame.driveChoiceCount) {
         TextRect(dc, MakeRect(40, 284, width - 40, 328), L"모든 일반 볼륨을 복구했습니다.", C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(40, 344, width - 40, 382), L"추가로 마운트할 볼륨이 없습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -1200,6 +1245,7 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         const DriveInfo* drive = &DRIVE_INFO[gGame.driveChoices[i]];
         int hover = Inside(r, gMouse.x, gMouse.y);
         Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)drive->color : C_LINE);
+        DrawCardMotion(dc, r, (COLORREF)drive->color, i, hover);
         wchar_t b[16]; wsprintfW(b, L"[%d]", i + 1);
         Text(dc, r.left + 12, r.top + 10, b, C_DIM, gFontSmall);
         const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.driveDifficulty[i]);
@@ -1264,19 +1310,12 @@ static void DrawSelectionCardExit(HDC dc, const RECT& card, int chosen, int elap
             Fill(dc, MakeRect(card.left, card.top + cover - 2, card.right, card.top + cover), C_LINE);
             Fill(dc, MakeRect(card.left, card.bottom - cover, card.right, card.bottom - cover + 2), C_LINE);
         }
-        if (close > 430) {
-            RECT stamp = MakeRect(card.left + 24, (card.top + card.bottom) / 2 - 16,
-                                  card.right - 24, (card.top + card.bottom) / 2 + 16);
-            Fill(dc, stamp, RGB(9, 13, 18));
-            TextRect(dc, stamp, L"ROUTE DROPPED", C_DIM, gFontSmall,
-                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
         return;
     }
 
     int lock = EaseOutBack(Track(elapsed, 0, duration * 3 / 4));
     int expand = FxScale(4 + 13 * (1000 - (lock > 1000 ? 1000 : lock)) / 1000);
-    DrawPulseFrame(dc, card, expand, 4, accent);
+    DrawPulseFrame(dc, card, expand, 2, MixColor(C_BG, accent, FxScale(72)));
     Outline(dc, card, accent, lock > 720 ? 3 : 2);
 
     // 세로 판독선이 카드를 훑고 지나간다. 뒤쪽에 짧은 꼬리를 남겨 실제로
@@ -1299,9 +1338,14 @@ static void DrawSelectionCardExit(HDC dc, const RECT& card, int chosen, int elap
         if (h >= 30) TextRect(dc, stamp, lockedLabel, accent, gFontMedium,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    if (elapsed > duration / 2)
-        DrawPixelBurst(dc, (card.left + card.right) / 2, (card.top + card.bottom) / 2,
-                       elapsed - duration / 2, duration / 2, FxScale(24), card.left + 17, accent);
+    if (FxDecorOn() && elapsed > duration / 2) {
+        // Contact spits from the latch, not from the middle of the written card.
+        int age = elapsed - duration / 2;
+        int distance = EaseOutCubic(Track(age, 0, duration / 2)) * 32 / 1000;
+        COLORREF contact = MixColor(C_BG, accent, FxScale(75 * (1000 - Track(age, 0, duration / 2)) / 1000));
+        DrawLine(dc, card.left - distance, card.bottom - 10, card.left - distance - 6, card.bottom - 8, contact, 1);
+        DrawLine(dc, card.right + distance, card.bottom - 10, card.right + distance + 6, card.bottom - 8, contact, 1);
+    }
 }
 
 static void DrawDriveSelectionExit(HDC dc, int width, int height, int elapsed) {
@@ -1317,12 +1361,13 @@ static void DrawDriveSelectionExit(HDC dc, int width, int height, int elapsed) {
     int commit = Track(elapsed, DESCENT_LOCK_MS * 2 / 3, DESCENT_LOCK_MS);
     if (commit > 0) {
         int y = Lerp(68, height, EaseInCubic(commit));
-        DrawSectorStatic(dc, MakeRect(0, 68, width, y), gGame.selectedDrive + 31,
-                         elapsed / NOISE_CHURN_MS, 180 + 620 * commit / 1000);
-        Fill(dc, MakeRect(0, y - 3, width, y + 2), (COLORREF)drive->color);
+        if (FxDecorOn()) {
+            RECT card = DriveCardRect(chosen);
+            DrawSectorStatic(dc, MakeRect(card.left, card.top, card.right, card.bottom), gGame.selectedDrive + 31,
+                             elapsed / NOISE_CHURN_MS, FxScale(120 + 320 * commit / 1000));
+            Fill(dc, MakeRect(0, y - 1, width, y + 1), MixColor(C_BG, (COLORREF)drive->color, FxScale(50)));
+        }
     }
-    TextRect(dc, MakeRect(0, 92, width, 124), L"SELECTION COMMITTED  ·  MOUNT REQUEST QUEUED",
-             (COLORREF)drive->color, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,6 +1453,7 @@ static void DrawDirectoryCard(HDC dc, int index) {
     int hover = Inside(r, gMouse.x, gMouse.y);
     COLORREF accent = info ? (COLORREF)info->color : C_LINE;
     Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? accent : C_LINE);
+    DrawCardMotion(dc, r, accent, index, hover);
     if (!info) return;
 
     wchar_t b[192];
@@ -1451,6 +1497,8 @@ static void DrawDirectoryCard(HDC dc, int index) {
 }
 
 static void DrawDirectorySelect(HDC dc, int width, int height) {
+    int driveIndex = gGame.selectedDrive;
+    DrawSceneField(dc, PHASE_DIRECTORY, driveIndex >= 0 && driveIndex < DRIVE_COUNT ? (COLORREF)DRIVE_INFO[driveIndex].color : C_GREEN, width, height);
     const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
     wchar_t b[160];
     TextRect(dc, MakeRect(0, 78, width, 102), L"전투 대기  →  [현재: 하위 디렉터리 선택]  →  일반전  →  보상", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -1662,7 +1710,7 @@ static void DrawDescent(HDC dc, int width, int height) {
     int within = elapsed * 3 - seekPhase * scanMs;
     int trackSpan = track.right - track.left;
     int from = trackSpan * seekPhase / 3, to = trackSpan * (seekPhase + 1) / 3;
-    int headX = track.left + from + (to - from) * within / scanMs;
+    int headX = track.left + from + (to - from) * EaseOutCubic(Track(within, 0, 660)) / 1000;
     Fill(dc, MakeRect(track.left, track.top + 3, headX, track.top + 5), MixColor(C_BG, (COLORREF)drive->color, 62));
     Fill(dc, MakeRect(headX - 2, track.top - 6, headX + 2, track.bottom + 6), (COLORREF)drive->color);
 
@@ -1687,12 +1735,12 @@ static void DrawDescent(HDC dc, int width, int height) {
     int reveal = Track(elapsed, 0, 240);
     if (reveal < 1000) {
         int sweepY = Lerp(panel.top + 2, panel.bottom - 2, EaseOutCubic(reveal));
-        DrawSectorStatic(dc, MakeRect(0, 68, width, height), gGame.selectedDrive + 31,
-                         elapsed / NOISE_CHURN_MS, 800 * (1000 - reveal) / 1000);
-        Fill(dc, MakeRect(panel.left + 2, sweepY - 2, panel.right - 2, sweepY + 2), (COLORREF)drive->color);
-        DrawPulseFrame(dc, panel, FxScale(5 + 18 * (1000 - reveal) / 1000), 4, (COLORREF)drive->color);
-        DrawEdgeGlow(dc, MakeRect(0, 68, width, height), (COLORREF)drive->color,
-                     FxScale(520 * (1000 - reveal) / 1000), 12);
+        if (FxDecorOn()) {
+            Fill(dc, MakeRect(panel.left + 2, sweepY - 1, panel.left + 6, sweepY + 2), (COLORREF)drive->color);
+            Fill(dc, MakeRect(panel.right - 6, sweepY - 1, panel.right - 2, sweepY + 2), (COLORREF)drive->color);
+            DrawPulseFrame(dc, panel, FxScale(2 + 8 * (1000 - reveal) / 1000), 2,
+                MixColor(C_BG, (COLORREF)drive->color, FxScale(50 * (1000 - reveal) / 1000)));
+        }
     }
     int phaseElapsed = elapsed % (scanMs / 3);
     if (phaseElapsed < 220)
@@ -2315,6 +2363,13 @@ static void DrawCombatClear(HDC dc, int width, int height) {
         }
     }
     Panel(dc, panel, C_PANEL, clearTone);
+    if (FxDecorOn()) {
+        int release = elapsed - 650;
+        for (int side = 0; side < 2; ++side) {
+            int cx = side ? panel.right + 36 : panel.left - 36;
+            DrawImpactBloom(dc, cx, (panel.top + panel.bottom) / 2, release - 80, FxScale(gClearedEncounter == 2 ? 12 : 6), side + 207, clearTone);
+        }
+    }
     Fill(dc, MakeRect(panel.left, panel.top, panel.left + (panel.right - panel.left) * Track(elapsed, 650, 1000) / 1000, panel.top + 3), clearTone);
     wchar_t cleared[96]; wsprintfW(cleared, L"%d층 · %d구역  —  적 삭제 완료", gClearedFloor + 1, gClearedEncounter + 1);
     TextRect(dc, MakeRect(panel.left + 20, panel.top + 34, panel.right - 20, panel.top + 86),
@@ -2438,17 +2493,21 @@ static void BuildRecoveredCommand(uint8_t mask, wchar_t* text, int capacity) {
 }
 
 static void DrawStory(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_STORY, C_BLUE, width, height);
     (void)height;
     const StoryFragment* story = CurrentStoryFragment(&gGame);
     if (!story) return;
     RECT panel = MakeRect(120, 120, width - 120, height - 100);
     Panel(dc, panel, C_PANEL, C_GREEN);
+    DrawCardMotion(dc, panel, C_GREEN, 0, 0);
     Text(dc, panel.left + 28, panel.top + 24, story->title, C_GREEN, gFontLarge);
     TextRect(dc, MakeRect(panel.left + 28, panel.top + 72, panel.right - 28, panel.top + 100), story->path, C_BLUE, gFontSmall, DT_SINGLELINE);
     TextRect(dc, MakeRect(panel.right - 470, panel.top + 28, panel.right - 28, panel.top + 52), story->stamp, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
     // 파일 복구 진행 바
     Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
-    Fill(dc, MakeRect(panel.left + 30, panel.top + 118, panel.right - 30, panel.top + 130), C_GREEN);
+    int restore = FxDecorOn() ? EaseOutCubic(Track(SceneElapsed(), 0, 900)) : 1000;
+    Fill(dc, MakeRect(panel.left + 30, panel.top + 118,
+        Lerp(panel.left + 30, panel.right - 30, restore), panel.top + 130), C_GREEN);
     const wchar_t* lines[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
     wchar_t progress[80], command[512];
     if (gGame.story.kind == STORY_INTRO) {
@@ -2463,6 +2522,13 @@ static void DrawStory(HDC dc, int width, int height) {
         COLORREF lineColor = lines[i][0] == L'>' ? C_BLUE : (i == 4 ? C_YELLOW : C_TEXT);
         TextRect(dc, MakeRect(panel.left + 36, y + 2, panel.left + 66, y + 30), lineNo, C_DIM, gFontSmall, DT_SINGLELINE);
         Fill(dc, MakeRect(panel.left + 72, y + 2, panel.left + 74, y + 30), lineColor);
+        if (FxDecorOn()) {
+            int age = SceneElapsed() - i * 140;
+            if (age >= 0 && age < 750) {
+                int x = Lerp(panel.left + 88, panel.right - 36, EaseOutCubic(Track(age, 0, 750)));
+                Fill(dc, MakeRect(panel.left + 88, y + 43, x, y + 45), MixColor(C_PANEL, lineColor, FxScale(55 * (750 - age) / 750)));
+            }
+        }
         TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), lines[i], lineColor, gFontMedium, DT_WORDBREAK);
         y += 54;
     }
@@ -2475,6 +2541,7 @@ static COLORREF EndingAccent(int ending) {
 }
 
 static void DrawEndingChoice(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_ENDING_CHOICE, C_YELLOW, width, height);
     (void)height;
     TextRect(dc, MakeRect(0, 118, width, 168), L"FINAL COMMAND", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(0, 186, width, 220), L"무엇을 남길 것인가.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -2494,6 +2561,7 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
         COLORREF accent = EndingAccent(i);
         Panel(dc, r, hover ? MixColor(C_PANEL, accent, 18) : C_PANEL, hover ? accent : C_LINE);
+        DrawCardMotion(dc, r, accent, i, hover);
         TextRect(dc, MakeRect(r.left + 16, r.top + 20, r.right - 16, r.top + 56), title[i], accent, gFontLarge, DT_CENTER | DT_SINGLELINE);
         if (gGame.seenEndingMask & (1u << i))
             TextRect(dc, MakeRect(r.left + 16, r.top + 58, r.right - 16, r.top + 78), L"기록됨", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2514,6 +2582,7 @@ static void DrawFaceGrid(HDC dc, int mode) {
             RECT r = FaceGridRect(d, f); const Face* face = &gGame.dice[d].faces[f]; int hover = Inside(r, gMouse.x, gMouse.y);
             int undo = mode == 2 && CanUndoPrunedFace(&gGame, d, f);
             COLORREF border = hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE; Panel(dc, r, hover ? RGB(28, 39, 48) : C_PANEL, border);
+            DrawCardMotion(dc, r, mode == 2 && !undo ? C_RED : FaceColor(face), d * 2 + f / 3, hover && mode);
             wchar_t value[24]; FormatFace(face, value); TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 37), value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
             wchar_t bytes[24];
             if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
@@ -2604,6 +2673,7 @@ static void DrawDeckFaceTip(HDC dc, const RECT& panel) {
 }
 
 static void DrawReward(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_REWARD, gGame.rewardIsTsr || gGame.rewardTier ? C_YELLOW : C_GREEN, width, height);
     if (gGame.rewardIsTsr) {
         TextRect(dc, MakeRect(0, 76, width, 102), L"보스 삭제 완료  →  [현재: 전리품 선택]  →  상주 프로그램 설치  →  다음 층", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(0, 96, width, 122), L"상주 프로그램은 면과 용량을 나눠 씁니다 · 카드를 클릭하면 즉시 설치됩니다", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -2615,6 +2685,8 @@ static void DrawReward(HDC dc, int width, int height) {
         RECT r = RewardRect(i, width); int hover = Inside(r, gMouse.x, gMouse.y), tsr = gGame.rewardKinds[i];
         const TsrInfo* info = &TSR_INFO[tsr];
         Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)info->color : C_LINE);
+        DrawCardMotion(dc, r, (COLORREF)info->color, i, hover);
+        DrawRewardSocket(dc, r, (COLORREF)info->color, i, 1);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), info->name, (COLORREF)info->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64]; wsprintfW(b, L"상주  ·  %dB", info->cost);
@@ -2629,6 +2701,8 @@ static void DrawReward(HDC dc, int width, int height) {
     for (int i = 0; i < 3 && !gGame.rewardIsTsr; ++i) {
         RECT r = RewardRect(i, width); int selected = gGame.selectedReward == i, hover = Inside(r, gMouse.x, gMouse.y), kind = gGame.rewardKinds[i];
         Panel(dc, r, selected ? RGB(31, 55, 48) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
+        DrawCardMotion(dc, r, (COLORREF)FACE_INFO[kind].color, i, selected || hover);
+        DrawRewardSocket(dc, r, (COLORREF)FACE_INFO[kind].color, i, gGame.rewardTier);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), FACE_INFO[kind].name, (COLORREF)FACE_INFO[kind].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64]; int cost = kind == FACE_NUMBER ? gGame.rewardValues[i] : FACE_INFO[kind].cost;
@@ -2646,6 +2720,8 @@ static void DrawReward(HDC dc, int width, int height) {
         RECT r = RewardRect(REWARD_REPAIR, width);
         int usable = CanRepairSector(), hover = usable && Inside(r, gMouse.x, gMouse.y);
         Panel(dc, r, hover ? RGB(28, 46, 40) : C_PANEL, hover ? C_GREEN : C_LINE);
+        DrawCardMotion(dc, r, C_GREEN, REWARD_REPAIR, hover);
+        DrawRewardSocket(dc, r, usable ? C_GREEN : C_DIM, REWARD_REPAIR, 0);
         Text(dc, r.left + 10, r.top + 8, L"[4]", C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), L"섹터 복구", usable ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64];
@@ -2666,6 +2742,7 @@ static void DrawReward(HDC dc, int width, int height) {
 RECT PruneTsrRect(int i) { int left = 150 + i * 180; return MakeRect(left, 252, left + 164, 320); }
 
 static void DrawPrune(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_PRUNE, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, width, height);
     wchar_t b[160]; wsprintfW(b, L"%d층 진입 한도: %dB  ·  현재: %dB", gGame.floor + 1, EffectiveCapacity(&gGame), UsedBytes(&gGame));
     TextRect(dc, MakeRect(0, 92, width, 132), b, UsedBytes(&gGame) > EffectiveCapacity(&gGame) ? C_RED : C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제되고, 같은 칸을 다시 클릭하면 복원됩니다.\n한도 이하이고 면이 하나 이상 남으면 다음으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
@@ -2689,6 +2766,7 @@ static void DrawPrune(HDC dc, int width, int height) {
 }
 
 static void DrawChapterClear(HDC dc, int width, int height) {
+    DrawSceneField(dc, PHASE_CHAPTER_CLEAR, C_GREEN, width, height);
     // 최종 볼륨은 이 화면을 거치지 않는다. 3층 기록 다음이 곧바로 진실과 최종 명령이다.
     int count = RecoveredShardCount(gGame.clearedMask);
     TextRect(dc, MakeRect(40, 114, width - 40, 178), L"CHAPTER RECOVERED", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
@@ -2730,6 +2808,7 @@ static void DrawChapterClear(HDC dc, int width, int height) {
 
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     if (gGame.phase == PHASE_CHAPTER_CLEAR) { DrawChapterClear(dc, width, height); return; }
+    DrawSceneField(dc, victory ? PHASE_VICTORY : PHASE_GAMEOVER, victory ? EndingAccent(gGame.story.selectedEnding) : C_RED, width, height);
     if (!victory) {
         TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), L"시스템 정지", C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         wchar_t stopped[256];
@@ -4011,6 +4090,8 @@ void DrawUiInteractionFx(HDC dc) {
         int travel = EaseOutCubic(Track(t, 20, 175));
         DrawSignalPath(dc, removing ? slotBottom : dieTop, removing ? dieTop : slotBottom,
             CFX_SLOT_ROUTE_Y, travel, 3, tone, 9, 0);
+        DrawInstallFilament(dc, removing ? slotBottom : dieTop, removing ? dieTop : slotBottom,
+            t, 280, tone, gUiFx.die * 11 + slotIndex);
         if (t < 100) DrawPulseFrame(dc, removing ? slot : die, FxScale(2 + (100 - t) / 18), 2, tone);
         // E:\ HOT SWAP처럼 재배치와 동시에 굴림이 바뀌면 카드 자체가 한 번 찢긴다.
         if (!removing && gUiFx.valueBefore != gUiFx.valueAfter && t < 170 && FxDecorOn()) {
@@ -4056,6 +4137,7 @@ void DrawUiInteractionFx(HDC dc) {
 
         int travel = EaseOutCubic(Track(t, 45, 250));
         DrawSignalPath(dc, from, to, (from.y + to.y) / 2, travel, 4, tone, 10, FxScale(5));
+        DrawInstallFilament(dc, from, to, t - 20, 350, tone, gUiFx.rewardIndex * 29 + kind);
         DrawPulseFrame(dc, source, FxScale(Lerp(5, 1, Track(t, 0, 180))), 2, tone);
         int land = Track(t, 220, 500);
         if (land > 0) {
@@ -4131,6 +4213,8 @@ void PaintGame(HWND window) {
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_ENDING_CHOICE) DrawEndingChoice(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
     else if (gGame.phase == PHASE_VICTORY || gGame.phase == PHASE_CHAPTER_CLEAR) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
+    if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive)
+        DrawSceneArrival(canvas, gGame.phase == PHASE_GAMEOVER ? C_RED : C_GREEN);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDirEnterActive) DrawDirectoryEnter(canvas, BASE_WIDTH, BASE_HEIGHT);

@@ -1,0 +1,213 @@
+#pragma once
+#include "ui.h"
+#include "fx_draw.h"
+
+// Mechanical movements finish and settle. Recurring signals belong to a read
+// head or live connection; copy and hit rectangles always stay put.
+inline void DrawCardMotion(HDC dc, const RECT& r, COLORREF color, int index, int active) {
+    if (!FxDecorOn()) return;
+    int age = SceneElapsed() - index * 65;
+    if (age >= 0 && age < 460) {
+        int p = EaseOutCubic(Track(age, 0, 330)), fade = 1000 - Track(age, 180, 460);
+        int x = Lerp(r.left + 2, r.right - 3, p);
+        COLORREF tone = MixColor(C_PANEL, color, FxScale(65 * fade / 1000));
+        Fill(dc, MakeRect(r.left + 2, r.top + 1, x, r.top + 3), tone);
+        DrawLine(dc, x, r.top + 2, x, r.top + 6, tone, 1);
+    }
+    if (!active) return;
+    int focus = Inside(r, gMouse.x, gMouse.y) ? UiFocusElapsed() : -1;
+    int p = focus < 0 ? 1000 : EaseOutCubic(Track(focus, 35, 200));
+    int length = 6 + p * 7 / 1000;
+    COLORREF tone = MixColor(C_PANEL, color, FxScale(38 + p * 35 / 1000));
+    DrawLine(dc, r.left + 2, r.top + 2, r.left + 2 + length, r.top + 2, tone, 2);
+    DrawLine(dc, r.left + 2, r.top + 2, r.left + 2, r.top + 2 + length, tone, 2);
+    DrawLine(dc, r.right - 3, r.bottom - 3, r.right - 3 - length, r.bottom - 3, tone, 2);
+    DrawLine(dc, r.right - 3, r.bottom - 3, r.right - 3, r.bottom - 3 - length, tone, 2);
+}
+
+inline void DrawDriveRack(HDC dc, const RECT& r, int seed, COLORREF tone) {
+    COLORREF metal = MixColor(C_BG, tone, FxScale(20));
+    for (int side = 0; side < 2; ++side) {
+        int x = side ? r.right + 6 : r.left - 7;
+        DrawLine(dc, x, r.top + 10, x, r.bottom - 10, metal, 1);
+        for (int y = r.top + 20; y < r.bottom - 10; y += 38)
+            Fill(dc, MakeRect(x - 1, y, x + 2, y + 5), metal);
+    }
+    int tick = (int)((GetTickCount() + (DWORD)seed * 719u) % 4200u);
+    int from = r.top + 18 + seed * 31 % 120, to = r.bottom - 24 - seed * 23 % 150;
+    int head = tick < 2100 ? Lerp(from, to, EaseOutCubic(Track(tick, 0, 260)))
+        : Lerp(to, from, EaseOutCubic(Track(tick, 2100, 2410)));
+    int light = tick < 320 || (tick >= 2100 && tick < 2470) ? 60 : 22;
+    Fill(dc, MakeRect(r.left - 10, head - 2, r.left - 3, head + 3), MixColor(C_BG, tone, FxScale(light)));
+}
+
+inline void DrawSceneField(HDC dc, int phase, COLORREF color, int width, int height) {
+    if (!FxDecorOn()) return;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, 0, 70, width, height);
+    COLORREF dim = MixColor(C_BG, color, FxScale(20));
+    int age = SceneElapsed();
+    if (phase == PHASE_TITLE) {
+        DrawLine(dc, 36, 454, 260, 454, dim, 1);
+        DrawLine(dc, width - 260, 454, width - 36, 454, dim, 1);
+        for (int side = 0; side < 2; ++side) for (int i = 0; i < 18; ++i) {
+            int x = side ? width - 42 : 42, y = 214 + i * 12;
+            int length = 7 + (int)(Hash3(side, i, 90) % 13);
+            DrawLine(dc, x, y, x + (side ? -length : length), y, MixColor(C_BG, color, FxScale(10)), 1);
+        }
+    } else if (phase == PHASE_DRIVE_SELECT) {
+        for (int i = 0; i < gGame.driveChoiceCount; ++i) {
+            int drive = gGame.driveChoices[i];
+            DrawDriveRack(dc, DriveCardRect(i), drive, (COLORREF)DRIVE_INFO[drive].color);
+        }
+    } else if (phase == PHASE_DIRECTORY) {
+        int y = 584, cx = width / 2;
+        DrawLine(dc, cx, y, cx, y + 45, dim, 2);
+        for (int i = 0; i < 2; ++i) {
+            RECT r = DirectoryChoiceRect(i);
+            POINT to = {(r.left + r.right) / 2, r.bottom + 2};
+            DrawLine(dc, to.x, to.y, to.x, y, dim, 1);
+            DrawLine(dc, to.x, y, cx, y, dim, 1);
+            int lead = age - i * 110;
+            if (lead >= 0 && lead < 760) {
+                POINT from = {cx, y + 45};
+                DrawSignalPath(dc, from, to, y, EaseOutCubic(Track(lead, 0, 650)), 2,
+                    MixColor(C_BG, color, FxScale(55)), 7, 0);
+            }
+        }
+    } else if (phase == PHASE_REWARD) {
+        DrawLine(dc, 66, 292, width - 66, 292, dim, 1);
+        for (int i = 0; i < REWARD_CARD_COUNT; ++i) {
+            RECT r = RewardRect(i, width); int cx = (r.left + r.right) / 2;
+            DrawLine(dc, cx, r.bottom + 1, cx, 292, dim, 1);
+            if (age >= i * 75 && age < 850) {
+                int p = EaseOutCubic(Track(age - i * 75, 0, 480));
+                int x = Lerp(66, cx, p);
+                Fill(dc, MakeRect(x - 3, 291, x + 4, 293), MixColor(C_BG, color, FxScale(60 * (850 - age) / 850)));
+            }
+        }
+    } else if (phase == PHASE_PRUNE) {
+        int used = UsedBytes(&gGame), capacity = EffectiveCapacity(&gGame);
+        int filled = capacity > 0 ? (used * 64 + capacity - 1) / capacity : 64;
+        if (filled > 64) filled = 64;
+        for (int i = 0; i < 64; ++i) {
+            int x = 152 + i * 10;
+            Fill(dc, MakeRect(x, 226, x + 6, 237), MixColor(C_BG, color, FxScale(i < filled ? 45 : 10)));
+        }
+    } else if (phase == PHASE_STORY) {
+        for (int side = 0; side < 2; ++side) {
+            int x = side ? width - 102 : 96;
+            DrawLine(dc, x + 3, 128, x + 3, height - 108, MixColor(C_BG, color, FxScale(10)), 1);
+            for (int i = 0; i < 18; ++i) {
+                int y = 133 + i * 28;
+                Outline(dc, MakeRect(x, y, x + 7, y + 9), dim, 1);
+            }
+            if (age < 1100) {
+                int y = Lerp(133, height - 120, EaseOutCubic(Track(age, 0, 1000)));
+                Fill(dc, MakeRect(x - 2, y, x + 9, y + 3), MixColor(C_BG, color, FxScale(62)));
+            }
+        }
+    } else if (phase == PHASE_ENDING_CHOICE) {
+        for (int i = 0; i < ENDING_COUNT; ++i) {
+            RECT r = EndingChoiceRect(i); int x = (r.left + r.right) / 2;
+            COLORREF tone = i == 1 ? C_BLUE : i == 2 ? C_YELLOW : C_GREEN;
+            DrawLine(dc, x, 256, x, r.top - 1, MixColor(C_BG, tone, FxScale(48)), 2);
+            if (age < 850) {
+                int span = 120 * EaseOutCubic(Track(age - i * 85, 0, 480)) / 1000;
+                DrawLine(dc, x - span, 260, x + span, 260, MixColor(C_BG, tone, FxScale(45)), 1);
+            }
+        }
+    } else if (phase == PHASE_CHAPTER_CLEAR || phase == PHASE_VICTORY) {
+        int ending = phase == PHASE_CHAPTER_CLEAR ? 0 : gGame.story.selectedEnding;
+        for (int side = 0; side < 2; ++side) for (int i = 0; i < 6; ++i) {
+            int delay = i * 65 + side * 90;
+            int settle = EaseOutCubic(Track(age, delay, delay + 800));
+            int x = side ? width - 88 : 62, y = 262 + i * 30;
+            int drift = (1000 - settle) * (12 + i * 5) / 1000;
+            if (ending == 1) drift = settle * (i + 2) * 5 / 1000;
+            x += side ? drift : -drift;
+            COLORREF tone = MixColor(C_BG, color, FxScale(ending == 1 ? 48 - settle * 28 / 1000 : 26 + settle * 20 / 1000));
+            Outline(dc, MakeRect(x, y, x + 26, y + 16), tone, 1);
+            DrawLine(dc, x + 5, y + 5, x + 19, y + 5, tone, 1);
+        }
+    } else if (phase == PHASE_GAMEOVER) {
+        int fade = 1000 - Track(age, 150, 1700);
+        for (int i = 0; i < 18; ++i) {
+            int x = 180 + i * 42, y = 526;
+            int lift = SinMille(i * 410 + age % 60000 * 2) * fade / 70000;
+            DrawLine(dc, x, y + lift, x + 34, y + lift,
+                MixColor(C_BG, C_RED, FxScale(14 + fade * 28 / 1000)), 1);
+        }
+    }
+    RestoreDC(dc, saved);
+}
+
+inline void DrawTitleDisk(HDC dc, int x, int y, int back, COLORREF tone) {
+    if (!FxDecorOn()) return;
+    int saved = SaveDC(dc);
+    COLORREF edge = MixColor(C_BG, tone, FxScale(35));
+    Panel(dc, MakeRect(x, y, x + 140, y + 158), MixColor(C_BG, tone, FxScale(10)), edge);
+    Fill(dc, MakeRect(x + 126, y, x + 140, y + 8), C_BG);
+    DrawLine(dc, x + 126, y, x + 140, y + 14, edge, 1);
+    Panel(dc, MakeRect(x + 25, y + 1, x + 106, y + 48), MixColor(C_BG, C_TEXT, FxScale(12)), edge);
+    Fill(dc, MakeRect(x + 73, y + 9, x + 92, y + 39), C_BG);
+    Panel(dc, MakeRect(x + 14, y + 72, x + 126, y + 143), C_BG, edge);
+    if (back) {
+        for (int row = 0; row < 3; ++row) for (int col = 0; col < 6; ++col) {
+            int age = SceneElapsed() - (row * 6 + col) * 30;
+            int lit = age >= 0 && age < 900;
+            int left = x + 24 + col * 16, top = y + 83 + row * 17;
+            Fill(dc, MakeRect(left, top, left + 10, top + 10), MixColor(C_BG, lit ? C_TEXT : tone, FxScale(lit ? 45 : 22)));
+        }
+    } else {
+        Text(dc, x + 28, y + 82, L"A:", MixColor(C_BG, tone, FxScale(72)), gFontLarge);
+        DrawLine(dc, x + 26, y + 120, x + 114, y + 120, edge, 1);
+        DrawLine(dc, x + 26, y + 129, x + 88, y + 129, edge, 1);
+    }
+    Outline(dc, MakeRect(x + 8, y + 149, x + 17, y + 155), edge, 1);
+    Fill(dc, MakeRect(x + 119, y + 150, x + 130, y + 154), C_BG);
+    RestoreDC(dc, saved);
+}
+
+inline void DrawSceneArrival(HDC dc, COLORREF tone) {
+    int t = SceneElapsed();
+    if (!FxDecorOn() || t < 0 || t >= 520) return;
+    int p = EaseOutCubic(Track(t, 0, 420)), fade = 1000 - Track(t, 160, 520);
+    int head = Lerp(24, BASE_WIDTH - 24, p);
+    DrawLine(dc, head - 18, 71, head, 71, MixColor(C_BG, tone, FxScale(50 * fade / 1000)), 1);
+}
+
+inline void DrawRewardSocket(HDC dc, const RECT& r, COLORREF tone, int index, int tuned) {
+    if (!FxDecorOn()) return;
+    int age = SceneElapsed() - index * 75, cx = (r.left + r.right) / 2;
+    int settle = EaseOutCubic(Track(age, 140, 470));
+    for (int i = 0; i < 5; ++i) {
+        int x = cx - 20 + i * 10, height = 3 + (1000 - settle) * (i % 2 ? 8 : 5) / 1000;
+        Fill(dc, MakeRect(x, r.bottom + 1, x + 3, r.bottom + height), MixColor(C_BG, tone, FxScale(18 + settle * 20 / 1000)));
+    }
+    if (age >= 160 && age < 640) {
+        int p = EaseOutCubic(Track(age, 160, 640)), reach = (tuned ? 80 : 50) * p / 1000;
+        COLORREF flash = MixColor(C_BG, tone, FxScale(75 * (1000 - p) / 1000));
+        DrawLine(dc, cx - reach, r.bottom + 8, cx - reach - 9, r.bottom + 8, flash, 1);
+        DrawLine(dc, cx + reach, r.bottom + 8, cx + reach + 9, r.bottom + 8, flash, 1);
+    }
+}
+
+inline void DrawInstallFilament(HDC dc, POINT from, POINT to, int t, int life, COLORREF tone, int seed) {
+    if (!FxDecorOn() || t < 0 || t >= life || life < 140) return;
+    for (int i = 0; i < FxScale(7); ++i) {
+        int age = t - i * 13;
+        if (age < 0) continue;
+        int p = Track(age, 0, life - 90);
+        p = p * p / 1000 * (3000 - 2 * p) / 1000;
+        int arch = p * (1000 - p) / 1000;
+        int bend = (int)(Hash3(seed, i, 611) % 61) - 30;
+        int x = Lerp(from.x, to.x, p) + bend * arch / 250;
+        int y = Lerp(from.y, to.y, p) - (24 + i * 3) * arch / 250;
+        int fade = 1000 - Track(age, life - 130, life - 40);
+        if (fade <= 0) continue;
+        int size = 1 + (1000 - p) * 2 / 1000;
+        COLORREF color = MixColor(C_BG, i ? tone : C_TEXT, FxScale((80 - i * 7) * fade / 1000));
+        Fill(dc, MakeRect(x - size, y - 1, x + size + 1, y + 2), color);
+    }
+}
