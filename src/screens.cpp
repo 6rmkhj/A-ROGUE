@@ -1970,6 +1970,85 @@ static void DrawFaceGrid(HDC dc, int mode) {
     }
 }
 
+// 덱 화면 전용 툴팁. 특수 면은 칸에 종류 이름만 적히므로 실제 출력을 읽을 수 없다.
+// 강화 보상(INFECTED / CORRUPTED)으로 들어온 면은 같은 이름 같은 비용인데 출력만 높아서,
+// 어느 화염이 강화된 것인지 여기서만 구분된다.
+static const wchar_t* FaceAbilityDetail(int kind) {
+    switch (kind) {
+    case FACE_FIRE:   return L"공격 슬롯: 피해 +4, 대상에게 화상 2턴 (적 행동 직전 3 피해).\n다른 슬롯에서는 출력만 쓰입니다.";
+    case FACE_SHIELD: return L"방어 슬롯: (출력 + 증폭 보너스) × 2 만큼 방어도.\n다른 슬롯에서는 출력만 쓰입니다.";
+    case FACE_LEECH:  return L"공격 슬롯: 실제로 넣은 피해의 1/3 + 1 만큼 체력 회복.\n다른 슬롯에서는 출력만 쓰입니다.";
+    case FACE_WILD:   return L"모든 슬롯에서 추가 출력: 공격 +2 · 방어 +3 · 증폭 +2 · 연쇄(공격) +2.";
+    case FACE_BOOST:  return L"증폭 슬롯: 보너스가 출력의 절반이 아니라 100%. 공격·방어에 그대로 더해집니다.";
+    case FACE_ECHO:   return L"연쇄 슬롯: 직전 공격 또는 방어를 감쇠 없이 100% 반복합니다.";
+    default:          return L"";
+    }
+}
+
+static int WrappedTextHeight(HDC dc, const wchar_t* value, HFONT font, int width) {
+    HFONT old = (HFONT)SelectObject(dc, font);
+    RECT r = MakeRect(0, 0, width, 0);
+    DrawTextW(dc, value, -1, &r, DT_WORDBREAK | DT_CALCRECT);
+    SelectObject(dc, old);
+    return r.bottom - r.top;
+}
+
+static void DrawDeckFaceTip(HDC dc, const RECT& panel) {
+    const Face* face = 0;
+    RECT cell = MakeRect(0, 0, 0, 0);
+    for (int d = 0; d < 3 && !face; ++d) {
+        for (int f = 0; f < 6; ++f) {
+            RECT r = FaceGridRect(d, f);
+            if (!Inside(r, gMouse.x, gMouse.y)) continue;
+            cell = r; face = &gGame.dice[d].faces[f]; break;
+        }
+    }
+    // 숫자 면은 칸에 값이 이미 적혀 있고 빈 면은 설명할 것이 없다.
+    if (!face || face->kind == FACE_NUMBER || face->kind >= FACE_EMPTY) return;
+    const FaceInfo* info = &FACE_INFO[face->kind];
+
+    // 손상·격리로 지금 출력이 0이어도 면이 원래 가진 출력을 보여준다. 상태는 아래 줄에서 밝힌다.
+    int power = face->value > 0 ? (int)face->value : info->power;
+    int bonus = power - info->power;
+    wchar_t stats[96];
+    if (bonus > 0) wsprintfW(stats, L"출력 %d  ·  %dB  ·  강화 +%d (기본 %d)", power, FaceCost(face), bonus, info->power);
+    else wsprintfW(stats, L"출력 %d  ·  %dB", power, FaceCost(face));
+
+    wchar_t status[96]; status[0] = 0;
+    COLORREF statusColor = C_RED;
+    if (face->damaged) wsprintfW(status, L"손상 — 출력 0, 비용 %dB는 유지", FaceCost(face));
+    else if (face->quarantined == QUAR_COMBAT) { lstrcpyW(status, L"격리 — 전투 동안 출력 0, 비용 유지"); statusColor = C_YELLOW; }
+    else if (face->quarantined != QUAR_NONE) { wsprintfW(status, L"격리 — 남은 %d턴 출력 0, 비용 유지", (int)face->quarantined); statusColor = C_YELLOW; }
+
+    // 폰트 폭을 가정하지 않는다. 모든 줄을 실제로 재서 상자 높이를 잡으므로 글자가 잘리지 않는다.
+    const int tipWidth = 340, pad = 12, textWidth = tipWidth - pad * 2;
+    const wchar_t* detail = FaceAbilityDetail(face->kind);
+    int nameHeight = WrappedTextHeight(dc, info->name, gFontMedium, textWidth);
+    int statsHeight = WrappedTextHeight(dc, stats, gFontSmall, textWidth);
+    int detailHeight = WrappedTextHeight(dc, detail, gFontSmall, textWidth);
+    int statusHeight = status[0] ? WrappedTextHeight(dc, status, gFontSmall, textWidth) : 0;
+    int tipHeight = pad + nameHeight + 6 + statsHeight + 10 + detailHeight + (statusHeight ? 10 + statusHeight : 0) + pad;
+
+    // 칸 오른쪽에 붙이되 패널을 넘으면 왼쪽으로 넘긴다. 세로도 패널 안으로 밀어 넣는다.
+    int left = cell.right + 10;
+    if (left + tipWidth > panel.right - 10) left = cell.left - 10 - tipWidth;
+    if (left < panel.left + 10) left = panel.left + 10;
+    int top = cell.top;
+    if (top + tipHeight > panel.bottom - 10) top = panel.bottom - 10 - tipHeight;
+    if (top < panel.top + 10) top = panel.top + 10;
+
+    RECT tip = MakeRect(left, top, left + tipWidth, top + tipHeight);
+    Panel(dc, tip, RGB(12, 18, 25), (COLORREF)info->color);
+    int y = tip.top + pad;
+    TextRect(dc, MakeRect(tip.left + pad, y, tip.right - pad, y + nameHeight), info->name, (COLORREF)info->color, gFontMedium, DT_WORDBREAK);
+    y += nameHeight + 6;
+    TextRect(dc, MakeRect(tip.left + pad, y, tip.right - pad, y + statsHeight), stats, bonus > 0 ? C_YELLOW : C_TEXT, gFontSmall, DT_WORDBREAK);
+    y += statsHeight + 10;
+    TextRect(dc, MakeRect(tip.left + pad, y, tip.right - pad, y + detailHeight), detail, C_TEXT, gFontSmall, DT_WORDBREAK);
+    y += detailHeight + 10;
+    if (status[0]) TextRect(dc, MakeRect(tip.left + pad, y, tip.right - pad, y + statusHeight), status, statusColor, gFontSmall, DT_WORDBREAK);
+}
+
 static void DrawReward(HDC dc, int width, int height) {
     if (gGame.rewardIsTsr) {
         TextRect(dc, MakeRect(0, 76, width, 102), L"보스 삭제 완료  →  [현재: 전리품 선택]  →  상주 프로그램 설치  →  다음 층", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -1998,8 +2077,15 @@ static void DrawReward(HDC dc, int width, int height) {
         Panel(dc, r, selected ? RGB(31, 55, 48) : C_PANEL, selected ? C_GREEN : hover ? C_BLUE : C_LINE);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), FACE_INFO[kind].name, (COLORREF)FACE_INFO[kind].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
-        wchar_t b[48]; int cost = kind == FACE_NUMBER ? gGame.rewardValues[i] : FACE_INFO[kind].cost;
-        wsprintfW(b, L"출력 %d  ·  %dB", gGame.rewardValues[i], cost); TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        wchar_t b[64]; int cost = kind == FACE_NUMBER ? gGame.rewardValues[i] : FACE_INFO[kind].cost;
+        // 강화 보상은 같은 비용에 출력만 오른 특수 면이다. 카드 오른쪽 위 배지로 그 사실을 밝힌다.
+        int tuned = gGame.rewardTier && kind != FACE_NUMBER && gGame.rewardValues[i] > FACE_INFO[kind].power;
+        if (tuned) {
+            wchar_t tag[16]; wsprintfW(tag, L"강화 +%d", gGame.rewardValues[i] - FACE_INFO[kind].power);
+            TextRect(dc, MakeRect(r.right - 78, r.top + 8, r.right - 10, r.top + 26), tag, C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        }
+        wsprintfW(b, L"출력 %d  ·  %dB", gGame.rewardValues[i], cost);
+        TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, tuned ? C_YELLOW : C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), FACE_INFO[kind].description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
     {
@@ -2156,10 +2242,13 @@ static void DrawDeck(HDC dc, int width, int height) {
     RECT close = DeckCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
     TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    DrawFaceGrid(dc, 0);
+    DrawFaceGrid(dc, 3);
 
     TextRect(dc, MakeRect(84, panel.bottom - 50, panel.right - 30, panel.bottom - 20),
-        L"현재 보유한 18개 면입니다 (조회 전용). 취소 키로 닫을 수 있습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+        L"현재 보유한 18개 면입니다 (조회 전용). 특수 면에 커서를 올리면 능력과 출력이 보입니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+
+    // 툴팁은 격자 위에 겹쳐 떠야 하므로 마지막에 그린다.
+    DrawDeckFaceTip(dc, panel);
 }
 
 // 몹 패턴을 카드 한 줄 역할로 요약한다.

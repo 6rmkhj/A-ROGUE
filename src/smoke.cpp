@@ -1356,9 +1356,14 @@ static int CheckDirectoryNodes() {
     if (infected.rewardChoiceCount != 3) return Fail("a tuned reward must still offer three candidates");
     for (int i = 0; i < 3; ++i) for (int j = 0; j < i; ++j)
         if (infected.rewardKinds[i] == infected.rewardKinds[j]) return Fail("a tuned reward must not repeat a face kind");
-    for (int i = 0; i < 3; ++i)
-        if (infected.rewardKinds[i] == FACE_NUMBER && infected.rewardValues[i] < 8)
-            return Fail("a tuned number face must roll from the raised range");
+    for (int i = 0; i < 3; ++i) {
+        int kind = infected.rewardKinds[i];
+        // 강화는 숫자를 키우지 않는다. 오르는 것은 특수 면의 출력뿐이고 비용은 그대로다.
+        if (kind == FACE_NUMBER && (infected.rewardValues[i] < 4 || infected.rewardValues[i] > 6))
+            return Fail("a tuned number face must stay in the standard range");
+        if (kind != FACE_NUMBER && infected.rewardValues[i] != FACE_INFO[kind].power + TUNED_FACE_BONUS)
+            return Fail("a tuned special face must carry the raised output");
+    }
 
     // CORRUPTED: 대상 면은 비용을 유지하고 출력만 0, 전투가 끝나면 풀린다
     GameState corrupted; NewRun(&corrupted, 0xD1D00006u); corrupted.driveChoices[0] = 5; SelectDrive(&corrupted, 0);
@@ -1487,10 +1492,14 @@ int main() {
     if (base.modifierA == base.modifierB) return Fail("modifiers must be unique");
     if (base.phase != PHASE_DIRECTORY) return Fail("selecting a drive must open the directory choice");
     if (!base.mobScheduleReady) return Fail("selecting a drive must build the mob schedule");
-    Face damaged = {FACE_FIRE, 8, 1, 0};
-    if (FaceCost(&damaged) != 24 || FacePower(&damaged) != 0) return Fail("damaged faces retain cost and lose power");
-    Face quarantined = {FACE_FIRE, 8, 0, QUAR_COMBAT};
-    if (FaceCost(&quarantined) != 24 || FacePower(&quarantined) != 0) return Fail("quarantined faces retain cost and lose power");
+    Face damaged = {FACE_FIRE, (uint8_t)FACE_INFO[FACE_FIRE].power, 1, 0};
+    if (FaceCost(&damaged) != FACE_INFO[FACE_FIRE].cost || FacePower(&damaged) != 0) return Fail("damaged faces retain cost and lose power");
+    // 강화 보상으로 들어온 특수 면은 표의 기본 출력이 아니라 면이 들고 있는 값을 낸다.
+    Face tunedFire = {FACE_FIRE, (uint8_t)(FACE_INFO[FACE_FIRE].power + TUNED_FACE_BONUS), 0, 0};
+    if (FacePower(&tunedFire) != FACE_INFO[FACE_FIRE].power + TUNED_FACE_BONUS
+        || FaceCost(&tunedFire) != FACE_INFO[FACE_FIRE].cost) return Fail("a tuned special face raises power but not cost");
+    Face quarantined = {FACE_FIRE, (uint8_t)FACE_INFO[FACE_FIRE].power, 0, QUAR_COMBAT};
+    if (FaceCost(&quarantined) != FACE_INFO[FACE_FIRE].cost || FacePower(&quarantined) != 0) return Fail("quarantined faces retain cost and lose power");
     base.floor = 2; base.modifierA = MOD_OVERALLOC; base.modifierB = MOD_CHECKSUM; base.selectedDrive = -1;
     if (EffectiveCapacity(&base) != 190) return Fail("overallocation must add 60 bytes");
 
@@ -1506,9 +1515,9 @@ int main() {
     GameState prune; NewRun(&prune, 0xCAFEBABEu); prune.floor = 2; prune.modifierA = MOD_CHECKSUM; prune.modifierB = MOD_FRAGMENTATION; prune.phase = PHASE_PRUNE;
     ConfigureDriveForTest(&prune, TEST_DRIVE, TEST_SEED, 1);
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) {
-        prune.dice[d].faces[f].kind = FACE_WILD; prune.dice[d].faces[f].value = 9; prune.dice[d].faces[f].damaged = 0;
+        prune.dice[d].faces[f].kind = FACE_WILD; prune.dice[d].faces[f].value = (uint8_t)FACE_INFO[FACE_WILD].power; prune.dice[d].faces[f].damaged = 0;
     }
-    if (DeckBytes(&prune) != 576) return Fail("all-wild test deck must be 576 bytes");
+    if (DeckBytes(&prune) != 18 * FACE_INFO[FACE_WILD].cost) return Fail("an all-wild test deck must cost 18 wild faces");
     while (DeckBytes(&prune) > EffectiveCapacity(&prune)) {
         int index = MostExpensiveFace(&prune); if (index < 0) return Fail("unable to find prune candidate"); PruneFace(&prune, index / 6, index % 6);
     }

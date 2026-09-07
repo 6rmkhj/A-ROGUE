@@ -162,7 +162,9 @@ int FacePower(const Face* face) {
     if (face->quarantined != QUAR_NONE) return 0;   // 격리: 출력만 0, 비용·종류는 유지
     if (face->kind == FACE_NUMBER) return face->value;
     if (face->kind >= FACE_KIND_COUNT) return 0;
-    return FACE_INFO[face->kind].power;
+    // 특수 면도 출력을 면 자신이 들고 다닌다. 강화 보상으로 들어온 면은 표의 기본값보다
+    // TUNED_FACE_BONUS만큼 높다. 값이 비어 있는 면은 표의 기본 출력으로 되돌린다.
+    return face->value > 0 ? face->value : FACE_INFO[face->kind].power;
 }
 
 int DeckBytes(const GameState* game) {
@@ -2086,9 +2088,12 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
 }
 
 // 디렉터리 노드는 면을 직접 주지 않고 이 표준 보상의 tier와 후보 수만 바꾼다.
-//   표준 : 숫자 7~10, 후보 3개 (기존과 완전히 동일한 난수 소비)
-//   강화 : 숫자 8~11, 세 후보의 종류 중복 없음 (INFECTED / CORRUPTED)
+//   표준 : 숫자 4~6, 특수 면은 표의 기본 출력, 후보 3개
+//   강화 : 숫자는 표준과 같고 특수 면의 출력만 +2, 세 후보의 종류 중복 없음 (INFECTED / CORRUPTED)
 //   TEMP : 표준 분포지만 후보 2개
+// 숫자 면은 값이 곧 비용이라 성장이 아니라 바이트 효율을 담당한다. 출력을 밀어 올리는 쪽은
+// 특수 면이고, 강화 tier는 그 특수 면을 같은 비용으로 더 세게 준다.
+// 난수 소비량은 tier와 무관하게 후보마다 종류 1회 + 숫자면 값 1회로 동일하다.
 static void GenerateRewards(GameState* game) {
     const DirectoryNodeInfo* node = DirectoryNodeInfoOrNull(game->directory.activeKind);
     int tuned = node ? node->rewardTier : 0;
@@ -2104,7 +2109,9 @@ static void GenerateRewards(GameState* game) {
             if (tuned) for (int j = 0; j < i; ++j) if (kind == game->rewardKinds[j]) duplicate = 1;
         } while (duplicate);
         game->rewardKinds[i] = kind;
-        game->rewardValues[i] = kind == FACE_NUMBER ? (tuned ? 8 : 7) + RandomRange(game, 4) : FACE_INFO[kind].power;
+        game->rewardValues[i] = kind == FACE_NUMBER
+            ? 4 + RandomRange(game, 3)
+            : FACE_INFO[kind].power + (tuned ? TUNED_FACE_BONUS : 0);
     }
     for (int i = count; i < 3; ++i) { game->rewardKinds[i] = FACE_EMPTY; game->rewardValues[i] = 0; }
     game->rewardIsTsr = 0;
