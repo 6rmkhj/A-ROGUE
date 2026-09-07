@@ -58,13 +58,17 @@ int EaseOutBounce(int p);                 // 바닥에서 몇 번 튄다
 // 하므로 스냅샷도 같은 배율을 쓴다.
 void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH);
 int  FxSnapshotHeld();
+// 회전용 축소본을 한 프레임에 한 단계씩 미리 만들어 둔다. 아직 돌기 전인
+// 구간에서 프레임마다 부르면, 정작 돌기 시작할 때 만들 것이 남아 있지 않다.
+void FxSnapshotWarm();
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
 // 붙잡아 둔 판을 돌리면서 줄여 다시 얹는다 (돌리줌). 중심은 논리 좌표, 각도는
 // 1/10도, 배율은 천분율이고 가로·세로를 따로 주면 눌린다 (디스크가 뒤집힐 때 쓴다).
 // 회전은 장치 픽셀로 해야 어긋나지 않으므로 캔버스의 실제 크기를 함께 받는다.
 // 보이는 자리를 좁히는 것은 호출자의 클립이 맡는다.
+// lodBias는 흐려도 되는 판(잔상 등)을 한 단계 작은 사본에서 돌리라는 표시다.
 void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
-                    int scaleXMille, int scaleYMille, int angleDeci);
+                    int scaleXMille, int scaleYMille, int angleDeci, int lodBias = 0);
 void FxSnapshotRelease();
 void FxSnapshotDestroy();
 
@@ -94,6 +98,9 @@ uint32_t Hash3(int a, int b, int c);
 void DrawSectorStatic(HDC dc, const RECT& area, int die, int step, int level);
 void DrawSectorHex(HDC dc, const RECT& area, int die, int step, int level);
 void DrawScanlines(HDC dc, const RECT& area);
+// 축에 맞지 않는 선과 고리. 바닥 격자·방사 선·충격파가 쓴다.
+void DrawLine(HDC dc, int x0, int y0, int x1, int y1, COLORREF color, int thickness);
+void DrawGlowRing(HDC dc, int cx, int cy, int rx, int ry, COLORREF color, int thickness);
 void DrawTornValue(HDC dc, const RECT& area, const wchar_t* value, COLORREF color, int die, int step, int level);
 
 // 미판독 정보를 가리는 노이즈.

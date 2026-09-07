@@ -170,9 +170,92 @@ static int gSnapW, gSnapH;
 // 판이 새로 잡힐 때마다 하나씩 오른다. 회전용 축소본이 자기가 어느 판에서
 // 나왔는지 이 번호로 안다.
 static unsigned gSnapSerial;
-// 회전 원본. 창이 크면 PlgBlt 비용이 픽셀 수만큼 그대로 늘고, 도는 판은 대개
-// 작게 줄어 있어 원본 해상도가 필요 없다. 논리 해상도로 한 번만 줄여 둔다.
-static HDC gSpinDc; static HBITMAP gSpinBmp, gSpinOld; static unsigned gSpinSerial;
+// 회전 원본 밉 피라미드. PlgBlt은 목적지 픽셀마다 원본을 역으로 찾아가므로,
+// 원본이 목적지보다 훨씬 크면 한 픽셀 찍을 때마다 캐시를 벗어난 자리를 읽는다.
+// 판이 줄어드는 연출에서 원본만 계속 원본 크기면 그 손해가 프레임마다 붙는다.
+// 판이 새로 잡힐 때 절반씩 줄인 사본 네 장을 한 비트맵에 담아 두고, 그릴 때마다
+// 목적지 크기에 맞는 단계를 골라 쓴다.
+//
+//   L0 (0,0) 1120x760 · L1 (1120,0) 560x380 · L2 (1120,380) 280x190 · L3 (1400,380) 140x95
+#define SPIN_LODS 4
+static HDC gMipDc; static HBITMAP gMipBmp, gMipOld; static unsigned gMipSerial;
+static const int MIP_X[SPIN_LODS] = {0, BASE_WIDTH, BASE_WIDTH, BASE_WIDTH + BASE_WIDTH / 4};
+static const int MIP_Y[SPIN_LODS] = {0, 0, BASE_HEIGHT / 2, BASE_HEIGHT / 2};
+
+static int MipW(int lod) { return BASE_WIDTH >> lod; }
+static int MipH(int lod) { return BASE_HEIGHT >> lod; }
+
+// 이보다 넓게 칠해야 하면 줄여서 돌린다. 이 기계에서 PlgBlt이 초당 2,500만 픽셀
+// 남짓이므로, 16ms 예산 안에 넉넉히 드는 넓이로 잡았다.
+#define SPIN_DIRECT_PIXELS 90000
+static HDC gScratchDc; static HBITMAP gScratchBmp, gScratchOld;
+
+static HDC AcquireSpinScratch() {
+    if (gScratchDc) return gScratchDc;
+    if (!gSnapDc) return 0;
+    gScratchDc = CreateCompatibleDC(gSnapDc);
+    if (!gScratchDc) return 0;
+    gScratchBmp = CreateCompatibleBitmap(gSnapDc, BASE_WIDTH, BASE_HEIGHT);
+    if (!gScratchBmp) { DeleteDC(gScratchDc); gScratchDc = 0; return 0; }
+    gScratchOld = (HBITMAP)SelectObject(gScratchDc, gScratchBmp);
+    return gScratchDc;
+}
+
+// 줄인 사본은 HALFTONE로 섞어 만든다. 최근접으로 줄이면 어두운 바탕 위의 가는
+// 흰 글자가 무작위로 살아남아, 돌려 놓았을 때 글줄이 아니라 흰 알갱이를 흩뿌린
+// 것으로 보인다. 대신 섞는 값이 비싸다 - 네 단계를 한 프레임에 다 만들면 그
+// 프레임 하나가 38ms까지 뛴다.
+//
+// 그래서 한 번에 한 단계씩만 만든다. 0단계(그대로 복사)는 붙잡는 즉시 만들고,
+// 줄인 단계들은 FxSnapshotWarm이 프레임마다 하나씩 채운다. 삽입 연출은 판이
+// 무너지는 동안(회전이 아직 시작되지 않은 380ms) 이것을 불러 두므로, 정작
+// 돌기 시작할 때는 전부 준비돼 있다. 아직 안 만들어진 단계를 달라고 하면
+// 준비된 것 중 가장 작은 단계로 대신한다 - 한 프레임 흐릴 뿐 틀리지 않는다.
+// 한 단계를 통째로 섞는 것도 아직 비싸다 (1120x760 → 560x380 하나가 20ms 가까이
+// 든다). 단계를 가로 띠 넷으로 쪼개 한 번에 한 띠씩 만든다. 2:1 축소라 띠
+// 경계가 원본에서도 정확히 나뉘어 이어 붙인 자국이 남지 않는다.
+#define MIP_STRIPS 4
+static int gMipStep;                       // 0 .. SPIN_LODS * MIP_STRIPS
+static int gMipReady;                      // 완성된 단계 수 (gMipStep / MIP_STRIPS)
+
+static int EnsureMipSurface() {
+    if (gMipDc) return 1;
+    if (!gSnapDc) return 0;
+    gMipDc = CreateCompatibleDC(gSnapDc);
+    if (!gMipDc) return 0;
+    gMipBmp = CreateCompatibleBitmap(gSnapDc, BASE_WIDTH + BASE_WIDTH / 2, BASE_HEIGHT);
+    if (!gMipBmp) { DeleteDC(gMipDc); gMipDc = 0; return 0; }
+    gMipOld = (HBITMAP)SelectObject(gMipDc, gMipBmp);
+    gMipSerial = 0; gMipStep = 0; gMipReady = 0;
+    return 1;
+}
+
+// 띠 하나만 만들고 돌아온다. 더 만들 것이 없으면 아무 일도 하지 않는다.
+static int BuildOneMip() {
+    if (!gSnapHeld || !gSnapDc || !EnsureMipSurface()) return 0;
+    if (gMipSerial != gSnapSerial) { gMipSerial = gSnapSerial; gMipStep = 0; gMipReady = 0; }
+    if (gMipStep >= SPIN_LODS * MIP_STRIPS) return 0;
+    int i = gMipStep / MIP_STRIPS, strip = gMipStep % MIP_STRIPS;
+    HDC src = i == 0 ? gSnapDc : gMipDc;
+    int srcX = i == 0 ? 0 : MIP_X[i - 1], srcY = i == 0 ? 0 : MIP_Y[i - 1];
+    int srcW = i == 0 ? gSnapW : MipW(i - 1), srcH = i == 0 ? gSnapH : MipH(i - 1);
+    int dstTop = MipH(i) * strip / MIP_STRIPS, dstBottom = MipH(i) * (strip + 1) / MIP_STRIPS;
+    int srcTop = srcH * strip / MIP_STRIPS, srcBottom = srcH * (strip + 1) / MIP_STRIPS;
+    SetMapMode(gSnapDc, MM_TEXT);
+    // 0단계는 논리 크기 그대로다. 창 배율이 1이면 순수 복사라 섞을 것이 없다.
+    SetStretchBltMode(gMipDc, i == 0 && srcW == BASE_WIDTH && srcH == BASE_HEIGHT ? COLORONCOLOR : HALFTONE);
+    SetBrushOrgEx(gMipDc, 0, 0, 0);
+    StretchBlt(gMipDc, MIP_X[i], MIP_Y[i] + dstTop, MipW(i), dstBottom - dstTop,
+               src, srcX, srcY + srcTop, srcW, srcBottom - srcTop, SRCCOPY);
+    SetMapMode(gSnapDc, MM_ANISOTROPIC);
+    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(gSnapDc, gSnapW, gSnapH, 0);
+    ++gMipStep;
+    gMipReady = gMipStep / MIP_STRIPS;
+    return 1;
+}
+
+void FxSnapshotWarm() { BuildOneMip(); }
 
 void FxSnapshotCapture(HDC canvas, int deviceW, int deviceH) {
     if (deviceW <= 0 || deviceH <= 0) return;
@@ -208,9 +291,11 @@ void FxSnapshotRelease() { gSnapHeld = 0; }
 void FxSnapshotDestroy() {
     if (gSnapDc) { SelectObject(gSnapDc, gSnapOld); DeleteDC(gSnapDc); gSnapDc = 0; }
     if (gSnapBmp) { DeleteObject(gSnapBmp); gSnapBmp = 0; }
-    if (gSpinDc) { SelectObject(gSpinDc, gSpinOld); DeleteDC(gSpinDc); gSpinDc = 0; }
-    if (gSpinBmp) { DeleteObject(gSpinBmp); gSpinBmp = 0; }
-    gSpinSerial = 0;
+    if (gMipDc) { SelectObject(gMipDc, gMipOld); DeleteDC(gMipDc); gMipDc = 0; }
+    if (gMipBmp) { DeleteObject(gMipBmp); gMipBmp = 0; }
+    if (gScratchDc) { SelectObject(gScratchDc, gScratchOld); DeleteDC(gScratchDc); gScratchDc = 0; }
+    if (gScratchBmp) { DeleteObject(gScratchBmp); gScratchBmp = 0; }
+    gMipSerial = 0; gMipStep = 0; gMipReady = 0;
     gSnapHeld = 0; gSnapW = 0; gSnapH = 0;
 }
 // 정수 사인. 각도는 1/10도, 결과는 천분율(-1000~1000)이다. 0~90도를 1도 간격으로
@@ -242,8 +327,11 @@ int CosMille(int deci) { return SinMille(deci + 900); }
 
 // PlgBlt는 평행사변형 세 꼭짓점(좌상·우상·좌하)을 받는다. 두 DC의 매핑 모드를
 // 잠시 MM_TEXT로 되돌려 장치 픽셀로 셈하고, 끝나면 원래 논리 좌표계를 돌려준다.
+//
+// lodBias는 "이 판은 흐려도 된다"는 표시다. 잔상처럼 어차피 번져 보일 그림은
+// 한두 단계 작은 사본에서 돌려도 결과가 같고, 그만큼 프레임이 가벼워진다.
 void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
-                    int scaleXMille, int scaleYMille, int angleDeci) {
+                    int scaleXMille, int scaleYMille, int angleDeci, int lodBias) {
     if (!gSnapHeld || !gSnapDc || scaleXMille <= 0 || scaleYMille <= 0) return;
     if (deviceW <= 0 || deviceH <= 0) return;
     int px = cx * deviceW / BASE_WIDTH, py = cy * deviceH / BASE_HEIGHT;
@@ -251,39 +339,96 @@ void FxSnapshotSpin(HDC dc, int deviceW, int deviceH, int cx, int cy,
     // 지금 캔버스를 기준으로 잡아야 화면과 어긋나지 않는다.
     int hw = deviceW * scaleXMille / 2000, hh = deviceH * scaleYMille / 2000;
     if (hw <= 0 || hh <= 0) return;
+    if (!BuildOneMip() && gMipReady == 0) return;   // 0단계는 언제나 있어야 한다
+    if (!gMipDc) return;
+    // 목적지보다 크지 않은 첫 단계를 고른다. 원본이 목적지보다 커 봐야 읽는 자리만
+    // 흩어질 뿐 더 또렷해지지 않는다.
+    int lod = 0;
+    while (lod + 1 < SPIN_LODS && MipW(lod + 1) >= hw * 2) ++lod;
+    lod += lodBias;
+    // 돌고 있는 판은 한 단계 더 줄여 읽는다. PlgBlt은 목적지 픽셀마다 원본의
+    // 엉뚱한 자리를 짚으므로 원본이 클수록 캐시를 놓친다 - 강제로 작은 단계를
+    // 물려 보니 그것만으로 프레임이 3분의 1 넘게 빠졌다. 이 구간의 판은 초당
+    // 1,000도 넘게 도는 중이라 한 단계 흐린 것은 보이지 않는다.
+    int spinning = angleDeci % 3600;
+    if (spinning < 0) spinning += 3600;
+    if (spinning > 20 && spinning < 3580) ++lod;
+    if (lod > gMipReady - 1) lod = gMipReady - 1;   // 아직 안 만들어진 단계는 못 쓴다
+    if (lod < 0) lod = 0;
+    if (lod > SPIN_LODS - 1) lod = SPIN_LODS - 1;
+    if (lod < 0) lod = 0;
+
+    SetMapMode(dc, MM_TEXT);
     int ca = CosMille(angleDeci), sa = SinMille(angleDeci);
-    SetMapMode(gSnapDc, MM_TEXT);
-    // 원본이 논리 해상도보다 크면 줄여 둔 사본에서 돌린다. 축소는 판이 새로
-    // 잡혔을 때 한 번만 하고, 그 뒤 프레임은 작은 원본을 그대로 쓴다.
-    HDC source = gSnapDc; int sourceW = gSnapW, sourceH = gSnapH;
-    if (gSnapW > BASE_WIDTH || gSnapH > BASE_HEIGHT) {
-        if (!gSpinDc) {
-            gSpinDc = CreateCompatibleDC(gSnapDc);
-            if (gSpinDc) {
-                gSpinBmp = CreateCompatibleBitmap(gSnapDc, BASE_WIDTH, BASE_HEIGHT);
-                if (gSpinBmp) gSpinOld = (HBITMAP)SelectObject(gSpinDc, gSpinBmp);
-                else { DeleteDC(gSpinDc); gSpinDc = 0; }
-            }
-            gSpinSerial = 0;
+    // 돌지 않은 판은 평행사변형이 아니다. 그때는 훨씬 싼 StretchBlt로 옮긴다
+    // (연출이 막 시작해 판이 화면을 가득 채우고 있는, 가장 비싼 프레임들이다).
+    if (sa > -3 && sa < 3 && ca > 0) {
+        SetStretchBltMode(dc, COLORONCOLOR);
+        StretchBlt(dc, px - hw, py - hh, hw * 2, hh * 2,
+                   gMipDc, MIP_X[lod], MIP_Y[lod], MipW(lod), MipH(lod), SRCCOPY);
+    } else {
+        POINT corner[3];
+        corner[0].x = px + (-hw * ca + hh * sa) / 1000; corner[0].y = py + (-hw * sa - hh * ca) / 1000;
+        corner[1].x = px + ( hw * ca + hh * sa) / 1000; corner[1].y = py + ( hw * sa - hh * ca) / 1000;
+        corner[2].x = px + (-hw * ca - hh * sa) / 1000; corner[2].y = py + (-hw * sa + hh * ca) / 1000;
+        // PlgBlt는 목적지 픽셀마다 원본을 역으로 찾아가는 순수 소프트웨어 경로라,
+        // 이 기계에서 초당 2,500만 픽셀쯤 나온다 - 판이 화면만 할 때 한 장이 16ms를
+        // 통째로 먹는다. 크게 돌 때는 어차피 흐르는 그림이므로, 넓은 판은 줄여서
+        // 돌리고 다시 늘린다. StretchBlt은 같은 픽셀 수를 훨씬 빨리 옮기므로
+        // 줄이고-돌리고-늘리는 세 번이 그냥 돌리는 한 번보다 싸다.
+        RECT box;
+        box.left = corner[0].x; box.right = corner[0].x;
+        box.top = corner[0].y; box.bottom = corner[0].y;
+        POINT fourth = {corner[1].x + corner[2].x - corner[0].x, corner[1].y + corner[2].y - corner[0].y};
+        POINT all[3] = {corner[1], corner[2], fourth};
+        for (int i = 0; i < 3; ++i) {
+            if (all[i].x < box.left) box.left = all[i].x;
+            if (all[i].x > box.right) box.right = all[i].x;
+            if (all[i].y < box.top) box.top = all[i].y;
+            if (all[i].y > box.bottom) box.bottom = all[i].y;
         }
-        if (gSpinDc) {
-            if (gSpinSerial != gSnapSerial) {
-                SetStretchBltMode(gSpinDc, COLORONCOLOR);
-                StretchBlt(gSpinDc, 0, 0, BASE_WIDTH, BASE_HEIGHT, gSnapDc, 0, 0, gSnapW, gSnapH, SRCCOPY);
-                gSpinSerial = gSnapSerial;
+        // 얼마나 줄일지는 잘리기 전의 평행사변형으로 정한다. PlgBlt은 클립 안쪽만
+        // 셈하지 않는다 - 창을 좁혀도 값은 그대로다(좁혀 보고 확인했다). 실제로
+        // 칠해 돌려놓을 자리만 클립으로 줄인다.
+        // 셋까지만 줄인다. 더 줄이면 되돌릴 때 계단이 눈에 띄어 "빠르게 도는 판"이
+        // 아니라 "깨진 그림"으로 보인다 - 값보다 그쪽이 더 나쁘다.
+        int fullW = box.right - box.left, fullH = box.bottom - box.top;
+        int shrink = 1;
+        while (shrink < 3 && (fullW / shrink) * (fullH / shrink) > SPIN_DIRECT_PIXELS) ++shrink;
+        RECT clip;
+        if (GetClipBox(dc, &clip) > NULLREGION) {
+            if (clip.left > box.left) box.left = clip.left;
+            if (clip.top > box.top) box.top = clip.top;
+            if (clip.right < box.right) box.right = clip.right;
+            if (clip.bottom < box.bottom) box.bottom = clip.bottom;
+        }
+        int bw = box.right - box.left, bh = box.bottom - box.top;
+        if (bw <= 0 || bh <= 0) { SetMapMode(dc, MM_ANISOTROPIC); SetWindowExtEx(dc, BASE_WIDTH, BASE_HEIGHT, 0); SetViewportExtEx(dc, deviceW, deviceH, 0); return; }
+        while (shrink < 4 && (bw / shrink > BASE_WIDTH || bh / shrink > BASE_HEIGHT)) ++shrink;
+        HDC scratch = shrink > 1 ? AcquireSpinScratch() : 0;
+        if (!scratch) {
+            PlgBlt(dc, corner, gMipDc, MIP_X[lod], MIP_Y[lod], MipW(lod), MipH(lod), 0, 0, 0);
+        } else {
+            int sw = bw / shrink, sh = bh / shrink;
+            if (sw < 1) sw = 1;
+            if (sh < 1) sh = 1;
+            // 평행사변형 바깥은 뒤에 있던 그림이 그대로 돌아와야 한다. 먼저 그
+            // 자리를 줄여 받아 두고 그 위에서 돌린다.
+            SetStretchBltMode(scratch, COLORONCOLOR);
+            StretchBlt(scratch, 0, 0, sw, sh, dc, box.left, box.top, bw, bh, SRCCOPY);
+            POINT reduced[3];   // small 은 windows.h(rpcndr.h)가 char로 쓰고 있다
+            for (int i = 0; i < 3; ++i) {
+                reduced[i].x = (corner[i].x - box.left) / shrink;
+                reduced[i].y = (corner[i].y - box.top) / shrink;
             }
-            source = gSpinDc; sourceW = BASE_WIDTH; sourceH = BASE_HEIGHT;
+            PlgBlt(scratch, reduced, gMipDc, MIP_X[lod], MIP_Y[lod], MipW(lod), MipH(lod), 0, 0, 0);
+            // 되돌릴 때도 최근접으로 늘린다. HALFTONE로 섞으면 확실히 곱지만
+            // 이 넓이에서 프레임이 12ms쯤 더 든다 - 두 배 계단은 도는 동안
+            // 흐름으로 읽히고, 멈춘 판은 애초에 이 경로로 오지 않는다.
+            SetStretchBltMode(dc, COLORONCOLOR);
+            StretchBlt(dc, box.left, box.top, bw, bh, scratch, 0, 0, sw, sh, SRCCOPY);
         }
     }
-    POINT corner[3];
-    corner[0].x = px + (-hw * ca + hh * sa) / 1000; corner[0].y = py + (-hw * sa - hh * ca) / 1000;
-    corner[1].x = px + ( hw * ca + hh * sa) / 1000; corner[1].y = py + ( hw * sa - hh * ca) / 1000;
-    corner[2].x = px + (-hw * ca - hh * sa) / 1000; corner[2].y = py + (-hw * sa + hh * ca) / 1000;
-    SetMapMode(dc, MM_TEXT);
-    PlgBlt(dc, corner, source, 0, 0, sourceW, sourceH, 0, 0, 0);
-    SetMapMode(gSnapDc, MM_ANISOTROPIC);
-    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
-    SetViewportExtEx(gSnapDc, gSnapW, gSnapH, 0);
     SetMapMode(dc, MM_ANISOTROPIC);
     SetWindowExtEx(dc, BASE_WIDTH, BASE_HEIGHT, 0);
     SetViewportExtEx(dc, deviceW, deviceH, 0);
@@ -580,21 +725,27 @@ void DrawHexBlock(HDC dc, const RECT& area, COLORREF color, int seed, uint32_t t
 // 한 줄을 왼쪽에서 오른쪽으로 훑으며 level 확률로 조각을 채운다. 채우는 비율이
 // 곧 level이므로 1000에서는 화면에 원래 그림이 한 점도 남지 않는다. 붓은 한 번만
 // 만들어 돌려 쓰고, 건너뛰는 조각은 GDI 호출 자체를 하지 않는다.
-void DrawScreenStatic(HDC dc, const RECT& area, int step, int level) {
-    if (level <= 0) return;
-    if (level > 1000) level = 1000;
+// 노이즈 칸만 채운다. 흘러내리는 밝은 띠는 부르는 쪽이 붙인다 - 가장자리 띠는
+// 이 함수를 네 조각으로 나눠 부르므로, 띠까지 여기서 그리면 한 프레임에 열두
+// 줄이 겹친다.
+static void StaticCells(HDC dc, const RECT& area, int step, int level) {
     int width = area.right - area.left, height = area.bottom - area.top;
     if (width <= 2 || height <= 2) return;
     HBRUSH shade[4] = {CreateSolidBrush(RGB(13, 19, 25)), CreateSolidBrush(RGB(33, 47, 55)),
                        CreateSolidBrush(RGB(72, 104, 96)), CreateSolidBrush(RGB(150, 196, 178))};
+    // 잘려 나갈 줄은 아예 돌지 않는다. 칸 하나하나가 FillRect라 보이지도 않을
+    // 자리를 채우는 값이 그대로 프레임에 붙는다.
+    RECT clip; int clipped = GetClipBox(dc, &clip) > NULLREGION;
     for (int y = area.top; y < area.bottom; y += 6) {
         int bottom = y + 6 > area.bottom ? area.bottom : y + 6;
+        if (clipped && (bottom <= clip.top || y >= clip.bottom)) continue;
         int x = area.left;
         for (int i = 0; x < area.right; ++i) {
             uint32_t h = Hash3(step, y, i);
             int w = 10 + (int)(h % 70u);
             if (x + w > area.right) w = area.right - x;
-            if ((int)((h >> 11) % 1000u) < level) {
+            if (clipped && x >= clip.right) break;
+            if ((int)((h >> 11) % 1000u) < level && !(clipped && x + w <= clip.left)) {
                 uint32_t pick = (h >> 26) % 100u;
                 RECT cell = MakeRect(x, y, x + w, bottom);
                 FillRect(dc, &cell, shade[pick < 44u ? 0 : pick < 76u ? 1 : pick < 95u ? 2 : 3]);
@@ -602,6 +753,15 @@ void DrawScreenStatic(HDC dc, const RECT& area, int step, int level) {
             x += w;
         }
     }
+    for (int i = 0; i < 4; ++i) DeleteObject(shade[i]);
+}
+
+void DrawScreenStatic(HDC dc, const RECT& area, int step, int level) {
+    if (level <= 0) return;
+    if (level > 1000) level = 1000;
+    int width = area.right - area.left, height = area.bottom - area.top;
+    if (width <= 2 || height <= 2) return;
+    StaticCells(dc, area, step, level);
     // 신호가 무너질수록 밝은 띠 하나가 화면을 타고 흘러내린다.
     if (level > 380) {
         int band = area.top + (int)((uint32_t)(step * 17) % (uint32_t)height);
@@ -609,11 +769,15 @@ void DrawScreenStatic(HDC dc, const RECT& area, int step, int level) {
         if (band + thick > area.bottom) thick = area.bottom - band;
         if (thick > 0) Fill(dc, MakeRect(area.left, band, area.right, band + thick), MixColor(RGB(60, 90, 88), RGB(196, 232, 216), level / 10));
     }
-    for (int i = 0; i < 4; ++i) DeleteObject(shade[i]);
 }
 
-// 띠를 세 겹으로 나눠 안쪽 겹일수록 옅게 덮는다. 각 겹은 중앙을 잘라낸
-// 클립 안에서만 그려지므로 화면 한가운데는 원본 그대로 남는다.
+// 띠를 세 겹으로 나눠 안쪽 겹일수록 옅게 덮는다. 화면 한가운데는 건드리지 않는다.
+//
+// 예전에는 겹마다 가운데를 잘라낸 클립을 걸고 화면 전체에 노이즈를 그렸다.
+// 클립은 그리지 않을 뿐 도는 것은 다 돌기 때문에, 세 겹이면 화면 네 장 분량의
+// 칸을 세고 그중 띠에 걸린 것만 남는 셈이었다. 이제 각 겹의 네 변만 따로
+// 그린다 - 실제로 칠할 자리만 돈다. 위·아래 띠가 모서리를 가져가고 좌·우
+// 띠는 그 사이만 채워 겹치는 자리가 없다.
 void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness) {
     if (level <= 0 || thickness <= 0) return;
     const int rings = 3;
@@ -622,11 +786,14 @@ void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness
         InflateRect(&outer, -thickness * i / rings, -thickness * i / rings);
         InflateRect(&inner, -thickness * (i + 1) / rings, -thickness * (i + 1) / rings);
         if (inner.right - inner.left < 2 || inner.bottom - inner.top < 2) break;
-        int saved = SaveDC(dc);
-        IntersectClipRect(dc, outer.left, outer.top, outer.right, outer.bottom);
-        ExcludeClipRect(dc, inner.left, inner.top, inner.right, inner.bottom);
-        DrawScreenStatic(dc, outer, step + i * 31, level * (rings - i) / rings);
-        RestoreDC(dc, saved);
+        int ringLevel = level * (rings - i) / rings;
+        if (ringLevel > 1000) ringLevel = 1000;
+        if (ringLevel <= 0) continue;
+        int seed = step + i * 31;
+        StaticCells(dc, MakeRect(outer.left, outer.top, outer.right, inner.top), seed, ringLevel);
+        StaticCells(dc, MakeRect(outer.left, inner.bottom, outer.right, outer.bottom), seed, ringLevel);
+        StaticCells(dc, MakeRect(outer.left, inner.top, inner.left, inner.bottom), seed, ringLevel);
+        StaticCells(dc, MakeRect(inner.right, inner.top, outer.right, inner.bottom), seed, ringLevel);
     }
 }
 
@@ -674,6 +841,28 @@ void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thick
         DeleteObject(brush);
         InflateRect(&r, -1, -1);
     }
+}
+
+// 사선. 지금까지는 모든 것이 축에 맞은 사각형이라 필요가 없었는데, 바닥 격자와
+// 방사 선처럼 화면 밖으로 뻗는 선은 사각형으로는 낼 수 없다.
+void DrawLine(HDC dc, int x0, int y0, int x1, int y1, COLORREF color, int thickness) {
+    if (thickness < 1) thickness = 1;
+    HPEN pen = CreatePen(PS_SOLID, thickness, color);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    MoveToEx(dc, x0, y0, 0); LineTo(dc, x1, y1);
+    SelectObject(dc, oldPen); DeleteObject(pen);
+}
+
+// 퍼져 나가는 충격파 고리. 사각 테두리(DrawPulseFrame)와 달리 한 점에서 터진
+// 것으로 읽히므로 디스크가 만들어지는 순간과 철컥 순간에 쓴다.
+void DrawGlowRing(HDC dc, int cx, int cy, int rx, int ry, COLORREF color, int thickness) {
+    if (rx <= 0 || ry <= 0 || thickness <= 0) return;
+    HPEN pen = CreatePen(PS_SOLID, thickness, color);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+    Ellipse(dc, cx - rx, cy - ry, cx + rx, cy + ry);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen); DeleteObject(pen);
 }
 
 void DrawScanlines(HDC dc, const RECT& area) {

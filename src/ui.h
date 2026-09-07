@@ -26,17 +26,25 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define DIR_ENTER_MS 1460      // 카드 잠금 + 디렉터리 라우팅/진입 전체 길이
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
 
+// 연출 타이머의 주기. 60fps를 노리고 16으로 두면 안 된다 - WM_TIMER는 시스템
+// 틱(기본 15.6ms) 경계에서만 깨어나므로, 16ms짜리는 매번 다음 틱까지 밀려 두
+// 틱에 한 번씩 온다. 실제로 재 보니 삽입 연출이 3.5초에 131프레임(37fps)이었고,
+// 같은 연출을 8ms로 걸었더니 234프레임(66fps)이 나왔다. 틱마다 한 번 깨어나되
+// 실제 속도는 그리기가 정한다 (WM_TIMER는 밀린 만큼 쌓이지 않는다).
+#define FX_TIMER_MS 8
+
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
-// 새 게임을 누르면 지금 화면이 먼저 갈라지고, 돌면서 빨려 들어가 플로피 한 장이
-// 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 컴퓨터의 3.5인치 드라이브에 꽂힌다.
-// 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
-#define BOOT_GLITCH_MS 420     // 판이 띠로 어긋나고 노이즈가 차오른다
-#define BOOT_SUCK_MS   860     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
-#define BOOT_FLIP_MS   520     // 만들어진 디스크가 공중에서 한 바퀴 뒤집힌다
-#define BOOT_FLY_MS    340     // 디스크가 슬롯 앞으로 내려온다
-#define BOOT_PUSH_MS   340     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
-#define BOOT_SEEK_MS   720     // 드라이브가 읽는다 (LED 점멸·신호 전송)
-#define BOOT_ZOOM_MS   340     // 모니터 화면이 커지며 런으로 넘어간다
+// 새 게임을 누르면 지금 화면이 먼저 갈라지고, 소용돌이에 감겨 빨려 들어가 플로피
+// 한 장이 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 책상 위 컴퓨터의 3.5인치
+// 드라이브에 꽂힌다. 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로
+// 여기 모아 둔다.
+#define BOOT_GLITCH_MS 380     // 판이 띠로 어긋나고 고리가 조여 온다
+#define BOOT_SUCK_MS   820     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
+#define BOOT_FLIP_MS   480     // 만들어진 디스크가 공중에서 한 바퀴 뒤집힌다
+#define BOOT_FLY_MS    320     // 디스크가 슬롯 앞으로 내려온다
+#define BOOT_PUSH_MS   360     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
+#define BOOT_SEEK_MS   820     // 드라이브가 읽는다 (LED 점멸·신호 전송)
+#define BOOT_ZOOM_MS   520     // 기계 전체가 덮쳐 오고 그 화면 속으로 들어간다
 #define BOOT_SUCK_AT   BOOT_GLITCH_MS
 #define BOOT_FLIP_AT   (BOOT_SUCK_AT + BOOT_SUCK_MS)   // 디스크 한 장이 완성되는 순간
 #define BOOT_FLY_AT    (BOOT_FLIP_AT + BOOT_FLIP_MS)

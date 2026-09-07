@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <windowsx.h>
+#include <mmsystem.h>   // timeBeginPeriod: 연출 타이머를 15.6ms 틱에서 풀어 준다
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
@@ -70,7 +71,7 @@ static int BeginUiFx(int kind) {
     gUiFx.die = gUiFx.face = gUiFx.displacedDie = gUiFx.fromSlot = gUiFx.toSlot = gUiFx.rewardIndex = -1;
     if (kind == UIFX_REWARD_FACE || kind == UIFX_REWARD_TSR || kind == UIFX_REWARD_REPAIR)
         CaptureUiFxSnapshot();
-    SetTimer(gWindow, UIFX_TIMER_ID, 16, 0);
+    SetTimer(gWindow, UIFX_TIMER_ID, FX_TIMER_MS, 0);
     return 1;
 }
 
@@ -339,7 +340,7 @@ static void BeginDeath() {
     gDeathActive = 1;
     PlaySfx(SFX_CRASH);
     PlaySfx(SFX_GAMEOVER);
-    SetTimer(gWindow, 7, 16, 0);
+    SetTimer(gWindow, 7, FX_TIMER_MS, 0);
 }
 
 static void FinishCombatClear() {
@@ -354,7 +355,7 @@ static void BeginCombatClear(int floor, int encounter) {
     gClearedEncounter = encounter;
     gCombatClearStart = GetTickCount();
     gCombatClearActive = 1;
-    SetTimer(gWindow, 3, 16, 0);
+    SetTimer(gWindow, 3, FX_TIMER_MS, 0);
 }
 
 static int TurnTraceRevealDuration() {
@@ -415,7 +416,7 @@ static void BeginGimmickFx(int kind, int a, int b) {
     gFxShakeAt = 0;
     gFxShakePeak = perTurn ? 0 : (kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
                 || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5);
-    SetTimer(gWindow, 8, 16, 0);
+    SetTimer(gWindow, 8, FX_TIMER_MS, 0);
 }
 
 static void FinishGimmickFx() {
@@ -441,7 +442,7 @@ static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
     gFxSfxFired = 0;
     gTurnTraceStart = GetTickCount();
     gTurnTraceActive = 1;
-    SetTimer(gWindow, 4, 16, 0);
+    SetTimer(gWindow, 4, FX_TIMER_MS, 0);
 }
 
 // ---- drive mount / descent transition -------------------------------------
@@ -468,7 +469,7 @@ static void BeginDescent(int toFloor, int choiceIndex) {
     gDescentStart = GetTickCount();
     gDescentActive = 1;
     PlaySfx(SFX_READ_START);
-    SetTimer(gWindow, 6, 16, 0);   // 5번은 오디오 펌프(AUDIO_TIMER_ID)가 쓴다
+    SetTimer(gWindow, 6, FX_TIMER_MS, 0);   // 5번은 오디오 펌프(AUDIO_TIMER_ID)가 쓴다
 }
 
 // ---- 디렉터리 진입 연출 ----------------------------------------------------
@@ -494,7 +495,7 @@ static void BeginDirectoryEnter(int kind, int choiceIndex) {
     gDirEnterStart = GetTickCount();
     gDirEnterActive = 1;
     PlaySfx(SFX_READ_START);
-    SetTimer(gWindow, 9, 16, 0);
+    SetTimer(gWindow, 9, FX_TIMER_MS, 0);
 }
 
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
@@ -518,6 +519,8 @@ static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
     { BOOT_CLUNK_AT + 150, SFX_READ_START, 0 },
     { BOOT_CLUNK_AT + 380, SFX_DIE_LOCK,   3 },   // 헤드가 트랙을 옮긴다
     { BOOT_CLUNK_AT + 570, SFX_DIE_LOCK,   5 },
+    { BOOT_SEEK_END,       SFX_PRUNE,      0 },   // 기계가 덮쳐 오며 화면 속으로 빨려 든다
+    { BOOT_INSERT_MS - 150, SFX_CONFIRM,   0 },   // 다 삼킨 순간
 };
 static int gBootCue;
 
@@ -542,7 +545,7 @@ static void BeginBootInsert() {
     gBootStart = GetTickCount();
     gBootActive = 1;
     PlaySfx(SFX_PRUNE);            // 화면이 디스크로 빨려 들어가는 소리
-    SetTimer(gWindow, 10, 16, 0);
+    SetTimer(gWindow, 10, FX_TIMER_MS, 0);
 }
 
 // 화면이 갈라지는 동안 조금씩 세지고, 디스크가 물리는 철컥에서 한 번 크게 튄다.
@@ -550,6 +553,8 @@ static int BootShakeAmplitude() {
     if (!gBootActive) return 0;
     int elapsed = (int)(GetTickCount() - gBootStart);
     if (elapsed < BOOT_SUCK_AT) return FxScale(1 + elapsed * 5 / BOOT_GLITCH_MS);
+    // 마지막 돌진: 기계가 가까워질수록 떨림이 세진다. 다가오는 것이 무거워 보인다.
+    if (elapsed >= BOOT_SEEK_END) return FxScale(1 + Track(elapsed, BOOT_SEEK_END, BOOT_INSERT_MS) * 5 / 1000);
     int since = elapsed - BOOT_CLUNK_AT;
     if (since >= 0 && since < 260) return FxScale(9 * (260 - since) / 260);
     return 0;
@@ -588,7 +593,7 @@ static void BeginRead() {
     if (gGame.phase != PHASE_COMBAT || gRolled || gReadActive) return;
     gReadStart = GetTickCount(); gReadActive = 1; gReadLanded = 0;
     PlaySfx(SFX_READ_START);
-    SetTimer(gWindow, 1, 16, 0);
+    SetTimer(gWindow, 1, FX_TIMER_MS, 0);
 }
 
 // Dice are rolled inside game.cpp at turn start; watch the turn identity so a
@@ -1239,7 +1244,12 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
-    SetProcessDPIAware(); InitTitle(&gGame); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
+    SetProcessDPIAware();
+    // 연출 타이머는 전부 16ms로 걸려 있지만, 시스템 틱이 기본 15.6ms라 실제로는
+    // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
+    // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
+    timeBeginPeriod(1);
+    InitTitle(&gGame); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
     RECT desired = {0, 0, 1120, 760}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;
@@ -1247,5 +1257,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE · 1.44MB", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
     if (!gWindow) return 2; ShowWindow(gWindow, showCommand); UpdateWindow(gWindow);
     MSG message; while (GetMessageW(&message, 0, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+    timeEndPeriod(1);
     return (int)message.wParam;
 }
