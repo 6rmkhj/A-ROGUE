@@ -3,6 +3,7 @@
 #include "render.h"
 #include "audio.h"
 #include "fx_draw.h"
+#include "localization.h"
 
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
 static int gWindowedScale = 100;
@@ -17,6 +18,7 @@ RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82,
 RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65); }
 RECT DeckCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT ScaleOptionRect(int index) { int left = 84 + index * 130; return MakeRect(left, 260, left + 112, 302); }
+RECT LanguageOptionRect(int index) { int left = 84 + index * 150; return MakeRect(left, 164, left + 132, 206); }
 // 오른쪽 열. 설정 화면은 왼쪽 364px만 쓰고 나머지가 비어 있었다. 화면 배율 행은
 // x=716까지 뻗으므로 겹치지 않게 한 행 아래(전체화면과 같은 높이)에 둔다.
 // 판정용 사각형은 홈보다 두껍다. 얇은 선을 정확히 집어야 하면 쓰기 나쁘다.
@@ -109,6 +111,16 @@ static void DrawSettings(HDC dc, int width, int height) {
     Text(dc, panel.left + 28, panel.top + 18, L"설정", C_GREEN, gFontLarge);
     RECT close = SettingsCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
     TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    Text(dc, 84, 132, L"언어", C_YELLOW, gFontMedium);
+    static const wchar_t* const LANGUAGE_NAMES[LANGUAGE_COUNT] = {L"한국어", L"English"};
+    for (int i = 0; i < LANGUAGE_COUNT; ++i) {
+        RECT r = LanguageOptionRect(i); int active = UiLanguage() == i; int hover = Inside(r, gMouse.x, gMouse.y);
+        Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2,
+            active ? C_GREEN : hover ? C_BLUE : C_LINE);
+        TextRect(dc, r, LANGUAGE_NAMES[i], active ? C_GREEN : C_TEXT, gFontMedium,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 
     Text(dc, 84, 228, L"화면 배율", C_YELLOW, gFontMedium);
     for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) {
@@ -2379,6 +2391,7 @@ static const wchar_t* FaceAbilityDetail(int kind) {
 }
 
 static int WrappedTextHeight(HDC dc, const wchar_t* value, HFONT font, int width) {
+    value = LocalizeText(value);
     HFONT old = (HFONT)SelectObject(dc, font);
     RECT r = MakeRect(0, 0, width, 0);
     DrawTextW(dc, value, -1, &r, DT_WORDBREAK | DT_CALCRECT);

@@ -224,6 +224,7 @@ RECT SettingsCloseRect(int width);
 RECT DeckButtonRect(int width);
 RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
+RECT LanguageOptionRect(int index);
 RECT VolumeSliderRect();
 RECT VolumeHandleRect(int volume);
 int VolumeFromX(int x);          // 슬라이더 위 x좌표를 0~100으로

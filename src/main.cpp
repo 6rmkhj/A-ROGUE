@@ -5,6 +5,7 @@
 #include "render.h"
 #include "audio.h"
 #include "music.h"
+#include "localization.h"
 
 // 게임 상태와 창·입력을 담당한다. 그리기는 screens.cpp, 소리는 audio.cpp가 맡는다.
 GameState gGame;
@@ -861,6 +862,7 @@ static int HoverId(int x, int y) {
     if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) return 900;
     if (gSettingsOpen) {
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y)) return 901;
+        for (int i = 0; i < LANGUAGE_COUNT; ++i) if (Inside(LanguageOptionRect(i), x, y)) return 902 + i;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
         if (Inside(BgmToggleRect(), x, y)) return 941;
@@ -938,6 +940,14 @@ static void HandleClick(int x, int y) {
         }
         gRestartArmed = 0;
         if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+        for (int i = 0; i < LANGUAGE_COUNT; ++i) if (Inside(LanguageOptionRect(i), x, y)) {
+            // Re-read the external table when a language is selected so copy
+            // edits can be previewed without recompiling or restarting.
+            LoadTranslations();
+            SetUiLanguage(i);
+            SetWindowTextW(gWindow, i == LANGUAGE_ENGLISH ? L"A:\\ROGUE · 1.44MB · English" : L"A:\\ROGUE · 1.44MB");
+            PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return;
+        }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) { gFxLevel = i; PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
         if (Inside(BgmToggleRect(), x, y)) { AudioSetMusicEnabled(!AudioMusicEnabled()); PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1268,6 +1278,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
     // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
     timeBeginPeriod(1);
+    LoadTranslations();
     InitTitle(&gGame); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;

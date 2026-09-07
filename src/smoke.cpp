@@ -2,6 +2,7 @@
 #include <string.h>
 #include "game.h"
 #include "music.h"
+#include "localization.h"
 #include "sprites.h"   // 테스트 실행 파일에서 47종 초상화 데이터를 직접 검증한다
 
 static int Fail(const char* message) { printf("FAIL: %s\n", message); return 1; }
@@ -1462,6 +1463,16 @@ static int CheckDirectoryPath() {
 }
 
 int main() {
+    LoadTranslations();
+    SetUiLanguage(LANGUAGE_ENGLISH);
+    if (lstrcmpW(LocalizeText(L"설정"), L"Settings") != 0)
+        return Fail("static UI translation must load from translations.tsv");
+    if (lstrcmpW(LocalizeText(L"체력 12/30"), L"HP 12/30") != 0)
+        return Fail("formatted UI translation must preserve runtime values");
+    if (lstrcmpW(LocalizeText(L"C:\\ SYSTEM 마운트 완료. 심층 스캔을 시작합니다."),
+        L"C:\\ SYSTEM mounted. Starting deep scan.") != 0)
+        return Fail("adjacent formatted values must remain intact");
+    SetUiLanguage(LANGUAGE_KOREAN);
     if (CheckRosterIntegrity()) return 1;
     if (CheckSprites()) return 1;
     if (CheckSpawnMatrix()) return 1;

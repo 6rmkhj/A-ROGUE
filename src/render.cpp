@@ -1,6 +1,7 @@
 #include <windows.h>
 #include "render.h"
 #include "sprites.h"
+#include "localization.h"
 
 HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
 
@@ -64,11 +65,13 @@ void Panel(HDC dc, const RECT& rect, COLORREF fillColor, COLORREF borderColor) {
 }
 
 void Text(HDC dc, int x, int y, const wchar_t* value, COLORREF color, HFONT font) {
+    value = LocalizeText(value);
     HFONT old = (HFONT)SelectObject(dc, font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color);
     TextOutW(dc, x, y, value, lstrlenW(value)); SelectObject(dc, old);
 }
 
 void TextRect(HDC dc, const RECT& rect, const wchar_t* value, COLORREF color, HFONT font, UINT flags) {
+    value = LocalizeText(value);
     HFONT old = (HFONT)SelectObject(dc, font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color); RECT r = rect;
     DrawTextW(dc, value, -1, &r, flags); SelectObject(dc, old);
 }
@@ -107,6 +110,7 @@ uint32_t Hash3(int a, int b, int c) {
 
 int TextWidth(HDC dc, const wchar_t* value, HFONT font) {
     if (!value || !value[0]) return 0;
+    value = LocalizeText(value);
     HFONT old = (HFONT)SelectObject(dc, font);
     SIZE size;
     int ok = GetTextExtentPoint32W(dc, value, lstrlenW(value), &size);
