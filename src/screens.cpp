@@ -2,6 +2,7 @@
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
+#include "fx_draw.h"
 
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
 static int gWindowedScale = 100;
@@ -264,7 +265,7 @@ static void DrawRoutingState(HDC dc);
 RECT EndTurnRect() { return MakeRect(696, 616, 896, 679); }
 RECT ReadButtonRect() { return MakeRect(696, 544, 896, 600); }
 RECT KeybButtonRect() { return MakeRect(696, 685, 896, 732); }
-int DieForSlotUI(int slot) { for (int d = 0; d < 3; ++d) if (gGame.dice[d].assignedSlot == slot) return d; return -1; }
+int DieForSlotUI(int slot) { for (int d = 0; d < 3; ++d) if (DisplayDie(d)->assignedSlot == slot) return d; return -1; }
 
 // 설치된 상주 프로그램은 비어 있는 적 슬롯에 세로로 나열한다.
 // 현재 전투는 적이 하나라 슬롯 1이 항상 비지만, 다중 적에도 안전하게
@@ -367,19 +368,19 @@ static void FormatGimmickStatus(wchar_t* out, int size) {
 #define CFX_AMP_EXPAND_MS  60     // 증폭 슬롯 테두리가 부풀어 오른다
 #define CFX_AMP_TRAVEL_MS  150    // 그 보너스가 공격 슬롯으로 건너간다
 #define CFX_AMP_LAND_MS    260    // 도착한 공격 슬롯이 초록 → 노랑 → 빨강으로 튄다
-#define CFX_LAUNCH_MS      200    // 공격 신호가 대상에 닿기까지
+#define CFX_LAUNCH_MS      230    // 공격 신호 도착 = 다음 적중 줄
 #define CFX_LAUNCH_HOLD_MS 340    // 경로 잔상이 걷히기까지
 #define CFX_HIT_FLASH_MS   75
-#define CFX_KNOCK_MS       160
-#define CFX_DEBRIS_MS      240
-#define CFX_GHOST_MS       360
-#define CFX_NUMBER_MS      450
+#define CFX_KNOCK_MS       280
+#define CFX_DEBRIS_MS      420
+#define CFX_GHOST_MS       540
+#define CFX_NUMBER_MS      640
 #define CFX_BIGHIT_MS      90     // 큰 피해·처치에만 붙는 초상화 밴드 분할
 #define CFX_DEFEND_SCAN_MS 80
 #define CFX_DEFEND_WAVE_MS 160
 #define CFX_DEFEND_TAG_MS  300
-#define CFX_KILL_FRAG_MS   180
-#define CFX_KILL_CLEAR_MS  280
+#define CFX_KILL_FRAG_MS   260
+#define CFX_KILL_CLEAR_MS  480
 
 // 적 카드 아래와 슬롯 위 사이의 빈 통로. 공격·연쇄 신호는 여기서 가로로
 // 건너간다. 카드 안으로 파고들면 코드·체력·의도 위를 굵은 선이 밟게 되므로
@@ -445,7 +446,7 @@ static int EnemyFxKnock(int enemy) {
     int t = 0;
     int index = EnemyDamageFx(enemy, CFX_KNOCK_MS, &t);
     if (index < 0) return 0;
-    int peak = 3 + CfxIntensity(gGame.combatFx[index].value) / 2;   // 3 ~ 7px
+    int peak = FxScale(4 + CfxIntensity(gGame.combatFx[index].value));
     int lunge = CFX_KNOCK_MS * 30 / 100;
     int advance = t < lunge ? t * 1000 / lunge
                             : 1000 - (t - lunge) * 1000 / (CFX_KNOCK_MS - lunge);
@@ -460,7 +461,7 @@ static int EnemyFxGhostHp(int enemy, int currentHp) {
     const CombatFxEvent* fx = &gGame.combatFx[index];
     int before = fx->beforeValue, after = fx->afterValue;
     if (before <= after) return currentHp;
-    int ghost = before - (before - after) * t / CFX_GHOST_MS;
+    int ghost = Lerp(before, after, EaseOutCubic(Track(t, 110, CFX_GHOST_MS)));
     return ghost > currentHp ? ghost : currentHp;
 }
 
@@ -523,7 +524,7 @@ static void DrawCombatFxBack(HDC dc) {
     if (!CombatFxPlaying()) return;
     for (int i = 0; i < gGame.combatFxCount; ++i) {
         const CombatFxEvent* fx = &gGame.combatFx[i];
-        int t = CombatFxElapsed(i);
+        int t = fx->type == CFX_CHAIN ? CombatFxLeadElapsed(i, CFX_LAUNCH_MS) : CombatFxElapsed(i);
         if (t < 0) continue;
         switch (fx->type) {
 
@@ -582,6 +583,27 @@ static void DrawCombatFxFront(HDC dc) {
         int t = CombatFxElapsed(i);
         if (t < 0) continue;
 
+        if (fx->type == CFX_AMPLIFY && !(fx->flags & CFXF_WASTED) && t < 300 && FxDecorOn()) {
+            RECT slot = SlotRect(SLOT_AMPLIFY);
+            int cx = (slot.left + slot.right) / 2, cy = slot.top + 60;
+            int radius = Lerp(52, 10, EaseInCubic(Track(t, 0, 160)));
+            for (int k = 0; k < FxScale(8); ++k) {
+                int angle = k * 450 + t * 7;
+                int x = cx + CosMille(angle) * radius / 1000;
+                int y = cy + SinMille(angle) * radius / 1600;
+                Fill(dc, MakeRect(x - 2, y - 2, x + 3, y + 3), MixColor(C_GREEN, C_TEXT, k * 7));
+            }
+        }
+        if ((fx->type == CFX_DEFEND || (fx->type == CFX_CHAIN && (fx->flags & CFXF_DEFEND_CHAIN))) && FxDecorOn()) {
+            RECT shield = SlotRect(SLOT_DEFEND);
+            DrawShieldMesh(dc, shield, t, 440, C_BLUE, FxScale(85));
+        }
+        if (fx->type == CFX_ENEMY_STRIKE && (fx->flags & CFXF_BLOCKED) && FxDecorOn()) {
+            RECT shield = MakeRect(28, 414, 698, 538);
+            DrawShieldMesh(dc, shield, t, 400, C_BLUE, FxScale(80));
+            DrawPixelBurst(dc, 360, 420, t, 340, FxScale(18), i + 61, C_BLUE);
+        }
+
         // 증폭이 도착한 공격 슬롯이 초록 → 노랑 → 빨강으로 짧게 넘어간다.
         if (fx->type == CFX_AMPLIFY && !(fx->flags & CFXF_WASTED)
             && t >= CFX_AMP_TRAVEL_MS && t < CFX_AMP_LAND_MS) {
@@ -617,6 +639,26 @@ static void DrawCombatFxFront(HDC dc) {
         RECT portrait = PortraitRect(card);
         int cx = (portrait.left + portrait.right) / 2, cy = (portrait.top + portrait.bottom) / 2;
 
+        if (FxDecorOn()) {
+            int saved = SaveDC(dc);
+            IntersectClipRect(dc, portrait.left + 1, portrait.top + 1, portrait.right - 1, portrait.bottom - 1);
+            COLORREF tone = (fx->flags & CFXF_BLOCKED) ? C_BLUE : fx->type == CFX_CHAIN ? C_YELLOW
+                : fx->type == CFX_BURN ? RGB(255, 144, 48) : C_RED;
+            int power = FxScale(2 + CfxIntensity(fx->value));
+            if (fx->type == CFX_BURN) {
+                for (int k = 0; k < FxScale(12); ++k) {
+                    int age = t - k * 17;
+                    if (age < 0 || age > 380) continue;
+                    int x = cx - 48 + k * 9;
+                    int y = portrait.bottom - 12 - EaseOutCubic(Track(age, 0, 380)) * 94 / 1000;
+                    Fill(dc, MakeRect(x, y, x + 3, y + 12), MixColor(C_BG, tone, 90 * (380 - age) / 380));
+                }
+            } else DrawImpactBloom(dc, cx, cy + 8, t, power, i * 31 + enemy, tone);
+            if ((fx->flags & CFXF_KILL) && t >= 80)
+                DrawImpactBloom(dc, cx, cy + 8, t - 80, FxScale(12), i + 193, C_YELLOW);
+            RestoreDC(dc, saved);
+        }
+
         // 큰 타격만 초상화를 가로 띠로 쪼갠다. 작은 피해에는 붙지 않는다.
         if ((fx->flags & CFXF_BIG_HIT) && t < CFX_BIGHIT_MS && FxDecorOn())
             DrawBandGlitch(dc, portrait, t, FxScale(7 - 7 * t / CFX_BIGHIT_MS), i * 13 + enemy, 7);
@@ -628,7 +670,7 @@ static void DrawCombatFxFront(HDC dc) {
         }
 
         // 실제 체력 피해량. 방어도가 전부 받아냈으면 그렇게 적는다.
-        if (t < CFX_NUMBER_MS) {
+        if (t < CFX_NUMBER_MS && EnemyDamageFx(enemy, CFX_NUMBER_MS, 0) == i) {
             wchar_t number[32];
             COLORREF tone;
             if (fx->flags & CFXF_BLOCKED) { lstrcpyW(number, L"방어도가 막음"); tone = C_BLUE; }
@@ -638,11 +680,14 @@ static void DrawCombatFxFront(HDC dc) {
                 wsprintfW(number, form, fx->value);
                 tone = (fx->flags & CFXF_BIG_HIT) ? C_RED : C_YELLOW;
             }
-            int rise = t * 30 / CFX_NUMBER_MS;
-            int fade = 1000 - t * 1000 / CFX_NUMBER_MS;
-            RECT box = MakeRect(card.left + 8, portrait.top + 26 - rise, card.right - 8, portrait.top + 56 - rise);
-            TextRect(dc, box, number, MixColor(C_BG, tone, 25 + fade * 75 / 1000),
-                (fx->flags & CFXF_BIG_HIT) ? gFontLarge : gFontMedium,
+            int rise = EaseOutCubic(Track(t, 0, CFX_NUMBER_MS)) * 24 / 1000;
+            int fade = 1000 - Track(t, 380, CFX_NUMBER_MS);
+            RECT box = MakeRect(card.left + 8, portrait.top + 26 - rise, card.right - 8, portrait.top + 96 - rise);
+            HFONT numberFont = (fx->flags & CFXF_BIG_HIT) ? gFontHuge : gFontLarge;
+            if (fx->flags & CFXF_BLOCKED || fx->type == CFX_BURN || fx->type == CFX_CHAIN) numberFont = gFontMedium;
+            RECT shadow = box; OffsetRect(&shadow, 2, 2);
+            TextRect(dc, shadow, number, C_INK, numberFont, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            TextRect(dc, box, number, MixColor(C_BG, tone, 25 + fade * 75 / 1000), numberFont,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
@@ -650,7 +695,7 @@ static void DrawCombatFxFront(HDC dc) {
 
 static void DrawEnemy(HDC dc, int index) {
     const EnemyState* enemy = &gGame.enemies[index]; const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind); RECT r = EnemyRect(index);
-    int selected = index == gGame.targetEnemy && enemy->alive;
+    int selected = index == gGame.targetEnemy && (enemy->alive || EnemyDisplayHp(index) > 0);
     int isBoss = IsBossKind(enemy->kind);
     int hasGimmick = isBoss && gGame.boss.gimmick != GIMMICK_NONE;
     int drop = enemy->alive ? EnemyStrikeDrop(index) : 0, shift = enemy->alive ? EnemyStrikeShift(index) : 0;
@@ -659,17 +704,21 @@ static void DrawEnemy(HDC dc, int index) {
     int collapsing = killFx >= 0 && killT < CFX_KILL_CLEAR_MS;
     // 처치 줄에 아직 닿지 않았으면 살아 있는 카드로 남는다.
     int shownAlive = enemy->alive || collapsing || EnemyDisplayHp(index) > 0;
+    int hitT = 0, damageFx = EnemyDamageFx(index, CFX_KNOCK_MS, &hitT);
+    int squash = damageFx >= 0 ? FxScale((1000 - EaseOutCubic(Track(hitT, 32, CFX_KNOCK_MS))) * 210 / 1000) : 0;
     RECT portrait = PortraitRect(r);
     Panel(dc, r, shownAlive ? C_PANEL : RGB(18, 18, 20),
         drop > 0 || collapsing ? C_RED : selected ? C_YELLOW : C_LINE);
     // 붕괴 중에는 살아 있던 그림을 그대로 쪼갠다. 죽은 형태로 먼저 바뀌면
     // "부서지는 장면"이 아니라 "이미 끝난 장면"으로 읽힌다.
     DrawPortrait(dc, portrait, enemy->kind, shownAlive, selected, EnemyFxFlash(index),
-        (shownAlive ? EnemyBob(index) : 0) + drop + knock, shift);
+        (shownAlive ? EnemyBob(index) : 0) + drop + knock, shift, 1000 + squash, 1000 - squash);
+    if (selected && shownAlive && FxDecorOn())
+        DrawOrbitCorners(dc, portrait, (int)(GetTickCount() % 2400), C_YELLOW, FxScale(75));
     if (collapsing) {
-        if (killT < CFX_KILL_FRAG_MS) {
-            DrawBandGlitch(dc, portrait, killT, 3 + 13 * killT / CFX_KILL_FRAG_MS, index * 7 + 3, 9);
-        } else {
+        if (killT < CFX_KILL_FRAG_MS && FxDecorOn()) {
+            DrawBandGlitch(dc, portrait, killT, FxScale(3 + 13 * killT / CFX_KILL_FRAG_MS), index * 7 + 3, 9);
+        } else if (killT >= CFX_KILL_FRAG_MS) {
             // 조각이 위에서부터 지워지고 그 경계에서 픽셀이 떨어져 나간다.
             int span = CFX_KILL_CLEAR_MS - CFX_KILL_FRAG_MS;
             int wipe = (killT - CFX_KILL_FRAG_MS) * (portrait.bottom - portrait.top) / span;
@@ -692,7 +741,7 @@ static void DrawEnemy(HDC dc, int index) {
         Outline(dc, tag, accent, 1);
         TextRect(dc, tag, hit, accent, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    Text(dc, r.left + 12, r.top + 140, info->code, enemy->alive ? (COLORREF)info->color : C_DIM, gFontMedium);
+    Text(dc, r.left + 12, r.top + 140, info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontMedium);
     wchar_t b[96];
     if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
     else if (hasGimmick) wsprintfW(b, selected ? L"▶ 보스 · %s" : L"보스 기믹: %s", BOSS_GIMMICK_INFO[gGame.boss.gimmick].name);
@@ -745,7 +794,7 @@ static void DrawEnemy(HDC dc, int index) {
 static TurnPreview gPreview;
 
 static COLORREF SlotAccent(int slot) {
-    return slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : C_GREEN;
+    return slot == SLOT_ATTACK ? C_RED : slot == SLOT_DEFEND ? C_BLUE : slot == SLOT_CHAIN ? C_YELLOW : C_GREEN;
 }
 
 // 주사위 번호 배지. 세 주사위가 같은 값을 내면 값만으로는 구분할 수 없으므로,
@@ -765,6 +814,11 @@ static void DrawSlot(HDC dc, int slot) {
         return;
     }
     Panel(dc, r, hover ? RGB(23, 39, 48) : C_PANEL, hover ? C_GREEN : lockedNext ? C_YELLOW : C_LINE);
+    if (die >= 0 || (hover && gGame.selectedDie >= 0)) {
+        COLORREF accent = SlotAccent(slot);
+        Fill(dc, MakeRect(r.left + 1, r.bottom - 4, r.right - 1, r.bottom - 1), MixColor(C_PANEL, accent, 65));
+        if (FxDecorOn()) DrawOrbitCorners(dc, r, (int)(GetTickCount() % 2400) + slot * 180, accent, FxScale(70));
+    }
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], SlotAccent(slot), gFontMedium);
     // 예상 산출량. 0이면 이 슬롯이 이번 턴 아무 일도 하지 않는다는 뜻이라 흐리게 둔다.
     // 읽기 오류로 다시 굴러갈 주사위가 놓인 슬롯은 숫자를 만들어 보이지 않고 ? 로 남긴다.
@@ -777,8 +831,9 @@ static void DrawSlot(HDC dc, int slot) {
         TextRect(dc, MakeRect(r.left + 58, r.top + 10, r.right - 8, r.top + 32), out, tint, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
     if (die >= 0) {
-        const Face* face = RolledFace(&gGame, die); wchar_t value[24]; FormatFace(face, value);
-        int offline = gGame.dice[die].offline;
+        const DieState* shownDie = DisplayDie(die);
+        const Face* face = &shownDie->faces[shownDie->rolledFace]; wchar_t value[24]; FormatFace(face, value);
+        int offline = shownDie->offline;
         if (offline) TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), L"오프라인", C_RED, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         else TextRect(dc, MakeRect(r.left + 5, r.top + 42, r.right - 5, r.top + 83), value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         wchar_t b[48]; wsprintfW(b, L"%s 주사위 %d · %dB", DIE_BADGE[die], die + 1, FaceCost(face));
@@ -799,7 +854,7 @@ static void DrawSlot(HDC dc, int slot) {
 // 미판독 상태에서는 이번 굴림이 어디인지 표시하지 않는다 (정보 누출 금지).
 static void DrawFaceStrip(HDC dc, int index) {
     RECT r = DieRect(index);
-    const DieState* die = &gGame.dice[index];
+    const DieState* die = DisplayDie(index);
     const BossRuntime* boss = &gGame.boss;
     for (int f = 0; f < 6; ++f) {
         RECT box = FaceStripCell(index, f);
@@ -817,14 +872,14 @@ static void DrawFaceStrip(HDC dc, int index) {
         } else {
             Fill(dc, box, MixColor(C_BG, FaceColor(face), face->damaged ? 20 : 32));
         }
-        if (f == die->rolledFace && (gRolled || gReadActive) && DieSettled(index))
+        if (f == die->rolledFace && (gRolled || gReadActive || gTurnTraceActive) && DieSettled(index))
             Fill(dc, MakeRect(box.left, box.bottom + 2, box.right, box.bottom + 4), C_TEXT);
     }
 }
 
 static void DrawDie(HDC dc, int index) {
-    RECT r = DieRect(index); const DieState* die = &gGame.dice[index];
-    const Face* face = &gGame.dice[index].faces[gGame.dice[index].rolledFace];
+    RECT r = DieRect(index); const DieState* die = DisplayDie(index);
+    const Face* face = &die->faces[die->rolledFace];
     int selected = gGame.selectedDie == index, hover = Inside(r, gMouse.x, gMouse.y);
     int noise = DieNoise(index), flash = DieSettleFlash(index), step = NoiseStep(index);
     RECT cell = MakeRect(r.left + 6, r.top + 25, r.right - 6, r.top + 72);
@@ -837,11 +892,17 @@ static void DrawDie(HDC dc, int index) {
     // 판독 연출의 붉은·초록 테두리가 선택 표시를 덮어 버리므로, 선택은 그 위에
     // 두께 2로 덧그려 어느 상태에서도 사라지지 않게 한다.
     if (selected) Outline(dc, r, C_YELLOW, 2);
+    if (flash > 0 && FxDecorOn()) {
+        int t = (1000 - flash) * 260 / 1000;
+        DrawPulseFrame(dc, r, 1 + EaseOutCubic(Track(t, 0, 260)) * 5 / 1000, 2,
+            MixColor(C_BG, FaceColor(face), flash / 10));
+        DrawPixelBurst(dc, (r.left + r.right) / 2, r.top + 44, t, 260, FxScale(10), index + 91, FaceColor(face));
+    }
     wchar_t b[64]; wsprintfW(b, L"%s 주사위 %d", DIE_BADGE[index], index + 1);
     Text(dc, r.left + 10, r.top + 8, b, selected ? C_YELLOW : C_TEXT, gFontSmall);
     // 배치돼 있으면 어느 슬롯인지를 그 슬롯 색으로 적는다. 선택 표시는 테두리가
     // 이미 하고 있으므로, 자리를 두고 다투게 두지 않는다.
-    int placedIn = gGame.dice[index].assignedSlot;
+    int placedIn = die->assignedSlot;
     if (placedIn >= 0 && placedIn < SLOT_COUNT) {
         wchar_t where[32]; wsprintfW(where, L"→ %s", SLOT_SHORT_NAMES[placedIn]);
         TextRect(dc, MakeRect(r.left + 80, r.top + 6, r.right - 10, r.top + 26), where,
@@ -849,7 +910,7 @@ static void DrawDie(HDC dc, int index) {
     } else if (selected) TextRect(dc, MakeRect(r.left + 80, r.top + 6, r.right - 10, r.top + 26),
         L"▶ 선택", C_YELLOW, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-    if (!gRolled && !gReadActive) {   // sector never read this turn: faint drift
+    if (!gRolled && !gReadActive && !gTurnTraceActive) {   // sector never read this turn: faint drift
         DrawSectorStatic(dc, cell, index, (int)(GetTickCount() / 260u), 70);
         DrawScanlines(dc, cell);
         TextRect(dc, statusRect, L"판독 전", C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -865,7 +926,9 @@ static void DrawDie(HDC dc, int index) {
         return;
     }
     wchar_t value[24]; FormatFace(face, value);
-    TextRect(dc, cell, value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT valueCell = cell;
+    if (flash > 0) OffsetRect(&valueCell, 0, -FxScale(flash * 6 / 1000));
+    TextRect(dc, valueCell, value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (flash > 0) DrawScanlines(dc, cell);
     wchar_t statuses[64] = L""; int statusCount = 0;
     if (face && face->damaged) { AppendStatus(statuses, L"손상"); ++statusCount; }
@@ -913,13 +976,44 @@ static void DrawSidebar(HDC dc, int width, int height) {
     for (int i = 0; i < 3; ++i) TextRect(dc, MakeRect(side.left + 12, side.bottom - 88 + i * 25, side.right - 8, side.bottom - 66 + i * 25), gGame.logs[i], i == 0 ? C_TEXT : C_DIM, gFontSmall, DT_END_ELLIPSIS | DT_SINGLELINE);
 }
 
+static void DrawCombatAtmosphere(HDC dc) {
+    if (!FxDecorOn()) return;
+    int drive = gGame.selectedDrive;
+    if (drive < 0 || drive >= DRIVE_COUNT) drive = 0;
+    COLORREF tone = (COLORREF)DRIVE_INFO[drive].color;
+    int tick = (int)(GetTickCount() % 60000);
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, 22, 82, 698, 714);
+    // A faint volume-specific field remains visible in unoccupied board space.
+    int cx = 356, cy = 258;
+    for (int k = 0; k < 5; ++k) {
+        int r = 42 + k * 45;
+        COLORREF dim = MixColor(C_BG, tone, FxScale(8 + k));
+        if (drive == 1 || drive == 4) DrawGlowRing(dc, cx, cy, r, r / 2, dim, 1);
+        else if (drive == 2 || drive == 5) {
+            DrawLine(dc, cx, cy - r / 2, cx + r, cy, dim, 1);
+            DrawLine(dc, cx + r, cy, cx, cy + r / 2, dim, 1);
+            DrawLine(dc, cx, cy + r / 2, cx - r, cy, dim, 1);
+            DrawLine(dc, cx - r, cy, cx, cy - r / 2, dim, 1);
+        } else Outline(dc, MakeRect(cx - r, cy - r / 2, cx + r, cy + r / 2), dim, 1);
+    }
+    for (int lane = 0; lane < 7; ++lane) {
+        int y = 88 + lane * 88;
+        DrawLine(dc, 24, y, 694, y, MixColor(C_BG, tone, FxScale(8)), 1);
+        int x = 24 + (tick / (gTurnTraceActive ? 3 : 10) + lane * 109 + drive * 31) % 665;
+        Fill(dc, MakeRect(x, y, x + 7, y + 2), MixColor(C_BG, tone, FxScale(48)));
+    }
+    RestoreDC(dc, saved);
+}
+
 static void DrawCombat(HDC dc, int width, int height) {
+    DrawCombatAtmosphere(dc);
     for (int i = 0; i < gGame.enemyCount; ++i) if (!GimmickSummonPending(i)) DrawEnemy(dc, i);   // 격리막 안의 카드는 연출이 연다
     DrawTsrPanel(dc);
     DrawRoutingState(dc);   // 지금 이어진 해결 순서 (N:\ 계열 보스전에서만)
     DrawCombatFxBack(dc);   // 신호는 슬롯·주사위 아래를 지나간다
     // 판독이 끝난 뒤에만 계산한다. 판독 전에 미리보기를 돌리면 아직 가려 둔 굴림이 새어 나간다.
-    if (gRolled && !gReadActive) PreviewTurn(&gGame, &gPreview);
+    if (gRolled && !gReadActive && !gTurnTraceActive) PreviewTurn(&gGame, &gPreview);
     else ZeroMemory(&gPreview, sizeof(gPreview));
     // 재생 중에는 배치 안내를 지운다. 지금은 조작할 수 없는 줄인 데다,
     // 그 자리가 바로 신호가 슬롯에서 적으로 건너가는 통로다.
@@ -957,6 +1051,8 @@ static void DrawCombat(HDC dc, int width, int height) {
     TextRect(dc, read, L"판독 [R]", canRead ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     RECT end = EndTurnRect(); int hover = Inside(end, gMouse.x, gMouse.y) && gRolled;
     Panel(dc, end, hover ? RGB(71, 42, 42) : C_PANEL_2, hover ? C_RED : C_LINE);
+    if (gPreview.valid && gPreview.combatEnds && !gPreview.uncertain && !gPreview.playerDies && FxDecorOn())
+        DrawOrbitCorners(dc, end, (int)(GetTickCount() % 2400), C_GREEN, FxScale(85));
     TextRect(dc, end, L"실행 [스페이스]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (IsTsrInstalled(&gGame, TSR_KEYB)) {
         RECT keyb = KeybButtonRect();
@@ -2083,12 +2179,29 @@ static void DrawCombatClear(HDC dc, int width, int height) {
     if (elapsed < 650) return;
 
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
-    RECT panel = MakeRect(190, 184, width - 190, height - 176); Panel(dc, panel, C_PANEL, C_GREEN);
+    RECT panel = MakeRect(190, 184, width - 190, height - 176);
+    COLORREF clearTone = gClearedEncounter == 2 ? C_YELLOW : C_GREEN;
+    if (FxDecorOn()) {
+        int release = elapsed - 650;
+        DrawPulseFrame(dc, panel, 2 + EaseOutCubic(Track(release, 0, 650)) * 18 / 1000, 3,
+            MixColor(C_BG, clearTone, 70 * (1000 - Track(release, 100, 850)) / 1000));
+        for (int k = 0; k < FxScale(20); ++k) {
+            int age = release - (k % 5) * 45;
+            if (age < 0 || age > 650) continue;
+            int x = panel.left + 12 + k * (panel.right - panel.left - 24) / 20;
+            int rise = EaseOutCubic(Track(age, 0, 650)) * 72 / 1000;
+            Fill(dc, MakeRect(x, panel.top - rise, x + 3, panel.top - rise + 8),
+                MixColor(C_BG, clearTone, 70 * (650 - age) / 650));
+        }
+    }
+    Panel(dc, panel, C_PANEL, clearTone);
+    Fill(dc, MakeRect(panel.left, panel.top, panel.left + (panel.right - panel.left) * Track(elapsed, 650, 1000) / 1000, panel.top + 3), clearTone);
     wchar_t cleared[96]; wsprintfW(cleared, L"%d층 · %d구역  —  적 삭제 완료", gClearedFloor + 1, gClearedEncounter + 1);
     TextRect(dc, MakeRect(panel.left + 20, panel.top + 34, panel.right - 20, panel.top + 86),
-        cleared, C_GREEN, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        cleared, clearTone, gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     wchar_t result[160];
-    wsprintfW(result, L"적 체력이 0이 되어 전투가 종료되었습니다.\n이번 실행: 적 체력 -%d · 내 체력 -%d",
+    wsprintfW(result, L"%s\n이번 실행: 적 체력 -%d · 내 체력 -%d",
+        gClearedEncounter == 2 ? L"보스 프로세스 삭제 · 접근 권한 복구" : L"구역 정리 완료 · 보상 데이터 복구",
         gGame.lastTurnDamageDealt, gGame.lastTurnDamageTaken);
     TextRect(dc, MakeRect(panel.left + 40, panel.top + 104, panel.right - 40, panel.top + 174),
         result, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
@@ -2150,8 +2263,31 @@ static void DrawTurnCalculation(HDC dc) {
         TextRect(dc, MakeRect(panel.left + 26, y, panel.right - 12, y + 24),
             gGame.turnTrace[i], color, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
     }
+    int hits = 0, damage = 0, block = 0, kills = 0, latest = -1;
+    for (int i = 0; i < gGame.combatFxCount; ++i) {
+        const CombatFxEvent& fx = gGame.combatFx[i];
+        if (CombatFxElapsed(i) < 0) continue;
+        if (CfxIsEnemyDamage(&fx) && fx.value > 0) { ++hits; damage += fx.value; latest = i; }
+        if (fx.type != CFX_ENEMY_STRIKE && (fx.flags & CFXF_KILL)) ++kills;
+        if (fx.type == CFX_DEFEND || (fx.type == CFX_CHAIN && (fx.flags & CFXF_DEFEND_CHAIN))) block += fx.value;
+    }
+    RECT meter = MakeRect(panel.left + 14, panel.bottom - 126, panel.right - 14, panel.bottom - 44);
+    COLORREF accent = kills ? C_GREEN : hits >= 2 ? C_YELLOW : C_BLUE;
+    Panel(dc, meter, C_PANEL, MixColor(C_PANEL, accent, 45));
+    wchar_t tally[80];
+    if (kills) wsprintfW(tally, L"%d HIT  /  %d 삭제", hits, kills);
+    else wsprintfW(tally, hits >= 2 ? L"%d HIT  /  연속 적중" : L"%d HIT  /  실행 중", hits);
+    Text(dc, meter.left + 12, meter.top + 9, tally, accent, gFontMedium);
+    wsprintfW(tally, L"누적 피해 %d   ·   방어 +%d", damage, block);
+    Text(dc, meter.left + 12, meter.top + 43, tally, C_TEXT, gFontSmall);
+    if (latest >= 0 && FxDecorOn()) {
+        int age = CombatFxElapsed(latest);
+        if (age < 250) Outline(dc, meter, MixColor(C_PANEL, accent, (250 - age) * 100 / 250), 2);
+    }
     if (shown >= count) TextRect(dc, MakeRect(panel.left + 12, panel.bottom - 30, panel.right - 12, panel.bottom - 8),
-        L"계산 완료 · 클릭하면 계속", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        L"계산 완료 · 클릭 / Space로 계속", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    else TextRect(dc, MakeRect(panel.left + 12, panel.bottom - 30, panel.right - 12, panel.bottom - 8),
+        L"클릭 / Space로 재생 건너뛰기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 RECT RewardRect(int i, int width) {

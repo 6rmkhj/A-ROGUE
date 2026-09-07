@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "game.h"
 #include "render.h"
+#include "fx_timing.h"
 
 // 화면(screens.cpp)과 입력·창 관리(main.cpp)가 함께 쓰는 상태와 레이아웃.
 // 좌표는 전부 render.h의 고정 캔버스(BASE_WIDTH x BASE_HEIGHT) 기준이다.
@@ -19,7 +20,6 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define REWARD_REPAIR 3
 
 #define COMBAT_CLEAR_MS 1500
-#define TURN_TRACE_STEP_MS 360
 #define DESCENT_LOCK_MS 520    // 고른 드라이브 카드가 잠기고 나머지가 밀려나는 구간
 #define DESCENT_MS 2920        // 카드 잠금 + 실제 마운트/심층 스캔 전체 길이
 #define DIR_SELECT_LOCK_MS 360 // 고른 디렉터리 카드가 경로로 수렴하는 구간
@@ -146,6 +146,7 @@ int GuideNoiseActive();
 
 // 계산 재생에서 지금까지 드러난 줄 수 (0 = 아직 없음)
 int TurnTraceShown();
+const DieState* DisplayDie(int index); // 재생 중에는 실행 직전의 주사위·배치를 보존
 
 // ---- 기믹 발동 연출 --------------------------------------------------------
 // 계산 재생이 끝나 새 턴 화면이 드러나는 순간 시작된다. 규칙은 이미 game.cpp에서
@@ -166,10 +167,11 @@ int GimmickSummonPending(int enemyIndex);
 
 // ---- 전투 시각 이벤트 재생 -------------------------------------------------
 // game.cpp가 남긴 CombatFxEvent를 계산 줄 번호에 맞춰 되짚는다.
-//   eventStart = gTurnTraceStart + traceLine × TURN_TRACE_STEP_MS
+//   eventStart = gTurnTraceStart + FxTraceAt(gGame, traceLine)
 // 화면은 CombatFxElapsed만 읽어 모든 위치·강도를 경과 시간의 순수 함수로 낸다.
 int CombatFxPlaying();          // 지금 이벤트가 흐르고 있는가
 int CombatFxElapsed(int index); // 그 이벤트 시작 이후 ms (아직 안 왔으면 -1)
+int CombatFxLeadElapsed(int index, int leadMs); // 결과 전 신호 이동만 미리 재생
 // 재생 중 화면에 보일 내 체력. 아직 닿지 않은 타격의 결과를 미리 보여 주지 않는다.
 int PlayerDisplayHp();
 // 소리와 적의 달려들기를 그 사건의 줄에 맞춰 한 번씩 발동한다.

@@ -73,8 +73,8 @@ void FxSnapshotRelease();
 void FxSnapshotDestroy();
 
 // ---- 스프라이트 변형 -------------------------------------------------------
-// DrawSpriteArt는 정수 균일 배율이라 늘어나지 않는다. 작은 오프스크린에 그린 뒤
-// StretchBlt로 늘려 스쿼시/스트레치를 낸다. 바닥을 기준으로 변한다 (천분율).
+// 큰 기믹은 작은 오프스크린에 그린 뒤 StretchBlt로 늘린다. 매 턴의 반동은
+// DrawSpriteArt/DrawPortrait의 sx/sy로 직접 변형해 추가 비트맵 없이 그린다.
 void DrawSpriteStretched(HDC dc, const RECT& box, int kind, int alive, int flash, int sxMille, int syMille);
 
 // ---- 셔터 -----------------------------------------------------------------
@@ -90,8 +90,8 @@ COLORREF FaceColor(const Face* face);
 void AppendStatus(wchar_t* output, const wchar_t* status);
 
 // shiftX/bob은 상자는 그대로 두고 도트 그림만 밀어낸다 (달려드는 타격 연출).
-void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX);
-void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX);
+void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX, int sx = 1000, int sy = 1000);
+void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX, int sx = 1000, int sy = 1000);
 
 // 섹터를 판독하는 듯한 노이즈 연출. 주사위 판독과 볼륨 진입 화면이 함께 쓴다.
 uint32_t Hash3(int a, int b, int c);

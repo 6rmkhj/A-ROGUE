@@ -94,7 +94,7 @@ static int gHoverId = -1;
 #define NOISE_STAGGER_MS 80
 #define NOISE_SCAN_MS 200      // opaque static, the face is not readable yet
 #define NOISE_LOCK_MS 180      // the face tears its way through the static
-#define NOISE_SETTLE_MS 110    // border flash once a cell locks on
+#define NOISE_SETTLE_MS 260    // sequential lock, bounce and settling sparks
 #define NOISE_TOTAL_MS (NOISE_SCAN_MS + NOISE_LOCK_MS)
 
 static DWORD gReadStart;
@@ -108,6 +108,11 @@ int gTurnTraceActive, gTurnTracePendingClear;
 static int gTurnTracePendingDeath;
 DWORD gTurnTraceStart;
 static int gTraceFloor, gTraceEncounter;
+static DieState gTraceDice[3];
+
+const DieState* DisplayDie(int index) {
+    return gTurnTraceActive ? &gTraceDice[index] : &gGame.dice[index];
+}
 
 // ---- 피격·위독·정지 연출 ---------------------------------------------------
 // 전투는 game.cpp 안에서 한 번에 끝난다. 그래서 "누가 언제 무엇을 했는지"는
@@ -131,7 +136,8 @@ DWORD gDeathStart;
 int TurnTraceShown() {
     int count = gGame.turnTraceCount;
     if (!gTurnTraceActive) return count;
-    int shown = (int)(GetTickCount() - gTurnTraceStart) / TURN_TRACE_STEP_MS + 1;
+    int elapsed = (int)(GetTickCount() - gTurnTraceStart), shown = 0;
+    while (shown < count && elapsed >= FxTraceAt(gGame, shown)) ++shown;
     return shown > count ? count : shown;
 }
 
@@ -139,35 +145,37 @@ static void BeginPlayerHit(int damage) {
     gPlayerHitAt = GetTickCount();
     gPlayerHitDamage = damage;
     gPlayerHitBlockedAll = damage <= 0;
-    // 방어도가 전부 받아낸 타격은 같은 소리를 높여 가볍게 튕겨낸 느낌을 준다.
-    if (damage > 0) PlaySfx(SFX_PLAYER_HIT); else PlaySfxPitched(SFX_PLAYER_HIT, 5);
+    // 완전 방어는 짧은 유리 공명음으로 구분한다.
+    if (damage > 0) PlaySfx(SFX_PLAYER_HIT); else PlaySfx(SFX_SHIELD_BLOCK);
 }
 
 // ---- 전투 시각 이벤트 재생 -------------------------------------------------
 // 이벤트 하나의 시작 시각은 그 사건이 적힌 계산 줄이 드러나는 순간이다.
-//   eventStart = gTurnTraceStart + traceLine × TURN_TRACE_STEP_MS
+//   eventStart = gTurnTraceStart + FxTraceAt(gGame, traceLine)
 // 화면은 이 경과 시간만 읽어 위치와 강도를 계산한다 (프레임마다 쌓는 상태 없음).
 int CombatFxPlaying() { return gTurnTraceActive; }
 
 int CombatFxElapsed(int index) {
     if (!gTurnTraceActive) return -1;
     if (index < 0 || index >= (int)gGame.combatFxCount) return -1;
-    int line = gGame.combatFx[index].traceLine;
-    // 12줄을 넘겨 기록이 잘린 사건은 마지막 줄에 붙여 재생한다.
-    if (line >= gGame.turnTraceCount) line = gGame.turnTraceCount > 0 ? gGame.turnTraceCount - 1 : 0;
-    int elapsed = (int)(GetTickCount() - gTurnTraceStart) - line * TURN_TRACE_STEP_MS;
-    return elapsed < 0 ? -1 : elapsed;
+    return FxEventElapsed(gGame, index, (int)(GetTickCount() - gTurnTraceStart), FxDecorOn());
+}
+
+int CombatFxLeadElapsed(int index, int leadMs) {
+    if (!gTurnTraceActive || index < 0 || index >= gGame.combatFxCount) return -1;
+    return (int)(GetTickCount() - gTurnTraceStart)
+        - FxTraceAt(gGame, FxTraceLine(gGame, gGame.combatFx[index].traceLine)) + leadMs;
 }
 
 // 사건이 실제로 일어나는 순간에만 한 번 울린다. 연출 시작이 아니라 결과가
 // 확정되는 줄에 맞춰 나오므로 소리와 화면이 같은 사건을 가리킨다.
 static void PlayCombatFxCue(const CombatFxEvent* fx) {
     switch (fx->type) {
-    case CFX_AMPLIFY:       PlaySfxPitched(SFX_SLOT_SET, (fx->flags & CFXF_WASTED) ? 0 : 5); break;
+    case CFX_AMPLIFY:       PlaySfx((fx->flags & CFXF_WASTED) ? SFX_SLOT_SET : SFX_CHARGE); break;
     case CFX_ATTACK_LAUNCH: PlaySfxPitched(SFX_EXECUTE, 4); break;
-    case CFX_ENEMY_HIT:     PlaySfxPitched(SFX_HIT_IMPACT, (fx->flags & CFXF_BIG_HIT) ? 0 : 3); break;
-    case CFX_DEFEND:        PlaySfxPitched(SFX_DIE_LOCK, 6); break;
-    case CFX_CHAIN:         PlaySfxPitched((fx->flags & CFXF_DEFEND_CHAIN) ? SFX_DIE_LOCK : SFX_HIT_IMPACT, 5); break;
+    case CFX_ENEMY_HIT:     PlaySfx((fx->flags & CFXF_BIG_HIT) ? SFX_HEAVY_HIT : SFX_HIT_IMPACT); break;
+    case CFX_DEFEND:        PlaySfx(SFX_SHIELD_RISE); break;
+    case CFX_CHAIN:         PlaySfxPitched((fx->flags & CFXF_DEFEND_CHAIN) ? SFX_SHIELD_RISE : SFX_CHAIN_ARC, fx->traceLine % 5); break;
     case CFX_BURN:          PlaySfxPitched(SFX_FX_QUARANTINE, 4); break;
     default: break;   // 적의 타격은 BeginPlayerHit이 낸다
     }
@@ -184,7 +192,7 @@ void SyncCombatFx() {
         if (gTurnTraceActive && CombatFxElapsed(i) < 0) continue;
         if (!(gFxSfxFired & (1 << i))) {
             gFxSfxFired |= 1 << i;
-            PlayCombatFxCue(fx);
+            if (gTurnTraceActive) PlayCombatFxCue(fx);
         }
         if (fx->type != CFX_ENEMY_STRIKE || (gStrikeFired & (1 << i))) continue;
         gStrikeFired |= 1 << i;
@@ -241,6 +249,13 @@ static int BootShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
+    for (int i = 0; i < gGame.combatFxCount; ++i) {
+        int t = CombatFxElapsed(i);
+        const CombatFxEvent& event = gGame.combatFx[i];
+        if (t < 0 || t >= 200 || !FxImpactHold(event)) continue;
+        int kick = FxScale(((event.flags & CFXF_KILL) ? 7 : 4) * (200 - t) / 200);
+        if (kick > fx) fx = kick;
+    }
     int boot = BootShakeAmplitude();
     if (boot > fx) fx = boot;
     if (!gPlayerHitAt) return fx;
@@ -360,7 +375,7 @@ static void BeginCombatClear(int floor, int encounter) {
 
 static int TurnTraceRevealDuration() {
     int count = gGame.turnTraceCount > 0 ? gGame.turnTraceCount : 1;
-    return count * TURN_TRACE_STEP_MS;
+    return FxTraceAt(gGame, count);
 }
 
 static void BeginGimmickFx(int kind, int a, int b);
@@ -692,6 +707,7 @@ static void ExecuteCombatTurn() {
     int floor = gGame.floor, encounter = gGame.encounter;
     int turn = gGame.turn;
     GamePhase before = gGame.phase;
+    for (int i = 0; i < 3; ++i) gTraceDice[i] = gGame.dice[i];
     EndTurn(&gGame);
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
     int cleared = LivingEnemyCount(&gGame) == 0;
@@ -1076,7 +1092,10 @@ static void HandleKey(WPARAM key) {
     if (gDeathActive) return;
     if (gBootActive) { FinishBootInsert(); return; }
     if (UiFxBlocksInput()) return;
-    if (gTurnTraceActive) return;
+    if (gTurnTraceActive) {
+        if (key == VK_SPACE || key == VK_RETURN) FinishTurnTrace();
+        return;
+    }
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }

@@ -576,13 +576,15 @@ static const char* const* GetEnemySpriteOrUnknown(int kind) {
 }
 
 // Runs of identical cells collapse into one FillRect, so a portrait costs ~60 GDI calls.
-void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX) {
+void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX, int sx, int sy) {
     const char* const* rows = GetEnemySpriteOrUnknown(kind);
     COLORREF base = (COLORREF)GetEnemyInfoOrUnknown(kind)->color;
     int boxWidth = box.right - box.left, boxHeight = box.bottom - box.top;
     int scale = (boxWidth < boxHeight ? boxWidth : boxHeight) / SPRITE_SIZE; if (scale < 1) scale = 1;
-    int originX = box.left + (boxWidth - scale * SPRITE_SIZE) / 2 + shiftX;
-    int originY = box.top + (boxHeight - scale * SPRITE_SIZE) / 2 + bob;
+    int pixelX = scale * sx, pixelY = scale * sy;
+    int originX = box.left + (boxWidth - pixelX * SPRITE_SIZE / 1000) / 2 + shiftX;
+    int originY = box.top + (boxHeight - scale * SPRITE_SIZE) / 2 + bob
+        + scale * SPRITE_SIZE - pixelY * SPRITE_SIZE / 1000;
     for (int y = 0; y < SPRITE_SIZE; ++y) {
         const char* row = rows[y];
         for (int x = 0; x < SPRITE_SIZE; ) {
@@ -591,16 +593,16 @@ void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int 
             int end = x + 1; while (end < SPRITE_SIZE && row[end] == row[x]) ++end;
             if (!alive) color = MixColor(color, RGB(34, 40, 48), 74);
             else if (flash > 0) color = MixColor(color, RGB(255, 255, 255), flash * 78 / 1000);
-            int top = originY + y * scale, bottom = top + scale;
+            int top = originY + y * pixelY / 1000, bottom = originY + (y + 1) * pixelY / 1000;
             // A deleted enemy keeps its silhouette but loses every other pixel.
-            if (alive) Fill(dc, MakeRect(originX + x * scale, top, originX + end * scale, bottom), color);
-            else for (int px = x; px < end; ++px) if (((px + y) & 1) == 0) Fill(dc, MakeRect(originX + px * scale, top, originX + (px + 1) * scale, bottom), color);
+            if (alive) Fill(dc, MakeRect(originX + x * pixelX / 1000, top, originX + end * pixelX / 1000, bottom), color);
+            else for (int px = x; px < end; ++px) if (((px + y) & 1) == 0) Fill(dc, MakeRect(originX + px * pixelX / 1000, top, originX + (px + 1) * pixelX / 1000, bottom), color);
             x = end;
         }
     }
 }
 
-void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX) {
+void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX, int sx, int sy) {
     Panel(dc, box, alive ? RGB(11, 17, 24) : RGB(13, 13, 15), selected ? (COLORREF)GetEnemyInfoOrUnknown(kind)->color : C_LINE);
     for (int y = box.top + 2; y < box.bottom - 1; y += 4) Fill(dc, MakeRect(box.left + 1, y, box.right - 1, y + 1), RGB(8, 13, 19));
     if (alive) {
@@ -612,7 +614,7 @@ void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, in
     // 부분은 잘려 나가면서 화면 밖으로 몸을 던지는 것처럼 보인다.
     int saved = SaveDC(dc);
     IntersectClipRect(dc, box.left + 1, box.top + 1, box.right - 1, box.bottom - 1);
-    DrawSpriteArt(dc, box, kind, alive, flash, bob, shiftX);
+    DrawSpriteArt(dc, box, kind, alive, flash, bob, shiftX, sx, sy);
     RestoreDC(dc, saved);
 }
 

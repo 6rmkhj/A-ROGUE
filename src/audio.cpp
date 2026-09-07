@@ -50,7 +50,12 @@ static const SfxSpec SFX[SFX_COUNT] = {
     {{420, 300, 420}, { 50, 50, 50},    0, WAVE_PULSE, 25,  1, 44,  74,   6,   0,   1},  // FX_ROUTE      경로가 바뀐다
     {{ 90,  70,   0}, {180,200,  0},  -30, WAVE_TRI,   50,  4, 30,  96,  34,  40,   1},  // FX_PRESSURE   압력이 한계에 닿는다
     {{700,   0,   0}, { 70,  0,  0}, -300, WAVE_NOISE, 50,  1, 30,  86,  60, 120,   2},  // FX_QUARANTINE 봉인된다
-    {{330,   0,   0}, { 66,  0,  0}, -190, WAVE_NOISE, 50,  1, 46,  82,  62,  74,   1}   // HIT_IMPACT    내 공격이 꽂힌다
+    {{330,   0,   0}, { 66,  0,  0}, -190, WAVE_NOISE, 50,  1, 46,  82,  62,  74,   1},  // HIT_IMPACT
+    {{180, 360, 720}, { 55, 55, 80},   95, WAVE_TRI,   50,  3, 40,  64,   8, 100,   1},  // CHARGE: winding energy
+    {{ 82,  48,   0}, { 65,120,  0},  -34, WAVE_TRI,   50,  1, 68, 100,  58,  65,   1},  // HEAVY_HIT: crack + low body
+    {{260, 520, 780}, { 38, 42, 95},   20, WAVE_TRI,   50,  2, 45,  58,   5, 120,   1},  // SHIELD_RISE
+    {{920, 460,   0}, { 32,110,  0},  -45, WAVE_TRI,   50,  1, 70,  72,  20, 150,   1},  // SHIELD_BLOCK: glass ping
+    {{440, 660, 880}, { 25, 25, 65},   80, WAVE_PULSE, 25,  1, 60,  56,  18, 110,   1}   // CHAIN_ARC
 };
 
 static uint32_t gNoiseSeed = 0x13579BDFu;
