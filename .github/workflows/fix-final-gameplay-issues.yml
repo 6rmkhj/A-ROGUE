@@ -1,0 +1,38 @@
+name: Fix final gameplay issues
+
+on:
+  push:
+    branches:
+      - fix/all-open-issues-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[final-gameplay-applied]') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/all-open-issues-20260908
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Prepare patch generator
+        run: python tools/fix_final_gameplay_bootstrap.py
+      - name: Apply final gameplay fixes
+        run: python tools/fix_final_gameplay_issues.py
+      - name: Build and run regression suites
+        shell: cmd
+        run: build-msvc.bat
+      - name: Commit verified fixes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/fix_final_gameplay_issues.py tools/fix_final_gameplay_bootstrap.py .github/workflows/fix-final-gameplay-issues.yml
+          git add -A
+          git commit -m "fix: add failed-run progress replay and deeper combat choices [final-gameplay-applied]"
+          git push origin HEAD:fix/all-open-issues-20260908
