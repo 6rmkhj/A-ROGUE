@@ -106,6 +106,28 @@ A:\는 여섯 조각을 모두 복구해야 열리는 최종 볼륨이다. 난�
 | R:\ | MEM.LEAK · RACE.COND · DANGLING.PTR | LEAK.DLL | HEAP.OVERFLOW | OUT.OF.MEMORY | 메모리 압력 |
 | X:\ | MUTANT.SMP · ESCAPEE · RANSOMWARE | SAMPLE-13 | SANDBOX.BREACH | ZERO.DAY | 격리·영구 포맷 |
 
+## 몹 특성
+
+일반 몹은 전부 고유 **특성**을 하나씩 가진다. 보스 기믹이 "턴마다 일어나는 사건"이라면
+특성은 "전투 내내 참인 성질"이다. 예고가 없는 대신 적 카드에 이름과 규칙이 항상 적혀 있다.
+
+특성 대부분은 **굴린 눈의 값**을 본다. 지금까지 눈은 크기만 의미했지만, 특성이 붙으면
+홀짝·크기·직전 턴과 같은 눈인지가 피해를 바꾼다. 숫자가 붙은 특성은 그 카운터가
+0이 될 때 사건이 난다.
+
+| 볼륨 | 몹 | 특성 |
+|---|---|---|
+| C:\ | DLL.HIJACK · REG.GHOST · WATCHDOG | 가로채기 · 레지스트리 · 감시 필터 |
+| D:\ | BIT.ROT · INDEXER · ZIP.BOMB | 부패 · 블록 색인 · 압축 해제 |
+| E:\ | AUTORUN.INF · LOST.CLUSTER · WRITE.PROTECT | 자동 실행 · 유실 · 쓰기 방지 |
+| N:\ | SNIFFER · FIREWALL · PING.FLOOD | 도청 · 포트 필터 · 폭주 |
+| R:\ | MEM.LEAK · RACE.COND · DANGLING.PTR | 누수 · 경쟁 상태 · 허상 참조 |
+| X:\ | MUTANT.SMP · ESCAPEE · RANSOMWARE | 변이 · 탈주 · 암호화 |
+| A:\ | FALSE.COPY · HALF.WRITE · ECHO.PROC | 거짓 사본 · 미완성 · 반향 |
+
+특성은 미리보기에 그대로 반영된다. 짝수 눈을 FIREWALL에 넣으면 예상 피해가 이미
+절반으로 적혀 있다.
+
 ## 보스 기믹 규칙
 
 모든 기믹은 **발동 전에 예고**되며 적 카드·슬롯·주사위에 직접 표시된다. 실제로 발동하는 턴에는 계산 재생이 끝나는 순간 기믹별 전용 연출이 그 사건이 난 자리에서 재생된다 — 잠긴 슬롯, 끊긴 주사위, 슬롯 아래 배선, 보스 카드의 압력 게이지, 주사위 카드의 면 상태 띠 (연출은 표시 전용이라 규칙에 관여하지 않는다). 임시 상태(잠금·오프라인·역전·격리)는 전투가 끝나면 반드시 해제된다. 유일한 예외는 `ZERO.DAY`의 영구 삭제다.

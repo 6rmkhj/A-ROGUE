@@ -516,6 +516,142 @@ static int CheckCombatFxTrace() {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// 몹 특성 (몹 기믹)
+//
+// 핵심 계약: 눈의 "값"이 피해를 바꾸고, 그 판정이 DamageEnemy 안에 있어야 한다.
+// 바깥에 두면 PreviewTurn이 복사해 돌리는 미리보기와 실제가 어긋나므로,
+// 마지막에 미리보기가 특성을 반영하는지도 함께 검사한다.
+// ---------------------------------------------------------------------------
+static int CheckMobTraits() {
+    // 특정 몹 하나만 세운 전투를 만든다. 보스 기믹과 섞이지 않게 보스는 지운다.
+    struct Fixture {
+        static void Build(GameState* g, int kind, int faceValue) {
+            NewRun(g, 0xB0B0F00Du, 0);
+            // 눈의 값 자체를 검사하므로 출력에 손대는 요소를 전부 뺀다.
+            // 읽기 오류는 실행 순간 재굴림하고, 체크섬은 합의 홀짝으로 +2를 얹으며,
+            // C:\ 법칙(최저 출력 +1)과 R:\ 법칙(공격 +1)은 눈의 홀짝까지 뒤집는다.
+            // N:\ 법칙(PACKET CHAIN)은 연쇄 밖 유효 슬롯이 둘 이상일 때만 도는데
+            // 여기서는 공격 하나만 채우므로 조용하다. E:\를 쓰면 "승리 시 체력 8 회복"
+            // 특성이 압축 해제 폭발 피해를 그대로 덮어 버린다.
+            ConfigureDriveForTest(g, 3, 0xB0B0F00Du, 1);
+            g->modifierA = MOD_BAD_SECTOR; g->modifierB = MOD_OVERALLOC;
+            g->floor = 0; g->encounter = 0;
+            g->playerMaxHp = 999; g->playerHp = 999;
+            StartCombat(g);
+            SetAllFaces(g, FACE_NUMBER, faceValue);
+            g->enemyCount = 1;
+            EnemyState* e = &g->enemies[0];
+            ZeroMemory(e, sizeof(*e));
+            e->kind = (uint8_t)kind; e->alive = 1;
+            e->hp = 999; e->maxHp = 999; e->block = 0;
+            e->intent = INTENT_GUARD; e->intentValue = 0;
+            e->trait = ENEMY_INFO[kind].trait;
+            const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[e->trait];
+            if (t->usesCounter) e->counter = (uint8_t)t->p1;
+            if (e->trait == TRAIT_MUTATE) e->memo = 1;
+            g->boss.gimmick = GIMMICK_NONE;
+            g->targetEnemy = 0;
+        }
+        // 눈 faceValue로 한 대 때리고 실제로 깎인 체력을 돌려준다.
+        static int Hit(int kind, int faceValue) {
+            GameState g; Build(&g, kind, faceValue);
+            int before = g.enemies[0].hp;
+            if (!AttackTurn(&g)) return -1;
+            return before - g.enemies[0].hp;
+        }
+    };
+
+    // 감시 필터: 눈이 의도값보다 커야 온전하다.
+    {
+        GameState g; Fixture::Build(&g, MOB_C_WATCHDOG, 6);
+        g.enemies[0].intent = INTENT_GUARD; g.enemies[0].intentValue = 4;
+        int before = g.enemies[0].hp;
+        if (!AttackTurn(&g)) return Fail("watchdog clash turn must resolve");
+        int strongHit = before - g.enemies[0].hp;
+        GameState h; Fixture::Build(&h, MOB_C_WATCHDOG, 3);
+        h.enemies[0].intent = INTENT_GUARD; h.enemies[0].intentValue = 4;
+        before = h.enemies[0].hp;
+        if (!AttackTurn(&h)) return Fail("watchdog clash low turn must resolve");
+        int weakHit = before - h.enemies[0].hp;
+        if (!(strongHit > weakHit)) return Fail("watchdog must take full damage only above its intent value");
+    }
+    // 포트 필터: 홀수만 온전, 짝수는 절반.
+    {
+        int odd = Fixture::Hit(MOB_N_FIREWALL, 5), even = Fixture::Hit(MOB_N_FIREWALL, 6);
+        if (odd < 0 || even < 0) return Fail("firewall parity turns must resolve");
+        if (!(odd > even)) return Fail("firewall must halve even rolls despite the larger face");
+    }
+    // 블록 색인: 4 이상만 온전.
+    {
+        int high = Fixture::Hit(MOB_D_INDEXER, 4), low = Fixture::Hit(MOB_D_INDEXER, 3);
+        if (high < 0 || low < 0) return Fail("indexer threshold turns must resolve");
+        if (!(high >= low * 2)) return Fail("indexer must halve rolls below its threshold");
+    }
+    // 누수: 3 이하가 오히려 세다.
+    {
+        int low = Fixture::Hit(MOB_R_MEMORY_LEAK, 3), high = Fixture::Hit(MOB_R_MEMORY_LEAK, 4);
+        if (low < 0 || high < 0) return Fail("mem.leak turns must resolve");
+        if (!(low > high)) return Fail("mem.leak must reward low rolls over high ones");
+    }
+    // 쓰기 방지: 같은 눈을 두 번 쓰면 두 번째가 절반.
+    {
+        GameState g; Fixture::Build(&g, MOB_E_WRITE_PROTECT, 5);
+        int a = g.enemies[0].hp; if (!AttackTurn(&g)) return Fail("write.protect first turn");
+        int first = a - g.enemies[0].hp;
+        a = g.enemies[0].hp; if (!AttackTurn(&g)) return Fail("write.protect second turn");
+        int second = a - g.enemies[0].hp;
+        if (!(second < first)) return Fail("write.protect must halve a repeated roll");
+    }
+    // 거짓 사본: 같은 눈을 두 번 쓰면 두 번째가 2배 (쓰기 방지와 정반대).
+    {
+        GameState g; Fixture::Build(&g, MOB_A_FALSE_COPY, 5);
+        int a = g.enemies[0].hp; if (!AttackTurn(&g)) return Fail("false.copy first turn");
+        int first = a - g.enemies[0].hp;
+        a = g.enemies[0].hp; if (!AttackTurn(&g)) return Fail("false.copy second turn");
+        int second = a - g.enemies[0].hp;
+        if (!(second > first)) return Fail("false.copy must double a repeated roll");
+    }
+    // 압축 해제: 방어도가 없으면 터지고, 있으면 막힌다.
+    {
+        // AttackTurn이 체력을 999로 맞춰 주므로 그 값을 기준으로 본다.
+        GameState g; Fixture::Build(&g, MOB_D_ZIP_BOMB, 6);
+        g.enemies[0].hp = 1; g.playerBlock = 0;
+        if (!AttackTurn(&g)) return Fail("zip.bomb kill turn must resolve");
+        if (g.enemies[0].alive) return Fail("zip.bomb fixture must die");
+        if (g.playerHp >= 999) return Fail("zip.bomb must explode when unshielded");
+        // 방어도를 들고 죽이면 막는다. "죽이지 마라"가 아니라 "준비하고 죽여라".
+        GameState h; Fixture::Build(&h, MOB_D_ZIP_BOMB, 6);
+        h.enemies[0].hp = 1;
+        AssignDieToSlot(&h, 0, SLOT_ATTACK);
+        h.playerHp = 999;
+        h.playerBlock = 20;   // 해결 직전에 방어도를 들려 둔다
+        EndTurn(&h);
+        if (h.enemies[0].alive) return Fail("zip.bomb shielded fixture must die");
+        if (h.playerHp != 999) return Fail("zip.bomb must be absorbed by enough block");
+    }
+    // 카운터가 실제로 줄고, 카드가 읽는 값과 같다.
+    {
+        GameState g; Fixture::Build(&g, MOB_N_SNIFFER, 2);
+        int start = g.enemies[0].counter;
+        if (start <= 0) return Fail("sniffer must start with a counter");
+        if (!PassTurn(&g)) return Fail("sniffer counter turn must resolve");
+        if (g.enemies[0].counter != start - 1) return Fail("sniffer counter must tick down each turn");
+    }
+    // 미리보기가 특성을 반영한다. 이 게임 최대 강점이 거짓말이 되면 안 된다.
+    {
+        GameState g; Fixture::Build(&g, MOB_N_FIREWALL, 6);   // 짝수 = 절반
+        AssignDieToSlot(&g, 0, SLOT_ATTACK);
+        TurnPreview preview; PreviewTurn(&g, &preview);
+        int predicted = preview.damageDealt;
+        int before = g.enemies[0].hp;
+        EndTurn(&g);
+        int actual = before - g.enemies[0].hp;
+        if (predicted != actual) return Fail("preview must apply mob traits exactly like the real resolve");
+    }
+    return 0;
+}
+
 static int CheckDriveRulesStoryAndMusic() {
     // C: 출력 0은 제외하고 가장 낮은 양수 기본 출력 하나만 +1.
     GameState c; SetupBossFight(&c, 0, 0, 0xA1100001u, 2); c.boss.gimmick = GIMMICK_NONE;
@@ -1042,8 +1178,15 @@ static int CheckRouteGimmicks() {
     if (!PassTurn(&t)) return Fail("timeout turn 4 must pass");
     if (!ResolveOrderReversed(&t)) return Fail("countdown 0 must reverse the order");
     if (t.enemies[0].intent != INTENT_GUARD) return Fail("the timeout turn must make the boss wait");
+    // 강화: 역전은 한 턴이 아니라 3턴 이어진다. 그 동안 countdown이 0 -> -1 -> -2로
+    // 내려가고, 세 턴을 채운 뒤에야 p1으로 되돌아오며 역전이 풀린다.
     if (!PassTurn(&t)) return Fail("timeout fire turn must pass");
-    if (t.boss.countdown != 3) return Fail("countdown must reset after firing");
+    if (t.boss.countdown != -1 || !ResolveOrderReversed(&t)) return Fail("reversal must hold for a second turn");
+    if (!PassTurn(&t)) return Fail("timeout reversal turn 2 must pass");
+    if (t.boss.countdown != -2 || !ResolveOrderReversed(&t)) return Fail("reversal must hold for a third turn");
+    if (!PassTurn(&t)) return Fail("timeout reversal turn 3 must pass");
+    if (t.boss.countdown != 3) return Fail("countdown must reset after the reversal window closes");
+    if (ResolveOrderReversed(&t)) return Fail("the reversal window must close after three turns");
     return 0;
 }
 
@@ -1985,6 +2128,7 @@ int main() {
     if (CheckPressureGimmicks()) return 1;
     if (CheckQuarantineGimmicks()) return 1;
     if (CheckCombatFxTrace()) return 1;
+    if (CheckMobTraits()) return 1;
     if (CheckDriveRulesStoryAndMusic()) return 1;
     if (CheckNoStateLeak()) return 1;
     if (CheckDirectoryGeneration()) return 1;
@@ -2366,5 +2510,5 @@ int main() {
         if (result != 0) { printf("FAIL: drive %d seed %d result %d\n", drive, seed, result); return 1; }
         ++runs;
     }
-    printf("PASS: roster, sprites, drive laws, story, music clock, 21 gimmicks, directory routing, %d complete runs\n", runs); return 0;
+    printf("PASS: roster, sprites, drive laws, story, music clock, 21 gimmicks, 21 mob traits, directory routing, %d complete runs\n", runs); return 0;
 }

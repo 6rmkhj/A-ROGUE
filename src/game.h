@@ -113,6 +113,11 @@ struct EnemyState {
     // 소환된 개체의 출력 비율. 0 = 기본(본체 그대로), 1~99 = 그 비율로 약해진다.
     // 체력만 깎으면 탈주체가 보스와 같은 화력을 내므로 이 축이 따로 필요하다.
     uint8_t power;
+    // ---- 몹 특성 상태 (개체마다 독립. BossRuntime과 무관하다) ----
+    uint8_t trait;       // EnemyTrait. 소환된 개체도 자기 특성을 그대로 갖는다
+    uint8_t counter;     // 카운터 계열이 쓰는 눈에 보이는 숫자
+    uint8_t memo;        // 직전 공격 눈(쓰기 방지·거짓 사본) 또는 약점 홀짝(변이)
+    uint8_t flags;       // 1 = 도망 예약, 2 = 이번 턴 처치되었으나 행동은 남았다
     int hp;
     int maxHp;
     int block;
@@ -130,6 +135,7 @@ struct BossRuntime {
     uint8_t nextLockedSlot[SLOT_COUNT];  // 다음 턴 잠금 예고
     int8_t offlineDie;                   // 이번 턴 오프라인 주사위 (-1 없음)
     int8_t nextOfflineDie;               // 다음 턴 오프라인 예고 (-1 없음)
+    int8_t stolenValue;                  // ZERO.DAY가 빼앗아 쓰는 면 출력 (0 = 없음)
     int8_t bestSlotLastTurn;             // 직전 턴 최고 출력 슬롯 (KERNEL.PANIC)
     int8_t nextTargetDie;                // 격리·삭제 예고 대상 (-1 없음)
     int8_t nextTargetFace;
@@ -274,6 +280,7 @@ struct GameState {
     DriveRuleRuntime driveRule;
     StoryRuntime story;
     int rewardChoiceCount;        // 이번 면 보상의 후보 수 (TEMP면 2)
+    int encryptBonus;             // 1 = RANSOMWARE를 한 방으로 끊어 이번 보상 후보 +1
     int rewardTier;               // 0 = 표준, 1 = 강화
     wchar_t logs[5][96];
 };
