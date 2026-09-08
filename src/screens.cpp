@@ -47,6 +47,8 @@ RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 RECT BgmToggleRect() { return MakeRect(600, 420, 675, 452); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT CampaignResetRect() { return MakeRect(560, 658, 840, 700); }
+RECT ReplayPrevRect() { return MakeRect(370, 650, 545, 688); }
+RECT ReplayNextRect() { return MakeRect(575, 650, 750, 688); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
 
 // 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
@@ -77,7 +79,18 @@ void ApplyWindowedScale(int percent) {
     RECT desired = {0, 0, BASE_WIDTH * percent / 100, BASE_HEIGHT * percent / 100};
     AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0);
     int width = desired.right - desired.left, height = desired.bottom - desired.top;
-    int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+
+    MONITORINFO info = {}; info.cbSize = sizeof(info);
+    HMONITOR monitor = MonitorFromWindow(gWindow, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(monitor, &info)) {
+        info.rcWork = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    }
+    int workW = info.rcWork.right - info.rcWork.left;
+    int workH = info.rcWork.bottom - info.rcWork.top;
+    if (width > workW) width = workW;
+    if (height > workH) height = workH;
+    int x = info.rcWork.left + (workW - width) / 2;
+    int y = info.rcWork.top + (workH - height) / 2;
     SetWindowPos(gWindow, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED);
 }
 
@@ -349,7 +362,7 @@ static void DrawTitle(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(0, height / 2 + 234, width, height / 2 + 258), seen, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     TextRect(dc, MakeRect(150, height - 105, width - 150, height - 25),
-        L"마우스 또는 1·2·3으로 주사위 선택  /  슬롯 클릭으로 배치  /  스페이스 키로 실행  /  취소 키로 보상 건너뛰기",
+        L"1·2·3 주사위 선택 / 슬롯 클릭 배치 / Space 실행 / 보상 Esc: 선택 취소 · 선택 없음에서 두 번 눌러 포기",
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
@@ -1099,10 +1112,11 @@ static void DrawDie(HDC dc, int index) {
     wchar_t statuses[64] = L""; int statusCount = 0;
     if (face && face->damaged) { AppendStatus(statuses, L"손상"); ++statusCount; }
     if (face && face->quarantined != QUAR_NONE) { AppendStatus(statuses, L"격리"); ++statusCount; }
-    if (die->unstable) { AppendStatus(statuses, L"읽기 오류"); ++statusCount; }
+    if (die->unstable && gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"읽기 오류 → 다음 오프라인"); ++statusCount; }
+    else if (die->unstable) { AppendStatus(statuses, L"읽기 오류"); ++statusCount; }
     if (die->disabled) { AppendStatus(statuses, L"조각화"); ++statusCount; }
     if (die->offline) { AppendStatus(statuses, L"오프라인"); ++statusCount; }
-    if (gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"다음 턴 오프라인"); ++statusCount; }
+    if (!die->unstable && gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"다음 턴 오프라인"); ++statusCount; }
     if (statusCount == 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     else if (statusCount > 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_WORDBREAK);
     else {
@@ -1227,7 +1241,7 @@ static void DrawCombat(HDC dc, int width, int height) {
     if (gPreview.valid && gPreview.combatEnds && !gPreview.uncertain && !gPreview.playerDies && FxDecorOn())
         DrawOrbitCorners(dc, end, (int)(GetTickCount() % 2400), C_GREEN, FxScale(85));
     TextRect(dc, end, L"실행 [스페이스]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (IsTsrInstalled(&gGame, TSR_KEYB)) {
+    if (TacticalRerollAvailable(&gGame) || IsTsrInstalled(&gGame, TSR_KEYB)) {
         RECT keyb = KeybButtonRect();
         int canReroll = gRolled && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0;
         int hoverKeyb = canReroll && Inside(keyb, gMouse.x, gMouse.y);
@@ -1266,9 +1280,18 @@ static void DrawDriveModifier(HDC dc, const RECT& card, int top, int modifier) {
 
 static void DrawDriveSelect(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_DRIVE_SELECT, C_BLUE, width, height);
+    if ((gGame.clearedMask & 0x3F) == 0x3F) {
+        TextRect(dc, MakeRect(280, 116, width - 280, 146), L"캠페인 복구 완료 · 모든 일반 볼륨을 재플레이할 수 있습니다", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        RECT prev = ReplayPrevRect(), next = ReplayNextRect();
+        int hoverPrev = Inside(prev, gMouse.x, gMouse.y), hoverNext = Inside(next, gMouse.x, gMouse.y);
+        Panel(dc, prev, hoverPrev ? RGB(28, 39, 48) : C_PANEL_2, hoverPrev ? C_BLUE : C_LINE);
+        Panel(dc, next, hoverNext ? RGB(28, 39, 48) : C_PANEL_2, hoverNext ? C_BLUE : C_LINE);
+        TextRect(dc, prev, L"◀ 이전 볼륨", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, next, L"다음 볼륨 ▶", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     if (!gGame.driveChoiceCount) {
         TextRect(dc, MakeRect(40, 284, width - 40, 328), L"모든 일반 볼륨을 복구했습니다.", C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
-        TextRect(dc, MakeRect(40, 344, width - 40, 382), L"추가로 마운트할 볼륨이 없습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(40, 344, width - 40, 382), L"좌우 화살표 또는 아래 버튼으로 복구한 볼륨을 다시 마운트할 수 있습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
         return;
     }
     TextRect(dc, MakeRect(0, 78, width, 102), L"감염된 저장소 감지  →  [현재: 탐색 볼륨 선택]  →  마운트  →  전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2862,10 +2885,13 @@ static void DrawPrune(HDC dc, int width, int height) {
             int tsr = InstalledTsrAt(&gGame, i);
             if (tsr < 0) break;
             RECT r = PruneTsrRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
-            Panel(dc, r, hover ? RGB(46, 28, 32) : C_PANEL, hover ? C_RED : C_LINE);
-            TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name, (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
-            wsprintfW(b, hover ? L"%dB · 종료" : L"%dB", TSR_INFO[tsr].cost);
-            TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+            int pending = gPruneTsrPending[tsr] != 0;
+            Panel(dc, r, pending ? RGB(58, 29, 32) : hover ? RGB(46, 28, 32) : C_PANEL, pending || hover ? C_RED : C_LINE);
+            TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name,
+                pending ? C_DIM : (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
+            if (pending) wsprintfW(b, L"%dB · 삭제 예정 · 다시 클릭해 취소", TSR_INFO[tsr].cost);
+            else wsprintfW(b, hover ? L"%dB · 삭제 예약" : L"%dB", TSR_INFO[tsr].cost);
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, pending || hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
     DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int faces = NonEmptyFaceCount(&gGame);
@@ -3076,28 +3102,23 @@ static const wchar_t* PatternRoleLabel(int pattern) {
 
 static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
-    Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
-    // 판독이 전투 턴의 첫 입력이다. 이것이 빠지면 나머지 안내대로 눌러도
-    // 아무 일도 일어나지 않으므로 1번 자리에 둔다.
-    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 148),
-        L"1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 162, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 194, middle - 28, top + 308),
-        L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 322, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 354, middle - 28, panel.bottom - 52),
-        L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top, L"첫 전투에 필요한 것만", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 38, middle - 28, top + 220),
+        L"1. 턴이 시작되면 주사위가 자동 판독됩니다.\n   연출은 클릭/키로 즉시 넘길 수 있습니다.\n2. 주사위를 클릭하거나 1·2·3으로 선택합니다.\n3. 원하는 슬롯을 클릭해 배치합니다.\n4. 공격할 적을 클릭합니다.\n5. 스페이스 키로 턴을 실행합니다.",
+        C_TEXT, gFontMedium, DT_WORDBREAK);
+    Text(dc, left, top + 250, L"키보드만으로 플레이", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 286, middle - 28, panel.bottom - 52),
+        L"Tab / Shift+Tab  전투·정리 항목 이동\nEnter  현재 항목 선택/확정\n1·2·3  주사위 바로 선택\nSpace  턴 실행\nEsc  선택 해제·창 닫기\nF1  이 가이드 다시 열기 · F3  보유 면 확인",
+        C_TEXT, gFontSmall, DT_WORDBREAK);
 
-    Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"볼륨 선택  손상 2종 + 특성 1개 + 전용 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
-    // 여섯 줄이 들어가야 한다. 페이지 이동 버튼이 y686부터라 680까지 쓸 수 있다.
-    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 52),
-        L"R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, middle, top, L"나머지는 필요할 때", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 38, panel.right - 28, top + 188),
+        L"손상·격리·조각화 같은 상태는 실제로 등장할 때 카드와 배너에 표시됩니다.\n\n보상과 TSR은 선택 화면에서 결과와 비용을 먼저 보여 주며, 되돌릴 수 없는 선택은 한 번 더 확인합니다.",
+        C_TEXT, gFontMedium, DT_WORDBREAK);
+    Text(dc, middle, top + 220, L"상세 정보 위치", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 256, panel.right - 28, panel.bottom - 52),
+        L"가이드 2/2  현재 드라이브의 적·보스 도감\nF3  보유한 주사위 면과 특수 능력\n전투 카드  적 의도·상태·기믹 예고\n정리 화면  용량과 삭제 결과\n\n처음부터 전부 외울 필요가 없습니다. 화면에 지금 필요한 규칙만 따라가면 됩니다.",
+        C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 int GuideNoiseActive() {
@@ -4782,11 +4803,15 @@ void PaintGame(HWND window) {
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     // 진행도를 못 쓰고 있다는 사실은 어느 화면에서도 보여야 한다. 쓰기 권한이
     // 없는 폴더에서 돌리는 동안 정상 저장으로 믿고 계속 두면 안 된다.
-    if (gSaveFailed) {
-        RECT warn = MakeRect(BASE_WIDTH / 2 - 300, 2, BASE_WIDTH / 2 + 300, 22);
+    if (gCampaignCorrupt || gSaveFailed || gSettingsSaveFailed) {
+        RECT warn = MakeRect(BASE_WIDTH / 2 - 390, 2, BASE_WIDTH / 2 + 390, 22);
         Panel(canvas, warn, RGB(48, 12, 12), C_RED);
-        TextRect(canvas, warn, L"진행도를 저장하지 못했습니다 · AROGUE.exe가 있는 폴더에 쓸 수 있는지 확인하십시오",
-            C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const wchar_t* warning = gCampaignCorrupt
+            ? L"세이브 검증 실패 · 원본 AROGUE.SAV는 보호 중입니다 · 설정의 진행도 초기화로 새로 시작할 수 있습니다"
+            : gSettingsSaveFailed
+                ? L"설정을 저장하지 못했습니다 · AROGUE.CFG를 쓸 수 있는지 확인하십시오"
+                : L"진행 데이터를 저장하지 못했습니다 · 실행 폴더에 쓸 수 있는지 확인하십시오";
+        TextRect(canvas, warn, warning, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 

@@ -14,6 +14,7 @@ static std::vector<TranslationEntry> gTranslations;
 static int gUiLanguage = LANGUAGE_KOREAN;
 static wchar_t gLocalizedBuffers[8][2048];
 static int gLocalizedBufferIndex;
+static int gTranslationManifestValid;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return std::wstring();
@@ -114,6 +115,7 @@ static std::wstring ExpandFormatted(const std::wstring& format,
 
 void LoadTranslations() {
     gTranslations.clear();
+    gTranslationManifestValid = 0;
     wchar_t path[MAX_PATH];
     DWORD length = GetModuleFileNameW(0, path, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) return;
@@ -143,6 +145,7 @@ void LoadTranslations() {
         std::string line = bytes.substr(start, finish - start);
         if (!line.empty() && line.back() == '\r') line.pop_back();
         start = finish + 1;
+        if (line == "# AROGUE_TRANSLATIONS_V2") { gTranslationManifestValid = 1; continue; }
         if (line.empty() || line[0] == '#') continue;
         size_t tab = line.find('\t');
         if (tab == std::string::npos) continue;
@@ -154,7 +157,16 @@ void LoadTranslations() {
     }
 }
 
-int TranslationsLoaded() { return gTranslations.empty() ? 0 : 1; }
+int TranslationsLoaded() {
+    // A one-row or stale table must not enable English and then fall back to
+    // Korean line-by-line. The version marker catches stale packages; a floor
+    // on populated entries catches truncated files while remaining tolerant of
+    // newly added optional copy.
+    if (!gTranslationManifestValid || gTranslations.size() < 100) return 0;
+    for (size_t i = 0; i < gTranslations.size(); ++i)
+        if (gTranslations[i].english.empty()) return 0;
+    return 1;
+}
 
 void SetUiLanguage(int language) {
     if (language < 0 || language >= LANGUAGE_COUNT) return;

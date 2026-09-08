@@ -362,6 +362,9 @@ int CanUndoPrunedFace(const GameState* game, int dieIndex, int faceIndex);
 void UninstallTsr(GameState* game, int tsrIndex);
 void ConfirmPrune(GameState* game);
 void KeybReroll(GameState* game, int dieIndex);
+int TacticalRerollAvailable(const GameState* game);
+// After all six shards are recovered, pages expose every regular volume plus HOST_IMAGE.
+void SetReplayDrivePage(GameState* game, int page);
 
 // 테스트 전용: 드라이브와 일반전 순서만 준비한다. 전투를 시작하지 않고,
 // preserveModifiers가 1이면 테스트가 주입한 modifierA/B를 그대로 둔다.

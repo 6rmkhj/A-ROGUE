@@ -1,6 +1,8 @@
-/build/fx-qa/
-/build/audio-qa/
-/build/runtime-qa/
-/build/obj/
-/build/AROGUE.SAV
-/build/AROGUE.CFG
+# Generated build/test artifacts. build-msvc.bat / build.bat recreate these.
+# Keep them out of Git so builds do not dirty the worktree or create binary merge conflicts.
+/build/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.res
