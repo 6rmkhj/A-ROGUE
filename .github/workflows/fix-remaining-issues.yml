@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Adapt patch matcher to current source
+        run: python tools/fix_remaining_issues_bootstrap.py
       - name: Apply source patches
         run: python tools/fix_remaining_issues.py
       - name: Build and run regression suites
@@ -30,7 +32,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm tools/fix_remaining_issues.py .github/workflows/fix-remaining-issues.yml
+          git rm tools/fix_remaining_issues.py tools/fix_remaining_issues_bootstrap.py .github/workflows/fix-remaining-issues.yml
           git add -A
           git commit -m "fix: resolve remaining input codex and guide issues [remaining-issues-applied]"
           git push origin HEAD:fix/all-open-issues-20260908
