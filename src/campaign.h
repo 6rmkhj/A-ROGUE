@@ -39,7 +39,9 @@ struct UserSettings {
     uint8_t fullscreen;
     uint8_t fxLevel;       // FxLevel enum
     uint8_t musicEnabled;
-    uint8_t volume;        // 0-100
+    uint8_t volume;        // Master, 0-100
+    uint8_t bgmVolume;     // 0-100
+    uint8_t sfxVolume;     // 0-100
 };
 
 // Defaults match a fresh install: Korean, 100%, windowed, full effects, BGM on.

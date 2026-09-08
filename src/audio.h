@@ -36,6 +36,10 @@ int RenderSfx(int id, int semitones, short* out, int capacity);
 // 걸리므로 이미 울리고 있는 소리에도 곧바로 적용되고, 파형을 다시 만들 필요가 없다.
 void SetAudioVolume(int percent);
 int AudioVolume();
+void AudioSetMusicVolume(int percent);
+int AudioMusicVolume();
+void AudioSetSfxVolume(int percent);
+int AudioSfxVolume();
 
 void AudioSetScene(int scene);
 void AudioSetDrive(int drive);

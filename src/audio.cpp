@@ -194,6 +194,8 @@ static int gDuckFrames;
 // 기본값을 최대치로 두지 않는다. 효과음이 스무 종 넘게 겹쳐 울리는 게임이라
 // 100%는 실제로 시끄럽다. 필요하면 설정에서 올린다.
 static int gAudioVolume = 50;
+static int gMusicVolume = 100;
+static int gSfxVolume = 100;
 
 void SetAudioVolume(int percent) {
     if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
@@ -201,6 +203,18 @@ void SetAudioVolume(int percent) {
 }
 
 int AudioVolume() { return gAudioVolume; }
+
+void AudioSetMusicVolume(int percent) {
+    if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
+    gMusicVolume = percent;
+}
+int AudioMusicVolume() { return gMusicVolume; }
+
+void AudioSetSfxVolume(int percent) {
+    if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
+    gSfxVolume = percent;
+}
+int AudioSfxVolume() { return gSfxVolume; }
 
 void AudioSetScene(int scene) { AudioGuard g; MusicSetScene(&gMusic, scene); }
 void AudioSetDrive(int drive) { AudioGuard g; MusicSetDrive(&gMusic, drive); }
@@ -228,8 +242,9 @@ static void MixFrames(short* out, int frames) {
     }
     for (int i = 0; i < frames; ++i) {
         int musicDuck = gDuckFrames > 0 ? 65 : 100;
-        accumulator[i] += music[i] * 26 / 100 * musicDuck / 100;
-        int s = accumulator[i] * gAudioVolume / 100;
+        int32_t sfx = accumulator[i] * gSfxVolume / 100;
+        int32_t bgm = music[i] * 26 / 100 * musicDuck / 100 * gMusicVolume / 100;
+        int s = (sfx + bgm) * gAudioVolume / 100;
         if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
         out[i] = (short)s;
         if (gDuckFrames > 0) --gDuckFrames;

@@ -275,9 +275,10 @@ RECT DeckButtonRect(int width);
 RECT DeckCloseRect(int width);
 RECT ScaleOptionRect(int index);
 RECT LanguageOptionRect(int index);
-RECT VolumeSliderRect();
-RECT VolumeHandleRect(int volume);
-int VolumeFromX(int x);          // 슬라이더 위 x좌표를 0~100으로
+enum AudioVolumeChannel { AUDIO_VOLUME_MASTER = 0, AUDIO_VOLUME_BGM, AUDIO_VOLUME_SFX, AUDIO_VOLUME_COUNT };
+RECT VolumeSliderRect(int channel);
+RECT VolumeHandleRect(int channel, int volume);
+int VolumeFromX(int channel, int x);          // 슬라이더 위 x좌표를 0~100으로
 RECT FullscreenToggleRect();
 RECT BgmToggleRect();
 RECT RestartButtonRect();
