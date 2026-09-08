@@ -32,6 +32,65 @@ static bool WriteCampaignFixture(const wchar_t* path, const uint8_t* bytes, DWOR
     return ok;
 }
 
+// Preferences must survive a restart, must not be reset by wiping progress, and
+// must fall back to defaults rather than to garbage when the file is damaged.
+static int TestSettingsStorage() {
+    CampaignTestFile file;
+    if (!file.path[0]) return Fail("settings temporary file creation");
+    UserSettings defaults, written, loaded;
+    InitSettings(&defaults);
+    if (defaults.language != 0 || defaults.scalePercent != 100 || defaults.fullscreen
+        || defaults.fxLevel != 0 || !defaults.musicEnabled || defaults.volume != 100)
+        return Fail("fresh settings must be the shipped defaults");
+
+    written.language = 1; written.scalePercent = 150; written.fullscreen = 1;
+    written.fxLevel = 2; written.musicEnabled = 0; written.volume = 35;
+    if (!SaveSettings(&written, file.path)) return Fail("settings save");
+    if (!LoadSettings(&loaded, file.path) || memcmp(&written, &loaded, sizeof(written)))
+        return Fail("settings round trip");
+
+    uint8_t bytes[17] = {};
+    HANDLE handle = CreateFileW(file.path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    DWORD read = 0;
+    bool readOk = handle != INVALID_HANDLE_VALUE && ReadFile(handle, bytes, sizeof(bytes), &read, 0);
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (!readOk || read != 16 || memcmp(bytes, "ACFG\x01\x00", 6))
+        return Fail("settings stable 16-byte format");
+
+    // Every byte, header through checksum, must fail closed onto the defaults.
+    for (int i = 0; i < 16; ++i) {
+        bytes[i] ^= 0x80;
+        if (!WriteCampaignFixture(file.path, bytes, 16)) return Fail("settings corruption fixture");
+        loaded = written;
+        if (LoadSettings(&loaded, file.path) || memcmp(&loaded, &defaults, sizeof(defaults)))
+            return Fail("corrupt settings must fall back to defaults");
+        bytes[i] ^= 0x80;
+    }
+    for (DWORD size = 0; size <= 17; ++size) {
+        if (size == 16) continue;
+        if (!WriteCampaignFixture(file.path, bytes, size)) return Fail("settings size fixture");
+        loaded = written;
+        if (LoadSettings(&loaded, file.path) || memcmp(&loaded, &defaults, sizeof(defaults)))
+            return Fail("short or long settings must fall back to defaults");
+    }
+
+    // Volume is the one field a hand-edited file can push out of range.
+    if (!WriteCampaignFixture(file.path, bytes, 16)) return Fail("settings restore fixture");
+    written.volume = 200;
+    if (!SaveSettings(&written, file.path) || !LoadSettings(&loaded, file.path) || loaded.volume != 100)
+        return Fail("out-of-range volume must clamp instead of rejecting the file");
+
+    // A campaign record must never be mistaken for a settings record. The two
+    // files sit in the same folder, so the magic has to keep them apart.
+    CampaignState campaign;
+    InitCampaign(&campaign);
+    if (!SaveCampaign(&campaign, file.path)) return Fail("campaign save over the settings fixture");
+    loaded = written;
+    if (LoadSettings(&loaded, file.path) || memcmp(&loaded, &defaults, sizeof(defaults)))
+        return Fail("a campaign record must not load as settings");
+    return 0;
+}
+
 static int TestCampaignStorage() {
     CampaignTestFile file;
     if (!file.path[0]) return Fail("campaign temporary file creation");
@@ -125,7 +184,7 @@ static int TestCampaignStorage() {
     lstrcpyW(missing, file.path); lstrcatW(missing, L"\\AROGUE.SAV");
     if (SaveCampaign(&state, missing) || memcmp(&state, &unsaved, sizeof(state)))
         return Fail("unwritable campaign path must fail safely");
-    printf("PASS: campaign storage, 64 masks, corruption fallback, failed-save preservation\n");
+    printf("PASS: campaign storage, 64 masks, corruption fallback, failed-save preservation, settings round trip\n");
     return 0;
 }
 
@@ -1892,6 +1951,7 @@ static int CheckDebugWinDrive() {
 
 int main() {
     if (TestCampaignStorage()) return 1;
+    if (TestSettingsStorage()) return 1;
     if (TestCampaignDriveChoices()) return 1;
     if (TestCampaignProgression()) return 1;
     if (CheckFinalVolume()) return 1;

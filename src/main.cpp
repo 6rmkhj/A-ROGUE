@@ -11,6 +11,9 @@
 // 게임 상태와 창·입력을 담당한다. 그리기는 screens.cpp, 소리는 audio.cpp가 맡는다.
 GameState gGame;
 CampaignState gCampaign;
+// 언어·배율·전체화면·연출 강도·BGM·소리. 캠페인 세이브와 따로 두어
+// "진행도 초기화"가 환경까지 되돌리지 않게 한다.
+static UserSettings gSettings;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
@@ -32,6 +35,9 @@ int gGuidePage;
 int gRestartArmed;
 int gCampaignResetArmed;
 int gRewardSkipArmed;
+// 마지막 세이브 시도가 실패했으면 1. 쓰기 권한이 없는 폴더에서 돌리는 동안
+// 조용히 진행하다 기록을 통째로 잃는 일을 막으려고 화면에 띄운다.
+int gSaveFailed;
 int gFxLevel = FX_FULL;
 
 // 직접 조작 연출은 게임 판정과 분리된 마지막 사건 하나만 기억한다. 연타가 가능한
@@ -720,11 +726,41 @@ int VictoryElapsed() {
     return elapsed < 0 ? 0 : elapsed;
 }
 
+// 지금 화면에 적용된 값을 그대로 담는다. 저장 시점의 UI 상태가 곧 설정이다.
+static void CaptureSettings() {
+    gSettings.language = (uint8_t)UiLanguage();
+    gSettings.scalePercent = (uint8_t)WindowedScale();
+    gSettings.fullscreen = (uint8_t)(gFullscreen ? 1 : 0);
+    gSettings.fxLevel = (uint8_t)gFxLevel;
+    gSettings.musicEnabled = (uint8_t)(AudioMusicEnabled() ? 1 : 0);
+    gSettings.volume = (uint8_t)AudioVolume();
+}
+
+static void PersistSettings() {
+    CaptureSettings();
+    SaveSettings(&gSettings);
+}
+
+// 읽어 온 값을 검사해 적용한다. 표에 없는 배율이나 범위 밖 연출 강도는 버리고
+// 기본값을 쓴다. 창을 만들기 전에는 배율·전체화면을 적용할 수 없으므로
+// applyWindow로 나눠 부른다.
+static void ApplySettings(int applyWindow) {
+    SetUiLanguage(gSettings.language);
+    if (gSettings.fxLevel < FX_LEVEL_COUNT) gFxLevel = gSettings.fxLevel;
+    AudioSetMusicEnabled(gSettings.musicEnabled ? 1 : 0);
+    SetAudioVolume(gSettings.volume);
+    if (!applyWindow) return;
+    for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i)
+        if (SCALE_OPTIONS[i] == gSettings.scalePercent) { ApplyWindowedScale(SCALE_OPTIONS[i]); break; }
+    if (gSettings.fullscreen) ApplyFullscreen(1);
+}
+
 static void PersistCampaignProgress() {
     bool changed = RecordCampaignClears(&gCampaign, gGame.clearedMask);
     if (gGame.finalVolumeCleared && !gCampaign.finalCleared) { gCampaign.finalCleared = 1; changed = true; }
     if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
-    if (changed) SaveCampaign(&gCampaign);
+    // 실패는 조용히 넘기지 않는다. 다음 저장이 성공하면 표시도 내려간다.
+    if (changed) gSaveFailed = SaveCampaign(&gCampaign) ? 0 : 1;
 }
 
 // 세이브를 비우고 타이틀로 돌아간다. 진행 중이던 런의 clearedMask가 살아남으면
@@ -1090,7 +1126,7 @@ static void HandleClick(int x, int y) {
             gCampaignResetArmed = 1; InvalidateRect(gWindow, 0, FALSE); return;
         }
         gRestartArmed = 0; gCampaignResetArmed = 0;
-        if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
+        if (Inside(SettingsCloseRect(BASE_WIDTH), x, y) || Inside(SettingsButtonRect(BASE_WIDTH), x, y)) { gSettingsOpen = 0; PersistSettings(); InvalidateRect(gWindow, 0, FALSE); return; }
         for (int i = 0; i < LANGUAGE_COUNT; ++i) if (Inside(LanguageOptionRect(i), x, y)) {
             // Re-read the external table when a language is selected so copy
             // edits can be previewed without recompiling or restarting.
@@ -1288,7 +1324,7 @@ static void HandleKey(WPARAM key) {
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
-        if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; }
+        if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; PersistSettings(); }
         // 마우스로 정확히 맞추기 어려운 값을 위해 5씩 움직인다.
         else if (key == VK_LEFT)  { SetAudioVolume(AudioVolume() - 5); PlaySfx(SFX_UI_CLICK); }
         else if (key == VK_RIGHT) { SetAudioVolume(AudioVolume() + 5); PlaySfx(SFX_UI_CLICK); }
@@ -1465,7 +1501,20 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         return 0;
     case WM_PAINT: PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
+    case WM_CLOSE: {
+        // 캠페인 진행도는 남지만 진행 중인 런(층·체력·덱)은 저장되지 않는다.
+        // 실수로 닫는 것과 정말 끝내는 것을 구분해 준다.
+        int inRun = gGame.phase != PHASE_TITLE && !IsEndScreen();
+        if (inRun && MessageBoxW(window,
+                L"진행 중인 런(층·체력·덱)은 저장되지 않습니다.\n"
+                L"복구한 조각과 엔딩 기록은 그대로 남습니다.\n\n종료하시겠습니까?",
+                L"A:\\ROGUE", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+            return 0;
+        DestroyWindow(window);
+        return 0;
+    }
     case WM_DESTROY:
+        PersistSettings();
         SaveCampaign(&gCampaign);
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
@@ -1502,6 +1551,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     timeBeginPeriod(1);
     LoadCampaign(&gCampaign);
     LoadTranslations();
+    // 번역을 읽은 뒤라야 English 설정이 실제로 받아들여진다.
+    LoadSettings(&gSettings);
+    ApplySettings(0);
     InitTitle(&gGame, CampaignClearedMask(&gCampaign), CampaignSeenEndingMask(&gCampaign)); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
@@ -1509,6 +1561,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
     gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE · 1.44MB", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
     if (!gWindow) return 2; ShowWindow(gWindow, showCommand); UpdateWindow(gWindow);
+    // 배율·전체화면은 창이 있어야 적용된다. 창 제목도 실제로 적용된 언어를 따른다.
+    ApplySettings(1);
+    if (UiLanguage() == LANGUAGE_ENGLISH) SetWindowTextW(gWindow, L"A:\\ROGUE · 1.44MB · English");
     MSG message; while (GetMessageW(&message, 0, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
     timeEndPeriod(1);
     return (int)message.wParam;

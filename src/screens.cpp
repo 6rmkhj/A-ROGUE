@@ -66,6 +66,8 @@ void ApplyFullscreen(int enable) {
     }
 }
 
+int WindowedScale() { return gWindowedScale; }
+
 // BASE_WIDTH x BASE_HEIGHT 캔버스를 percent%로 표시할 창 크기를 계산해 적용한다 (창 모드에서만 의미가 있다).
 void ApplyWindowedScale(int percent) {
     gWindowedScale = percent;
@@ -4284,6 +4286,14 @@ void PaintGame(HWND window) {
     else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
 
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
+    // 진행도를 못 쓰고 있다는 사실은 어느 화면에서도 보여야 한다. 쓰기 권한이
+    // 없는 폴더에서 돌리는 동안 정상 저장으로 믿고 계속 두면 안 된다.
+    if (gSaveFailed) {
+        RECT warn = MakeRect(BASE_WIDTH / 2 - 300, 2, BASE_WIDTH / 2 + 300, 22);
+        Panel(canvas, warn, RGB(48, 12, 12), C_RED);
+        TextRect(canvas, warn, L"진행도를 저장하지 못했습니다 · AROGUE.exe가 있는 폴더에 쓸 수 있는지 확인하십시오",
+            C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 캔버스를 화면에 직접 올린다. 예전에는 창 크기 합성 버퍼에 배경을 깔고

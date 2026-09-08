@@ -115,6 +115,9 @@ extern int gCampaignResetArmed; // "진행도 초기화" 버튼. 런이 아니�
 // 보상 포기 버튼. 되돌릴 수 없는 손실이라 "다시 시작"과 같은 두 번 누르기를 쓴다.
 // 보상 화면을 벗어나거나 카드를 새로 고르면 0으로 풀린다.
 extern int gRewardSkipArmed;
+// 마지막 캠페인 세이브가 실패했으면 1. 한 번 서면 그 실행 동안 유지되고,
+// 다음 저장이 성공하면 다시 0으로 내려간다.
+extern int gSaveFailed;
 
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
@@ -272,6 +275,8 @@ int VictoryElapsed();
 // ---- 화면 -----------------------------------------------------------------
 void ApplyFullscreen(int enable);
 void ApplyWindowedScale(int percent);
+// 지금 적용된 창 배율(%). 설정 저장이 화면 상태가 아니라 값을 읽어야 한다.
+int WindowedScale();
 void PaintGame(HWND window);
 // 페인트 계측. 터미널 perf 명령이 읽는다.
 int PaintLastMs();
