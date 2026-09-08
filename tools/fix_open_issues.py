@@ -161,10 +161,10 @@ write("src/game.cpp", game)
 
 # #70/#72: tame HIMEM and make ECHO describe what is actually repeated.
 data = read("src/data.h")
-data = data.replace('TSR_HIMEM = 0,   // 용량 한도 +60B', 'TSR_HIMEM = 0,   // 용량 한도 +40B')
+data = data.replace('TSR_HIMEM = 0,   // 용량 한도 +60B', 'TSR_HIMEM = 0,   // 용량 한도 +45B')
 data = replace_once(data,
 '{L"HIMEM.SYS", L"용량 한도 +60B",                 20, 60, -1,',
-'{L"HIMEM.SYS", L"용량 한도 +40B",                 20, 40, -1,',
+'{L"HIMEM.SYS", L"용량 한도 +45B",                 20, 45, -1,',
 "HIMEM balance")
 data = replace_once(data,
 '{L"메아리", L"메아리", L"연쇄 슬롯에서 직전 효과 반복",',
@@ -194,7 +194,7 @@ for rel in ("translations.tsv", "build/translations.tsv"):
     if not p.exists():
         continue
     t = p.read_text(encoding="utf-8")
-    t = t.replace("용량 한도 +60B\tCapacity limit +60B", "용량 한도 +40B\tCapacity limit +40B")
+    t = t.replace("용량 한도 +60B\tCapacity limit +60B", "용량 한도 +45B\tCapacity limit +45B")
     t = t.replace("연쇄 슬롯에서 직전 효과 반복\tRepeat the previous effect in the Chain slot", "연쇄 슬롯에서 이번 턴 공격/방어 효과 반복\tRepeat this turn's Attack or Defend effect in the Chain slot")
     p.write_text(t, encoding="utf-8", newline="\n")
 
