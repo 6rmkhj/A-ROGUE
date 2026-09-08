@@ -24,6 +24,7 @@ jobs:
         run: |
           python tools/fix_open_issues.py
           python tools/fix_open_issues_followup.py
+          python tools/fix_campaign_smoke.py
       - name: Build and run regression suites
         shell: cmd
         run: build-msvc.bat
@@ -32,7 +33,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm tools/fix_open_issues.py tools/fix_open_issues_followup.py .github/workflows/fix-open-issues.yml
+          git rm tools/fix_open_issues.py tools/fix_open_issues_followup.py tools/fix_campaign_smoke.py .github/workflows/fix-open-issues.yml
           git add -A
           git commit -m "fix: resolve combat and campaign UX issues [issue-fixes-applied]"
           git push origin HEAD:fix/all-open-issues-20260908
