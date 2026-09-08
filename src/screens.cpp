@@ -870,10 +870,16 @@ static void DrawEnemy(HDC dc, int index) {
     }
     Text(dc, r.left + 12, r.top + 140, info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontMedium);
     wchar_t b[96];
-    if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
+    if (selected && !hasGimmick && !isBoss && enemy->trait != TRAIT_NONE)
+        wsprintfW(b, L"▶ 대상 · %s", ENEMY_TRAIT_INFO[enemy->trait].badge);
+    else if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
     else if (hasGimmick) wsprintfW(b, selected ? L"▶ 보스 · %s" : L"보스 기믹: %s", BOSS_GIMMICK_INFO[gGame.boss.gimmick].name);
+    else if (!isBoss && enemy->trait != TRAIT_NONE)
+        wsprintfW(b, L"특성: %s", ENEMY_TRAIT_INFO[enemy->trait].badge);
     else lstrcpyW(b, isBoss ? L"보스 프로세스" : L"적 프로세스");
-    Text(dc, r.left + 12, r.top + 165, b, selected ? C_YELLOW : hasGimmick ? (COLORREF)info->color : C_DIM, gFontSmall);
+    Text(dc, r.left + 12, r.top + 165, b,
+        selected ? C_YELLOW : hasGimmick ? (COLORREF)info->color
+        : (!isBoss && enemy->trait != TRAIT_NONE) ? (COLORREF)info->color : C_DIM, gFontSmall);
     int shownHp = EnemyDisplayHp(index);
     if (enemy->block > 0 || enemy->burn > 0) wsprintfW(b, L"체력 %d/%d · 방%d 화%d", shownHp, enemy->maxHp, enemy->block, enemy->burn);
     else wsprintfW(b, L"체력 %d / %d", shownHp, enemy->maxHp);
@@ -900,9 +906,33 @@ static void DrawEnemy(HDC dc, int index) {
                     gGame.boss.empowered ? C_RED : (COLORREF)info->color, C_LINE);
             }
             TextRect(dc, MakeRect(r.left + 12, r.top + 250, r.right - 10, r.bottom), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
-        } else if (enemy->block > 0 || enemy->burn > 0) {
-            wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
-            Text(dc, r.left + 12, r.top + 250, b, C_DIM, gFontSmall);
+        } else {
+            // 몹 특성. 카운터 계열은 남은 숫자를 함께 보여 준다 - 위협이 숫자로 보여야
+            // 플레이어가 자기 선택으로 그것을 관리할 수 있다.
+            const EnemyTraitInfo* et = &ENEMY_TRAIT_INFO[enemy->trait];
+            int line = r.top + 250;
+            // 카운터는 의도 줄 오른쪽 끝에 붙인다. 줄을 따로 쓰면 아래 규칙문이
+            // 카드 밑변에서 잘린다 (250~384 = 두 줄뿐이다).
+            if (enemy->trait != TRAIT_NONE && et->usesCounter) {
+                wsprintfW(b, L"%d", enemy->counter);
+                TextRect(dc, MakeRect(r.left + 12, r.top + 231, r.right - 12, r.top + 249), b,
+                    C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+            }
+            if (enemy->trait == TRAIT_TWOINTENT) {
+                // 두 번째 의도까지 보여 준다. 둘 다 보이므로 예고가 지켜진다.
+                uint8_t second = (uint8_t)((enemy->flags >> 4) & 7);
+                wsprintfW(b, L"또는 %s %d (홀수 눈)", INTENT_NAMES[second], enemy->memo);
+                Text(dc, r.left + 12, line, b, C_RED, gFontSmall);
+                line += 20;
+            }
+            if ((enemy->block > 0 || enemy->burn > 0) && enemy->trait == TRAIT_NONE) {
+                // 체력 줄이 이미 "방N 화N"을 보여 준다. 특성이 있으면 이 줄을 규칙문에 내준다.
+                wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
+                Text(dc, r.left + 12, line, b, C_DIM, gFontSmall);
+                line += 20;
+            }
+            if (enemy->trait != TRAIT_NONE && enemy->trait != TRAIT_TWOINTENT && line < r.bottom - 18)
+                TextRect(dc, MakeRect(r.left + 12, line, r.right - 10, r.bottom), et->rule, C_DIM, gFontSmall, DT_WORDBREAK);
         }
     } else {
         Text(dc, r.left + 12, r.top + 231, L"[ 삭제됨 ]", C_DIM, gFontSmall);
@@ -2975,7 +3005,7 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
         L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
-        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200\n숫자는 받는 오염 피해 %, 카드마다 다른 등급", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
