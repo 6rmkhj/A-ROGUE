@@ -150,13 +150,22 @@ static void DrawSettings(HDC dc, int width, int height) {
 
     Text(dc, 84, 132, L"언어", C_YELLOW, gFontMedium);
     static const wchar_t* const LANGUAGE_NAMES[LANGUAGE_COUNT] = {L"한국어", L"English"};
+    // translations.tsv가 없으면 English를 골라도 한국어가 그대로 나온다. 고를 수
+    // 있게 두면 설정이 고장난 것처럼 보이므로 잠그고 이유를 적는다.
+    int englishReady = TranslationsLoaded();
     for (int i = 0; i < LANGUAGE_COUNT; ++i) {
-        RECT r = LanguageOptionRect(i); int active = UiLanguage() == i; int hover = Inside(r, gMouse.x, gMouse.y);
+        RECT r = LanguageOptionRect(i); int active = UiLanguage() == i;
+        int usable = i != LANGUAGE_ENGLISH || englishReady;
+        int hover = usable && Inside(r, gMouse.x, gMouse.y);
         Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2,
             active ? C_GREEN : hover ? C_BLUE : C_LINE);
-        TextRect(dc, r, LANGUAGE_NAMES[i], active ? C_GREEN : C_TEXT, gFontMedium,
+        TextRect(dc, r, LANGUAGE_NAMES[i], active ? C_GREEN : usable ? C_TEXT : C_DIM, gFontMedium,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
+    if (!englishReady)
+        TextRect(dc, MakeRect(84, 208, panel.right - 30, 226),
+            L"translations.tsv를 찾지 못해 English를 쓸 수 없습니다. 실행 파일과 같은 폴더에 두십시오.",
+            C_RED, gFontSmall, DT_SINGLELINE);
 
     Text(dc, 84, 228, L"화면 배율", C_YELLOW, gFontMedium);
     for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) {
@@ -2474,6 +2483,7 @@ RECT RewardRect(int i, int width) {
 int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 RECT FaceGridRect(int die, int face) { int left = 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
+RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 130, height - 156, width / 2 + 130, height - 112); }
 // 최종 명령 카드 3장. 폭이 좁아진 만큼 세로로 늘려 두 줄짜리 보존·상실 설명이
 // 카드 아래에서 잘리지 않게 한다 (아래 DrawEndingChoice의 오프셋과 함께 봐야 한다).
 RECT EndingChoiceRect(int index) { int left = 32 + index * 360; return MakeRect(left, 268, left + 336, 600); }
@@ -2532,7 +2542,11 @@ static void DrawStory(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), lines[i], lineColor, gFontMedium, DT_WORDBREAK);
         y += 54;
     }
-    TextRect(dc, MakeRect(panel.left, panel.bottom - 54, panel.right, panel.bottom - 20), L"[ENTER] CONTINUE", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 진행은 이 버튼과 엔터·스페이스뿐이다. 읽는 중에 패널을 잘못 눌러도
+    // 기록이 넘어가지 않는다.
+    RECT next = StoryNextRect(width, height); int hoverNext = Inside(next, gMouse.x, gMouse.y);
+    Panel(dc, next, hoverNext ? RGB(28, 70, 57) : C_PANEL_2, hoverNext ? C_GREEN : C_LINE);
+    TextRect(dc, next, L"다음 [ENTER]", hoverNext ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 // 최종 명령 카드의 강조색. 결과 화면도 같은 색을 써야 하므로 한 곳에 모아 둔다.
@@ -2736,7 +2750,16 @@ static void DrawReward(HDC dc, int width, int height) {
     }
     if (gGame.rewardIsTsr) { Text(dc, 56, 304, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
     else { Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0); }
-    RECT skip = ContinueRect(width, height); Panel(dc, skip, C_PANEL_2, C_LINE); TextRect(dc, skip, L"건너뛰기 [취소]", C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // 이 버튼은 진행이 아니라 손실이다. 문구로 결과를 밝히고, 확정은 두 번째
+    // 입력에서만 받는다 (설정의 "다시 시작"과 같은 방식).
+    RECT skip = ContinueRect(width, height); int hoverSkip = Inside(skip, gMouse.x, gMouse.y);
+    Panel(dc, skip, gRewardSkipArmed ? RGB(80, 30, 30) : hoverSkip ? RGB(48, 28, 28) : C_PANEL_2,
+        gRewardSkipArmed || hoverSkip ? C_RED : C_LINE);
+    TextRect(dc, skip, gRewardSkipArmed ? L"정말 포기?" : L"보상 포기 [취소]",
+        gRewardSkipArmed ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (gRewardSkipArmed)
+        TextRect(dc, MakeRect(skip.left - 300, skip.top, skip.left - 12, skip.bottom),
+            L"한 번 더 누르면 이 보상을 버리고 진행합니다.", C_RED, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
 RECT PruneTsrRect(int i) { int left = 150 + i * 180; return MakeRect(left, 252, left + 164, 320); }
@@ -2968,13 +2991,15 @@ static const wchar_t* PatternRoleLabel(int pattern) {
 static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
     Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 126),
-        L"1. 주사위를 클릭하거나 1·2·3으로 선택\n2. 서로 다른 슬롯을 클릭해 배치\n3. 적을 클릭해 공격 대상 선택\n4. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 140, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 172, middle - 28, top + 286),
+    // 판독이 전투 턴의 첫 입력이다. 이것이 빠지면 나머지 안내대로 눌러도
+    // 아무 일도 일어나지 않으므로 1번 자리에 둔다.
+    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 148),
+        L"1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top + 162, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 194, middle - 28, top + 308),
         L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
+    Text(dc, left, top + 322, L"상태와 적 의도", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 354, middle - 28, panel.bottom - 52),
         L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200\n숫자는 받는 오염 피해 %, 카드마다 다른 등급", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
@@ -2986,7 +3011,7 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     // 여섯 줄이 들어가야 한다. 페이지 이동 버튼이 y686부터라 680까지 쓸 수 있다.
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 52),
-        L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 int GuideNoiseActive() {

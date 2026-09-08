@@ -1896,8 +1896,17 @@ int main() {
     if (TestCampaignProgression()) return 1;
     if (CheckFinalVolume()) return 1;
     if (CheckDebugWinDrive()) return 1;
-    LoadTranslations();
+    // Before any load the table is empty, which is exactly the shipped-without-
+    // translations.tsv case. English must be refused rather than silently
+    // showing Korean under an English setting.
+    if (TranslationsLoaded()) return Fail("translation table must start empty");
     SetUiLanguage(LANGUAGE_ENGLISH);
+    if (UiLanguage() != LANGUAGE_KOREAN)
+        return Fail("English must be refused while translations are unavailable");
+    LoadTranslations();
+    if (!TranslationsLoaded()) return Fail("translations.tsv must load beside the test binary");
+    SetUiLanguage(LANGUAGE_ENGLISH);
+    if (UiLanguage() != LANGUAGE_ENGLISH) return Fail("English must apply once translations load");
     if (lstrcmpW(LocalizeText(L"설정"), L"Settings") != 0)
         return Fail("static UI translation must load from translations.tsv");
     if (lstrcmpW(LocalizeText(L"체력 12/30"), L"HP 12/30") != 0)

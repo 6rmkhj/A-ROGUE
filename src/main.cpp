@@ -15,6 +15,13 @@ HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 int gTermOpen;
+// 개발 빌드(-DAROGUE_DEV)이거나 실행 인자에 -dev가 있을 때만 1. 관리자 터미널의
+// 유일한 관문이다. 0이면 백틱이 아무 일도 하지 않는다.
+#ifdef AROGUE_DEV
+int gDevMode = 1;
+#else
+int gDevMode = 0;
+#endif
 wchar_t gTermLog[TERM_LOG_LINES][TERM_LOG_CAP];
 int gTermLogCount;
 wchar_t gTermInput[TERM_INPUT_MAX + 1];
@@ -24,6 +31,7 @@ static int gVolumeDragging;
 int gGuidePage;
 int gRestartArmed;
 int gCampaignResetArmed;
+int gRewardSkipArmed;
 int gFxLevel = FX_FULL;
 
 // 직접 조작 연출은 게임 판정과 분리된 마지막 사건 하나만 기억한다. 연타가 가능한
@@ -891,18 +899,29 @@ static void ClickDriveSelect(int x, int y) {
     }
 }
 
+// 보상 포기는 되돌릴 수 없다. 첫 입력은 버튼을 무장만 시키고, 같은 입력이 한 번
+// 더 와야 실제로 포기한다. 무장 중에 다른 곳을 만지면 그대로 풀린다.
+static void ArmOrConfirmRewardSkip() {
+    if (!gRewardSkipArmed) { gRewardSkipArmed = 1; PlaySfx(SFX_UI_CLICK); return; }
+    gRewardSkipArmed = 0;
+    SkipReward(&gGame);
+    PlaySfx(SFX_UI_CLICK);
+}
+
 static void ClickReward(int x, int y) {
     if (Inside(RewardRect(REWARD_REPAIR, BASE_WIDTH), x, y)) {
+        gRewardSkipArmed = 0;
         TakeRepairReward();
         return;
     }
     if (gGame.rewardIsTsr) {
         // 보스 전리품: 카드 클릭 한 번으로 즉시 상주한다.
-        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { TakeTsrReward(i); return; }
-        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
+        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; TakeTsrReward(i); return; }
+        if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ArmOrConfirmRewardSkip(); return; }
+        gRewardSkipArmed = 0;
         return;
     }
-    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
+    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
         int reward = gGame.selectedReward;
         int animated = BeginUiFx(UIFX_REWARD_FACE);
@@ -911,11 +930,13 @@ static void ClickReward(int x, int y) {
             gUiFx.shownFace.kind = (uint8_t)gGame.rewardKinds[reward];
             gUiFx.shownFace.value = (uint8_t)gGame.rewardValues[reward];
         }
+        gRewardSkipArmed = 0;
         InstallSelectedReward(&gGame, d, f);
         PlaySfx(SFX_REWARD_SET);
         return;
     }
-    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { SkipReward(&gGame); PlaySfx(SFX_UI_CLICK); }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ArmOrConfirmRewardSkip(); return; }
+    gRewardSkipArmed = 0;
 }
 
 static void ClickPrune(int x, int y) {
@@ -969,6 +990,9 @@ static int HoverId(int x, int y) {
     if (gGame.phase == PHASE_TITLE) {
         if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 0;
         return -1;
+    }
+    if (gGame.phase == PHASE_STORY) {
+        return Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) ? 40 : -1;
     }
     if (gGame.phase == PHASE_DRIVE_SELECT) {
         for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
@@ -1072,7 +1096,9 @@ static void HandleClick(int x, int y) {
             // edits can be previewed without recompiling or restarting.
             LoadTranslations();
             SetUiLanguage(i);
-            SetWindowTextW(gWindow, i == LANGUAGE_ENGLISH ? L"A:\\ROGUE · 1.44MB · English" : L"A:\\ROGUE · 1.44MB");
+            // 번역 표가 없으면 English 요청은 거부된다. 창 제목은 실제로 적용된
+            // 언어를 따라가야 하므로 요청이 아니라 결과를 읽는다.
+            SetWindowTextW(gWindow, UiLanguage() == LANGUAGE_ENGLISH ? L"A:\\ROGUE · 1.44MB · English" : L"A:\\ROGUE · 1.44MB");
             PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return;
         }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1100,7 +1126,9 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) AdvanceStoryUi();
+    // 스토리는 [다음] 버튼에서만 넘어간다. 패널 아무 곳이나 눌러 넘기면
+    // 읽는 중 잘못 누른 클릭으로 기록이 사라진다.
+    else if (gGame.phase == PHASE_STORY) { if (Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) AdvanceStoryUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
     }
@@ -1109,6 +1137,9 @@ static void HandleClick(int x, int y) {
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
     else if (IsEndScreen() && Inside(EndingRestartRect(), x, y)) ContinueFromEnd();
+    // 보상 화면을 벗어나면 무장은 남지 않는다. 다음 보상에서 첫 취소가
+    // 곧바로 포기가 되어 버리면 두 번 누르기를 넣은 뜻이 없다.
+    if (gGame.phase != PHASE_REWARD) gRewardSkipArmed = 0;
     PersistCampaignProgress();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
@@ -1219,14 +1250,15 @@ static void TermRun() {
 
 static void HandleKey(WPARAM key) {
     // 터미널은 어떤 상태에서도 열린다. 연출 중이나 정지 화면에서도 판을 봐야 한다.
-    if (key == VK_OEM_3) {
+    // 다만 개발 모드에서만이다. 배포 빌드에서는 백틱이 그냥 무시된다.
+    if (key == VK_OEM_3 && gDevMode) {
         gTermOpen = !gTermOpen;
         if (gTermOpen && gTermLogCount == 0) TermPrint(L"  help 로 명령 목록.");
         gTermInput[0] = 0; gTermInputLen = 0;
         InvalidateRect(gWindow, 0, FALSE);
         return;
     }
-    if (gTermOpen) {
+    if (gTermOpen && gDevMode) {
         // IME가 켜져 있어도 먹히도록 WM_CHAR가 아니라 가상 키에서 직접 만든다.
         if (key == VK_ESCAPE) gTermOpen = 0;
         else if (key == VK_RETURN) TermRun();
@@ -1299,13 +1331,23 @@ static void HandleKey(WPARAM key) {
         }
     } else if (gGame.phase == PHASE_REWARD) {
         if (key >= '1' && key <= '3') {
+            gRewardSkipArmed = 0;
             if (gGame.rewardIsTsr) TakeTsrReward((int)(key - '1'));
             else SelectReward(&gGame, (int)(key - '1'));
         }
-        else if (key == '4') TakeRepairReward();
-        else if (key == VK_ESCAPE) SkipReward(&gGame);
+        else if (key == '4') { gRewardSkipArmed = 0; TakeRepairReward(); }
+        // 전투의 취소는 배치 해제다. 보상에서도 먼저 고른 카드를 놓는 데 쓰고,
+        // 놓을 것이 없을 때만 포기 버튼을 무장한다. 습관적인 취소 한 번으로
+        // 보상이 사라지지 않는다.
+        else if (key == VK_ESCAPE) {
+            if (gGame.selectedReward >= 0) { gGame.selectedReward = -1; gRewardSkipArmed = 0; PlaySfx(SFX_UI_CLICK); }
+            else ArmOrConfirmRewardSkip();
+        }
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (IsEndScreen()) { if (key == 'R' || key == VK_RETURN) ContinueFromEnd(); }
+    // 보상 화면을 벗어나면 무장은 남지 않는다. 다음 보상에서 첫 취소가
+    // 곧바로 포기가 되어 버리면 두 번 누르기를 넣은 뜻이 없다.
+    if (gGame.phase != PHASE_REWARD) gRewardSkipArmed = 0;
     PersistCampaignProgress();
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
         if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;
@@ -1434,8 +1476,26 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
+// 실행 인자에 -dev(또는 --dev, /dev)가 있는지만 본다. 인자 파싱을 위해
+// CommandLineToArgvW를 끌어오면 shell32가 붙으므로 문자열에서 직접 찾는다.
+static int CommandLineHasDevFlag() {
+    const wchar_t* line = GetCommandLineW();
+    if (!line) return 0;
+    for (const wchar_t* at = line; *at; ++at) {
+        if (*at != L'-' && *at != L'/') continue;
+        if (at != line && at[-1] != L' ' && at[-1] != L'	' && at[-1] != L'"') continue;
+        const wchar_t* word = at + 1;
+        if (*word == L'-') ++word;
+        if ((word[0] == L'd' || word[0] == L'D') && (word[1] == L'e' || word[1] == L'E')
+            && (word[2] == L'v' || word[2] == L'V')
+            && (word[3] == 0 || word[3] == L' ' || word[3] == L'	')) return 1;
+    }
+    return 0;
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     SetProcessDPIAware();
+    if (CommandLineHasDevFlag()) gDevMode = 1;
     // 연출 타이머는 전부 16ms로 걸려 있지만, 시스템 틱이 기본 15.6ms라 실제로는
     // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
     // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).

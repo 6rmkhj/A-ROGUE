@@ -112,6 +112,9 @@ extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
 extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 1=한 번 더 누르면 확정
 extern int gCampaignResetArmed; // "진행도 초기화" 버튼. 런이 아니라 세이브를 지우므로 확정을 따로 받는다
+// 보상 포기 버튼. 되돌릴 수 없는 손실이라 "다시 시작"과 같은 두 번 누르기를 쓴다.
+// 보상 화면을 벗어나거나 카드를 새로 고르면 0으로 풀린다.
+extern int gRewardSkipArmed;
 
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
@@ -204,6 +207,11 @@ int NoiseFrameStep();
 // `(백틱)으로 열고 닫는다. 보스까지 가는 데 걸리는 시간을 줄이려고 넣은 개발용
 // 창이라 규칙에는 관여하지 않는다. 명령이 부르는 것은 전부 정규 규칙 함수다.
 // 커서를 깜빡이지 않으므로 리페인트를 따로 돌릴 필요가 없다.
+//
+// 배포 빌드에서는 열리지 않는다. AROGUE_DEV로 빌드했거나 실행 인자에 -dev가
+// 있을 때만 gDevMode가 서고, 그때만 백틱이 먹는다. 일반 플레이어가 실수로
+// 승리 명령을 눌러 캠페인 기록을 망치는 길을 아예 없앤다.
+extern int gDevMode;
 #define TERM_LOG_LINES 10
 #define TERM_LOG_CAP   72
 #define TERM_INPUT_MAX 40
@@ -247,6 +255,9 @@ RECT ReadButtonRect();
 RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
+// 스토리 화면의 [다음]. 패널 아무 곳이나 눌러 넘어가지 않도록 진행 입력을
+// 이 버튼 하나로 좁힌다 (엔터·스페이스는 그대로 받는다).
+RECT StoryNextRect(int width, int height);
 RECT EndingChoiceRect(int index);
 RECT EndingRestartRect();
 RECT KeybButtonRect();
