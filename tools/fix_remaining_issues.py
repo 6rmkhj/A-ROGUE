@@ -10,7 +10,7 @@ def once(s,old,new,label):
     if n!=1: raise RuntimeError(f'{label}: expected 1 got {n}')
     return s.replace(old,new,1)
 def rx(s,pat,repl,label):
-    out,n=re.subn(pat,repl,s,count=1,flags=re.S)
+    out,n=re.subn(pat,lambda m: repl.replace('\\1', m.group(1) if m.lastindex else ''),s,count=1,flags=re.S)
     if n!=1: raise RuntimeError(f'{label}: expected 1 got {n}')
     return out
 
@@ -112,7 +112,7 @@ m=m[:match.start()]+f'static void PersistCampaignProgress() {{{newbody}\n}}'+m[m
 # Ensure a fresh/new run immediately inherits discoveries.
 # BeginNewRun is compact and already centralizes every normal restart.
 m=rx(m,r'''static void BeginNewRun\(\) \{(.*?)\n\}''',
-'''static void BeginNewRun() {\1
+r'''static void BeginNewRun() {\1
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
 }''','merge codex after NewRun')
 
@@ -250,10 +250,10 @@ m=pre+tail
 # Real mouse movement returns focus ownership to the pointer.
 m=once(m,
 '''    case WM_MOUSEMOVE: {
-        POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));''',
+        gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));''',
 '''    case WM_MOUSEMOVE: {
         gKeyboardFocus = -1;
-        POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));''','mouse clears keyboard focus')
+        gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));''','mouse clears keyboard focus')
 
 # Load persistent codex at startup.
 m=once(m,
@@ -291,7 +291,7 @@ s=once(s,
 
 # #103 page 1 becomes a minimal first-play loop; detail remains on drive/codex page.
 pat=r'''static void DrawGuideCommonPage\(HDC dc, int width, const RECT& panel\) \{.*?\n\}\n\nint GuideNoiseActive'''
-repl='''static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
+repl=r'''static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
     Text(dc, left, top, L"첫 전투에 필요한 것만", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 38, middle - 28, top + 220),

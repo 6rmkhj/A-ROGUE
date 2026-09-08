@@ -51,3 +51,8 @@ void InitSettings(UserSettings* settings);
 // are clamped rather than rejected so one bad field cannot drop the rest.
 bool LoadSettings(UserSettings* settings, const wchar_t* path = 0);
 bool SaveSettings(const UserSettings* settings, const wchar_t* path = 0);
+
+// Enemy codex is intentionally independent from campaign reset/new-run state.
+// The caller supplies ENEMY_KIND_COUNT bytes and receives only 0/1 values.
+bool LoadCodex(uint8_t* scanned, int count, const wchar_t* path = 0);
+bool SaveCodex(const uint8_t* scanned, int count, const wchar_t* path = 0);

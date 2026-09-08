@@ -14,6 +14,13 @@ CampaignState gCampaign;
 // 언어·배율·전체화면·연출 강도·BGM·소리. 캠페인 세이브와 따로 두어
 // "진행도 초기화"가 환경까지 되돌리지 않게 한다.
 static UserSettings gSettings;
+// Persistent discovery state. NewRun clears GameState, so this copy is merged
+// back into each run and written independently from campaign progression.
+static uint8_t gCodex[ENEMY_KIND_COUNT];
+// TSR removals on the prune screen are staged until Continue, making a second
+// click an undo rather than an irreversible mistake.
+uint8_t gPruneTsrPending[TSR_COUNT] = {};
+static int gKeyboardFocus = -1;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
@@ -743,6 +750,9 @@ static void SyncRollAnimation() {
     gRollFloor = gGame.floor; gRollEncounter = gGame.encounter; gRollTurn = gGame.turn;
     if (gReadActive) { gReadActive = 0; KillTimer(gWindow, 1); }
     gRolled = 0;
+    // Reading is presentation, not a tax the player must pay every turn.
+    // Start it automatically; any key/click can still skip the animation.
+    BeginRead();
 }
 
 static void TickRollAnimation() {
@@ -750,7 +760,7 @@ static void TickRollAnimation() {
     for (int d = 0; d < 3; ++d) {
         if (!(gReadLanded & (1 << d)) && elapsed >= DieReadEnd(d)) { gReadLanded |= 1 << d; PlaySfxPitched(SFX_DIE_LOCK, d * 1); }
     }
-    if (elapsed >= DieReadEnd(2) + NOISE_SETTLE_MS) StopRead();
+    if (elapsed >= DieReadEnd(2)) StopRead();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
@@ -852,6 +862,7 @@ static void ClearStaleConfirmations() {
     if (gGame.phase != PHASE_REWARD) { gRewardSkipArmed = 0; gTsrArmed = -1; gFaceSwapArmed = -1; }
     if (gGame.phase != PHASE_DIRECTORY) gDirectoryArmed = -1;
     if (gGame.phase != PHASE_ENDING_CHOICE) gEndingArmed = -1;
+    if (gGame.phase != PHASE_PRUNE) ZeroMemory(gPruneTsrPending, sizeof(gPruneTsrPending));
 }
 
 static void PersistCampaignProgress() {
@@ -860,6 +871,12 @@ static void PersistCampaignProgress() {
     if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
     // 실패는 조용히 넘기지 않는다. 다음 저장이 성공하면 표시도 내려간다.
     if (changed) gSaveFailed = SaveCampaign(&gCampaign) ? 0 : 1;
+    bool codexChanged = false;
+    for (int i = 0; i < ENEMY_KIND_COUNT; ++i) {
+        if (gGame.enemyScanned[i] && !gCodex[i]) { gCodex[i] = 1; codexChanged = true; }
+        if (gCodex[i]) gGame.enemyScanned[i] = 1;
+    }
+    if (codexChanged && !SaveCodex(gCodex, ENEMY_KIND_COUNT)) gSaveFailed = 1;
 }
 
 // 세이브를 비우고 타이틀로 돌아간다. 진행 중이던 런의 clearedMask가 살아남으면
@@ -918,6 +935,7 @@ static void BeginNewRun() {
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
     // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
     BeginBootInsert(); InvalidateRect(gWindow, 0, FALSE);
+    for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
 }
 
 static int IsEndScreen() {
@@ -1113,7 +1131,13 @@ static void ClickReward(int x, int y) {
 static void ClickPrune(int x, int y) {
     int tsrCount = InstalledTsrCount(&gGame);
     for (int i = 0; i < tsrCount && i < 4; ++i) if (Inside(PruneTsrRect(i), x, y)) {
-        UninstallTsr(&gGame, InstalledTsrAt(&gGame, i)); PlaySfx(SFX_PRUNE); return;
+        int tsr = InstalledTsrAt(&gGame, i);
+        if (tsr >= 0 && tsr < TSR_COUNT) {
+            gPruneTsrPending[tsr] ^= 1;
+            PlaySfx(gPruneTsrPending[tsr] ? SFX_PRUNE : SFX_REWARD_SET);
+            InvalidateRect(gWindow, 0, FALSE);
+        }
+        return;
     }
     for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
         int undo = CanUndoPrunedFace(&gGame, d, f);
@@ -1127,7 +1151,17 @@ static void ClickPrune(int x, int y) {
         PlaySfx(undo ? SFX_REWARD_SET : SFX_PRUNE);
         return;
     }
-    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ConfirmPrune(&gGame); PlaySfx(SFX_CONFIRM); }
+    if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) {
+        uint8_t removed[TSR_COUNT] = {0};
+        for (int tsr = 0; tsr < TSR_COUNT; ++tsr) if (gPruneTsrPending[tsr] && gGame.tsrInstalled[tsr]) {
+            removed[tsr] = 1; gGame.tsrInstalled[tsr] = 0;
+        }
+        ConfirmPrune(&gGame);
+        if (gGame.phase == PHASE_PRUNE) {
+            for (int tsr = 0; tsr < TSR_COUNT; ++tsr) if (removed[tsr]) gGame.tsrInstalled[tsr] = 1;
+        } else ZeroMemory(gPruneTsrPending, sizeof(gPruneTsrPending));
+        PlaySfx(SFX_CONFIRM);
+    }
 }
 
 // 현재 페이즈에서 (x, y)가 어떤 상호작용 가능한 사각형 위에 있는지 식별하는 id를 반환한다.
@@ -1239,15 +1273,61 @@ static void TickUiFocus() {
     if (UiFocusCueDue(&gUiFocus, GetTickCount())) PlaySfx(SFX_UI_FOCUS);
 }
 
+static void HandleClick(int x, int y);
+
+static int KeyboardFocusRects(RECT* out, int cap) {
+    int n = 0;
+#define ADD_FOCUS_RECT(r) do { if (n < cap) out[n++] = (r); } while (0)
+    if (gGame.phase == PHASE_COMBAT) {
+        if (!gRolled && !gReadActive) ADD_FOCUS_RECT(ReadButtonRect());
+        if (gRolled) {
+            for (int i = 0; i < gGame.enemyCount; ++i)
+                if (gGame.enemies[i].alive && !GimmickSummonPending(i)) ADD_FOCUS_RECT(EnemyRect(i));
+            for (int i = 0; i < 3; ++i) ADD_FOCUS_RECT(DieRect(i));
+            for (int i = 0; i < SLOT_COUNT; ++i) ADD_FOCUS_RECT(SlotRect(i));
+            ADD_FOCUS_RECT(EndTurnRect());
+            if (IsTsrInstalled(&gGame, TSR_KEYB) && !gGame.keybUsedThisTurn) ADD_FOCUS_RECT(KeybButtonRect());
+        }
+    } else if (gGame.phase == PHASE_PRUNE) {
+        int tsrCount = InstalledTsrCount(&gGame);
+        for (int i = 0; i < tsrCount && i < 4; ++i) ADD_FOCUS_RECT(PruneTsrRect(i));
+        for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f)
+            if (gGame.dice[d].faces[f].kind != FACE_EMPTY || CanUndoPrunedFace(&gGame, d, f)) ADD_FOCUS_RECT(FaceGridRect(d, f));
+        ADD_FOCUS_RECT(ContinueRect(BASE_WIDTH, BASE_HEIGHT));
+    }
+#undef ADD_FOCUS_RECT
+    return n;
+}
+
+static void MoveKeyboardFocus(int delta) {
+    RECT items[32]; int count = KeyboardFocusRects(items, 32);
+    if (count <= 0) { gKeyboardFocus = -1; return; }
+    if (gKeyboardFocus < 0 || gKeyboardFocus >= count) gKeyboardFocus = delta < 0 ? count - 1 : 0;
+    else gKeyboardFocus = (gKeyboardFocus + delta + count) % count;
+    RECT r = items[gKeyboardFocus];
+    gMouse.x = (r.left + r.right) / 2; gMouse.y = (r.top + r.bottom) / 2;
+    gMouseInClient = 1; SyncUiFocus(); InvalidateRect(gWindow, 0, FALSE);
+}
+
+static int ActivateKeyboardFocus() {
+    RECT items[32]; int count = KeyboardFocusRects(items, 32);
+    if (gKeyboardFocus < 0 || gKeyboardFocus >= count) return 0;
+    RECT r = items[gKeyboardFocus]; HandleClick((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    return 1;
+}
+
 static void HandleClick(int x, int y) {
     if (gDeathActive) return;
-    if (gBootActive) { FinishBootInsert(); return; }
     if (UiFxBlocksInput()) return;
-    if (gTurnTraceActive) { FinishTurnTrace(); return; }
-    if (gDescentActive) { FinishDescent(); return; }
-    if (gDirEnterActive) { FinishDirectoryEnter(); return; }
-    if (gBossIntroActive) { FinishBossIntro(); return; }
-    if (gCombatClearActive) { FinishCombatClear(); return; }
+    int skippedOne = 0;
+    if (gBootActive) { FinishBootInsert(); skippedOne = 1; }
+    else if (gTurnTraceActive) { FinishTurnTrace(); skippedOne = 1; }
+    else if (gDescentActive) { FinishDescent(); skippedOne = 1; }
+    else if (gDirEnterActive) { FinishDirectoryEnter(); skippedOne = 1; }
+    else if (gBossIntroActive) { FinishBossIntro(); skippedOne = 1; }
+    else if (gCombatClearActive) { FinishCombatClear(); skippedOne = 1; }
+    if (skippedOne && (gDeathActive || UiFxBlocksInput() || gTurnTraceActive || gDescentActive
+        || gDirEnterActive || gBossIntroActive || gCombatClearActive || gBootActive)) return;
     if (gDeckOpen) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
         InvalidateRect(gWindow, 0, FALSE); return;
@@ -1500,6 +1580,10 @@ static void HandleKey(WPARAM key) {
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
+    if ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_PRUNE) && key == VK_TAB) {
+        MoveKeyboardFocus((GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1); return;
+    }
+    if ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_PRUNE) && key == VK_RETURN && ActivateKeyboardFocus()) return;
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
     else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
@@ -1576,6 +1660,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         return 0;
     case WM_GETMINMAXINFO: { MINMAXINFO* info = (MINMAXINFO*)lParam; info->ptMinTrackSize.x = 480; info->ptMinTrackSize.y = 320; return 0; }
     case WM_MOUSEMOVE: {
+        gKeyboardFocus = -1;
         gMouse = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         if (!gMouseInClient) {
             TRACKMOUSEEVENT track = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
@@ -1736,6 +1821,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
     timeBeginPeriod(1);
     LoadCampaign(&gCampaign);
+    LoadCodex(gCodex, ENEMY_KIND_COUNT);
     LoadTranslations();
     // 번역을 읽은 뒤라야 English 설정이 실제로 받아들여진다.
     LoadSettings(&gSettings);

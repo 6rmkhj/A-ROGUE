@@ -131,6 +131,7 @@ extern GameState gGame;
 extern HWND gWindow;
 extern POINT gMouse;
 extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
+extern uint8_t gPruneTsrPending[TSR_COUNT];
 extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
 extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 1=한 번 더 누르면 확정
 extern int gCampaignResetArmed; // "진행도 초기화" 버튼. 런이 아니라 세이브를 지우므로 확정을 따로 받는다

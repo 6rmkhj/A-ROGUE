@@ -220,3 +220,46 @@ bool SaveSettings(const UserSettings* settings, const wchar_t* overridePath) {
     Put32(bytes + 14, SettingsChecksum(bytes, 14));
     return WriteFileAtomically(path, bytes, SETTINGS_SIZE);
 }
+
+
+// ---- Persistent codex -----------------------------------------------------
+// Fixed 32-byte bitset supports up to 256 enemy kinds without tying this file
+// to game.h. Resetting AROGUE.SAV deliberately leaves AROGUE.CDX intact.
+static const uint32_t CODEX_MAGIC = 0x58444341u; // On disk: ACDX
+static const uint16_t CODEX_VERSION = 1;
+static const DWORD CODEX_SIZE = 44;
+
+static uint32_t CodexChecksum(const uint8_t* bytes) {
+    uint32_t hash = 2166136261u;
+    for (int i = 0; i < 40; ++i) hash = (hash ^ bytes[i]) * 16777619u;
+    return hash;
+}
+
+bool LoadCodex(uint8_t* scanned, int count, const wchar_t* overridePath) {
+    if (!scanned || count < 0 || count > 256) return false;
+    ZeroMemory(scanned, count);
+    wchar_t path[MAX_PATH];
+    if (!BesideExecutable(path, overridePath, L"AROGUE.CDX")) return false;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    uint8_t bytes[CODEX_SIZE + 1] = {0}; DWORD got = 0;
+    bool ok = ReadFile(file, bytes, sizeof(bytes), &got, 0) != 0;
+    CloseHandle(file);
+    uint16_t version = bytes[4] | ((uint16_t)bytes[5] << 8);
+    uint16_t savedCount = bytes[6] | ((uint16_t)bytes[7] << 8);
+    if (!ok || got != CODEX_SIZE || Get32(bytes) != CODEX_MAGIC || version != CODEX_VERSION
+        || savedCount != count || Get32(bytes + 40) != CodexChecksum(bytes)) return false;
+    for (int i = 0; i < count; ++i) scanned[i] = (uint8_t)((bytes[8 + i / 8] >> (i & 7)) & 1u);
+    return true;
+}
+
+bool SaveCodex(const uint8_t* scanned, int count, const wchar_t* overridePath) {
+    if (!scanned || count < 0 || count > 256) return false;
+    uint8_t bytes[CODEX_SIZE] = {0};
+    Put32(bytes, CODEX_MAGIC); bytes[4] = (uint8_t)CODEX_VERSION; bytes[5] = (uint8_t)(CODEX_VERSION >> 8);
+    bytes[6] = (uint8_t)count; bytes[7] = (uint8_t)(count >> 8);
+    for (int i = 0; i < count; ++i) if (scanned[i]) bytes[8 + i / 8] |= (uint8_t)(1u << (i & 7));
+    Put32(bytes + 40, CodexChecksum(bytes));
+    wchar_t path[MAX_PATH];
+    return BesideExecutable(path, overridePath, L"AROGUE.CDX") && WriteFileAtomically(path, bytes, CODEX_SIZE);
+}

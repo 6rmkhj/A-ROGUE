@@ -2859,10 +2859,13 @@ static void DrawPrune(HDC dc, int width, int height) {
             int tsr = InstalledTsrAt(&gGame, i);
             if (tsr < 0) break;
             RECT r = PruneTsrRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
-            Panel(dc, r, hover ? RGB(46, 28, 32) : C_PANEL, hover ? C_RED : C_LINE);
-            TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name, (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
-            wsprintfW(b, hover ? L"%dB · 종료" : L"%dB", TSR_INFO[tsr].cost);
-            TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+            int pending = gPruneTsrPending[tsr] != 0;
+            Panel(dc, r, pending ? RGB(58, 29, 32) : hover ? RGB(46, 28, 32) : C_PANEL, pending || hover ? C_RED : C_LINE);
+            TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name,
+                pending ? C_DIM : (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
+            if (pending) wsprintfW(b, L"%dB · 삭제 예정 · 다시 클릭해 취소", TSR_INFO[tsr].cost);
+            else wsprintfW(b, hover ? L"%dB · 삭제 예약" : L"%dB", TSR_INFO[tsr].cost);
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, pending || hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
     DrawFaceGrid(dc, 2); RECT confirm = ContinueRect(width, height); int faces = NonEmptyFaceCount(&gGame);
@@ -3073,28 +3076,23 @@ static const wchar_t* PatternRoleLabel(int pattern) {
 
 static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
-    Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
-    // 판독이 전투 턴의 첫 입력이다. 이것이 빠지면 나머지 안내대로 눌러도
-    // 아무 일도 일어나지 않으므로 1번 자리에 둔다.
-    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 148),
-        L"1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 162, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 194, middle - 28, top + 308),
-        L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 322, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 354, middle - 28, panel.bottom - 52),
-        L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top, L"첫 전투에 필요한 것만", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 38, middle - 28, top + 220),
+        L"1. 턴이 시작되면 주사위가 자동 판독됩니다.\n   연출은 클릭/키로 즉시 넘길 수 있습니다.\n2. 주사위를 클릭하거나 1·2·3으로 선택합니다.\n3. 원하는 슬롯을 클릭해 배치합니다.\n4. 공격할 적을 클릭합니다.\n5. 스페이스 키로 턴을 실행합니다.",
+        C_TEXT, gFontMedium, DT_WORDBREAK);
+    Text(dc, left, top + 250, L"키보드만으로 플레이", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 286, middle - 28, panel.bottom - 52),
+        L"Tab / Shift+Tab  전투·정리 항목 이동\nEnter  현재 항목 선택/확정\n1·2·3  주사위 바로 선택\nSpace  턴 실행\nEsc  선택 해제·창 닫기\nF1  이 가이드 다시 열기 · F3  보유 면 확인",
+        C_TEXT, gFontSmall, DT_WORDBREAK);
 
-    Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"볼륨 선택  손상 2종 + 특성 1개 + 전용 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
-    // 여섯 줄이 들어가야 한다. 페이지 이동 버튼이 y686부터라 680까지 쓸 수 있다.
-    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 52),
-        L"R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, middle, top, L"나머지는 필요할 때", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 38, panel.right - 28, top + 188),
+        L"손상·격리·조각화 같은 상태는 실제로 등장할 때 카드와 배너에 표시됩니다.\n\n보상과 TSR은 선택 화면에서 결과와 비용을 먼저 보여 주며, 되돌릴 수 없는 선택은 한 번 더 확인합니다.",
+        C_TEXT, gFontMedium, DT_WORDBREAK);
+    Text(dc, middle, top + 220, L"상세 정보 위치", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(middle, top + 256, panel.right - 28, panel.bottom - 52),
+        L"가이드 2/2  현재 드라이브의 적·보스 도감\nF3  보유한 주사위 면과 특수 능력\n전투 카드  적 의도·상태·기믹 예고\n정리 화면  용량과 삭제 결과\n\n처음부터 전부 외울 필요가 없습니다. 화면에 지금 필요한 규칙만 따라가면 됩니다.",
+        C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 int GuideNoiseActive() {
