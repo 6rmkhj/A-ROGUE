@@ -3005,7 +3005,7 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
         L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
     Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
-        L"화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200\n숫자는 받는 오염 피해 %, 카드마다 다른 등급", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
     TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),

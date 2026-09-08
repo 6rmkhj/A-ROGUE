@@ -135,6 +135,7 @@ struct BossRuntime {
     uint8_t nextLockedSlot[SLOT_COUNT];  // 다음 턴 잠금 예고
     int8_t offlineDie;                   // 이번 턴 오프라인 주사위 (-1 없음)
     int8_t nextOfflineDie;               // 다음 턴 오프라인 예고 (-1 없음)
+    int8_t stolenValue;                  // ZERO.DAY가 빼앗아 쓰는 면 출력 (0 = 없음)
     int8_t bestSlotLastTurn;             // 직전 턴 최고 출력 슬롯 (KERNEL.PANIC)
     int8_t nextTargetDie;                // 격리·삭제 예고 대상 (-1 없음)
     int8_t nextTargetFace;

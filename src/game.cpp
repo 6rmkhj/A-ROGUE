@@ -524,8 +524,10 @@ static void GimmickTurnBegin(GameState* game) {
         if (boss->reversed) RecordFx(game, boss->gimmick, -1, -1);
         break;
     case GIMMICK_TIMEOUT:
+        // 강화: 역전이 한 턴이 아니라 3턴 이어진다. countdown이 0 이하인 동안이
+        // 역전 구간이고, 턴 끝에서 하나씩 올라와 0을 넘으면 정상으로 돌아간다.
         if (boss->countdown <= 0) boss->reversed = 1;
-        boss->nextReversed = (boss->countdown == 1);
+        boss->nextReversed = (boss->countdown == 1 || boss->countdown < 0);
         // 카운트다운은 매턴 보여 준다. 0이 되는 턴만 정지 연출로 커진다.
         RecordFx(game, GIMMICK_TIMEOUT, boss->countdown, boss->reversed ? 1 : 0);
         break;
@@ -843,15 +845,25 @@ static void GimmickTurnEnd(GameState* game) {
     }
     case GIMMICK_MASTER_BACKUP:
         if (boss->restoresUsed == 0 && enemy->hp * 100 < enemy->maxHp * gi->p1) {
+            int lost = enemy->maxHp - enemy->hp;
             if (RestoreBossHp(game, enemy, boss->checkpointHp, gi->p3, L"마스터 백업") > 0) {
                 boss->restoresUsed = 1;
+                // 되감기가 벽이 된다. 복원 전에 끝내야 할 이유가 커진다.
+                int shield = lost / 4;   // 절반은 방어도 14가 되어 과했다 (D:\ 승률 135 -> 89)
+                if (shield > 0) {
+                    enemy->block += shield;
+                    wsprintfW(buffer, L"마스터 백업: 복원한 만큼 방어도 +%d.", shield);
+                    PushLog(game, buffer);
+                }
                 RecordFx(game, GIMMICK_MASTER_BACKUP, -1, -1);
             }
         }
         break;
     case GIMMICK_TIMEOUT:
         if (boss->reversed) {
-            boss->countdown = gi->p1;
+            // 역전 구간을 3턴 유지한 뒤에야 카운트다운이 되돌아온다.
+            if (boss->countdown > -2) { --boss->countdown; }
+            else { boss->countdown = (int8_t)gi->p1; boss->reversed = 0; }
         } else {
             if (boss->damageThisTurn >= gi->p2 && boss->countdown < gi->p1) {
                 ++boss->countdown;
@@ -916,10 +928,25 @@ static void GimmickTurnEnd(GameState* game) {
         }
         ++boss->gauge;
         if (boss->gauge >= gi->p1) {
+            // 삭제 직전의 출력을 기억해 두었다가 보스의 무기로 쓴다.
+            int stolen = 0;
+            if (boss->nextTargetDie >= 0 && boss->nextTargetFace >= 0)
+                stolen = FacePower(&game->dice[boss->nextTargetDie].faces[boss->nextTargetFace]);
             FireQuarantine(game, 1, 0);
+            if (stolen > 0 && stolen > boss->stolenValue) {
+                boss->stolenValue = (int8_t)stolen;
+                wsprintfW(buffer, L"제로데이: 삭제한 면 %d를 자기 코드로 씁니다. 한 턴 %d+ 피해로 되찾습니다.", stolen, stolen);
+                PushLog(game, buffer);
+            }
             boss->gauge = 0;
         } else if (boss->gauge == gi->p1 - 1 && boss->nextTargetDie < 0) {
             AnnounceQuarantineTarget(game, 1);
+        }
+        // 빼앗긴 출력만큼 한 턴에 피해를 주면 되찾는다.
+        if (boss->stolenValue > 0 && boss->damageThisTurn >= boss->stolenValue) {
+            wsprintfW(buffer, L"제로데이: 빼앗긴 코드 %d를 되찾았습니다.", boss->stolenValue);
+            PushLog(game, buffer);
+            boss->stolenValue = 0;
         }
         break;
     default: break;
@@ -1673,6 +1700,13 @@ static void PlanMob(GameState* game, EnemyState* enemy, int enemyIndex) {
 
 // 패턴이 의도를 정한 뒤 특성이 덧씌운다. 예고를 깨지 않도록, 바뀐 결과가 곧
 // 카드에 그대로 표시되는 값이어야 한다.
+// ZERO.DAY가 빼앗은 면 출력은 그대로 보스의 공격에 얹힌다.
+static void BossStolenPlan(GameState* game, EnemyState* enemy) {
+    if (game->boss.stolenValue <= 0) return;
+    if (enemy->intent == INTENT_ATTACK || enemy->intent == INTENT_HEAVY || enemy->intent == INTENT_CORRUPT)
+        enemy->intentValue += game->boss.stolenValue;
+}
+
 static void MobTraitPlan(GameState* game, EnemyState* enemy) {
     const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
     switch (enemy->trait) {
@@ -1708,7 +1742,7 @@ static void MobTraitPlan(GameState* game, EnemyState* enemy) {
 }
 
 static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
-    if (IsBossKind(enemy->kind)) PlanBoss(game, enemy);
+    if (IsBossKind(enemy->kind)) { PlanBoss(game, enemy); BossStolenPlan(game, enemy); }
     else { PlanMob(game, enemy, enemyIndex); MobTraitPlan(game, enemy); }
     // 소환된 개체는 본체보다 약하다. 방어 의도는 깎지 않는다 (0으로 무너진다).
     if (enemy->power > 0 && enemy->power < 100 && enemy->intent != INTENT_GUARD) {
@@ -2356,9 +2390,14 @@ static void ResolveEnemies(GameState* game) {
                 game->playerBlock -= absorbed * 2;
                 damage -= absorbed;
             } else if (enemy->trait == TRAIT_FIRST && game->turn == 1) {
-                // 자동 실행: 1턴은 준비하기 전에 실행된다. 그 턴 방어도를 무시한다.
-                // 턴 순서를 바꾸지 않고 "먼저 맞는다"는 체감만 낸다.
-                PushLog(game, L"자동 실행: 준비 전에 실행되어 방어도가 소용없습니다.");
+                // 자동 실행: 1턴은 준비하기 전에 실행된다. 방어도를 절반만 인정한다.
+                // 턴 순서를 바꾸지 않고 "먼저 맞는다"는 체감만 낸다. 완전 무시는
+                // 1턴을 회피 불가로 만들어 E:\ 승률을 137 -> 112로 떨어뜨렸다.
+                int usable = game->playerBlock / 2;
+                absorbed = usable < damage ? usable : damage;
+                game->playerBlock -= absorbed * 2;
+                damage -= absorbed;
+                PushLog(game, L"자동 실행: 준비 전에 실행되어 방어도가 절반만 듭니다.");
             } else {
                 absorbed = game->playerBlock < damage ? game->playerBlock : damage;
                 game->playerBlock -= absorbed;
