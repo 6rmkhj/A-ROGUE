@@ -16,5 +16,12 @@ if old_seed in s:
 elif new_seed not in s:
     raise RuntimeError('drive difficulty patch shape changed')
 
+old_rect = "s=once(s,'RECT DriveCardRect(int index);',"
+new_rect = "s=once(s,'RECT DriveCardRect(int i);',"
+if old_rect in s:
+    s = s.replace(old_rect, new_rect, 1)
+elif new_rect not in s:
+    raise RuntimeError('drive rect prototype patch shape changed')
+
 p.write_text(s, encoding='utf-8', newline='\n')
 print('final gameplay patch generator prepared')
