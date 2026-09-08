@@ -1004,6 +1004,21 @@ static uint32_t CampaignChoiceRandom(uint8_t clearedMask) {
     return x ? x : 0x51ED270Bu;
 }
 
+void SetReplayDrivePage(GameState* game, int page) {
+    if (!game || (game->clearedMask & 0x3F) != 0x3F) return;
+    static const int pages[3][3] = {
+        {DRIVE_FINAL, 0, 1},
+        {2, 3, 4},
+        {5, DRIVE_FINAL, 0}
+    };
+    page %= 3; if (page < 0) page += 3;
+    game->driveChoiceCount = 3;
+    for (int i = 0; i < 3; ++i) {
+        game->driveChoices[i] = pages[page][i];
+        game->driveDifficulty[i] = pages[page][i] == DRIVE_FINAL ? DIFF_EXPERT : DIFF_INTERMEDIATE;
+    }
+}
+
 static void PickDriveChoices(GameState* game, uint8_t clearedMask) {
     int remaining[DRIVE_SELECTABLE_COUNT], remainingCount = 0;
     game->driveChoiceCount = 0;
@@ -2917,10 +2932,18 @@ void UninstallTsr(GameState* game, int tsrIndex) {
     PushLog2(game, L"%s 종료. 사용 %dB.", TSR_INFO[tsrIndex].name, UsedBytes(game));
 }
 
-// KEYB: 판독이 끝난 뒤 턴마다 한 번, 선택한 주사위를 다시 굴린다.
+// A deeper run gains one tactical reroll per turn even without KEYB. KEYB keeps
+// the option available from floor 1, so the decision structure evolves after
+// the opening floor without invalidating the resident program's early utility.
+int TacticalRerollAvailable(const GameState* game) {
+    if (!game || game->phase != PHASE_COMBAT || game->keybUsedThisTurn) return 0;
+    return IsTsrInstalled(game, TSR_KEYB) || game->floor >= 1;
+}
+
+// KEYB / tactical reroll: after reveal, reroll one selected die once per turn.
 void KeybReroll(GameState* game, int dieIndex) {
-    if (game->phase != PHASE_COMBAT || !IsTsrInstalled(game, TSR_KEYB)) return;
-    if (game->keybUsedThisTurn || dieIndex < 0 || dieIndex >= 3) return;
+    if (!TacticalRerollAvailable(game)) return;
+    if (dieIndex < 0 || dieIndex >= 3) return;
     game->dice[dieIndex].rolledFace = (uint8_t)RandomRange(game, 6);
     game->keybUsedThisTurn = 1;
     ApplyFragmentationIfAllowed(game);

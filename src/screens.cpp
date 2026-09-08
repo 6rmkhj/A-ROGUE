@@ -47,6 +47,8 @@ RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 RECT BgmToggleRect() { return MakeRect(600, 420, 675, 452); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT CampaignResetRect() { return MakeRect(560, 658, 840, 700); }
+RECT ReplayPrevRect() { return MakeRect(370, 650, 545, 688); }
+RECT ReplayNextRect() { return MakeRect(575, 650, 750, 688); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
 
 // 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
@@ -1239,7 +1241,7 @@ static void DrawCombat(HDC dc, int width, int height) {
     if (gPreview.valid && gPreview.combatEnds && !gPreview.uncertain && !gPreview.playerDies && FxDecorOn())
         DrawOrbitCorners(dc, end, (int)(GetTickCount() % 2400), C_GREEN, FxScale(85));
     TextRect(dc, end, L"실행 [스페이스]", gRolled ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (IsTsrInstalled(&gGame, TSR_KEYB)) {
+    if (TacticalRerollAvailable(&gGame) || IsTsrInstalled(&gGame, TSR_KEYB)) {
         RECT keyb = KeybButtonRect();
         int canReroll = gRolled && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0;
         int hoverKeyb = canReroll && Inside(keyb, gMouse.x, gMouse.y);
@@ -1278,9 +1280,18 @@ static void DrawDriveModifier(HDC dc, const RECT& card, int top, int modifier) {
 
 static void DrawDriveSelect(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_DRIVE_SELECT, C_BLUE, width, height);
+    if ((gGame.clearedMask & 0x3F) == 0x3F) {
+        TextRect(dc, MakeRect(280, 116, width - 280, 146), L"캠페인 복구 완료 · 모든 일반 볼륨을 재플레이할 수 있습니다", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        RECT prev = ReplayPrevRect(), next = ReplayNextRect();
+        int hoverPrev = Inside(prev, gMouse.x, gMouse.y), hoverNext = Inside(next, gMouse.x, gMouse.y);
+        Panel(dc, prev, hoverPrev ? RGB(28, 39, 48) : C_PANEL_2, hoverPrev ? C_BLUE : C_LINE);
+        Panel(dc, next, hoverNext ? RGB(28, 39, 48) : C_PANEL_2, hoverNext ? C_BLUE : C_LINE);
+        TextRect(dc, prev, L"◀ 이전 볼륨", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, next, L"다음 볼륨 ▶", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     if (!gGame.driveChoiceCount) {
         TextRect(dc, MakeRect(40, 284, width - 40, 328), L"모든 일반 볼륨을 복구했습니다.", C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
-        TextRect(dc, MakeRect(40, 344, width - 40, 382), L"추가로 마운트할 볼륨이 없습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(40, 344, width - 40, 382), L"좌우 화살표 또는 아래 버튼으로 복구한 볼륨을 다시 마운트할 수 있습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
         return;
     }
     TextRect(dc, MakeRect(0, 78, width, 102), L"감염된 저장소 감지  →  [현재: 탐색 볼륨 선택]  →  마운트  →  전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);

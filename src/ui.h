@@ -143,6 +143,7 @@ extern int gRewardSkipArmed;
 extern int gSaveFailed;
 extern int gSettingsSaveFailed;
 extern int gCampaignCorrupt;
+int CampaignBestFloor(int drive);
 
 // 되돌릴 수 없는 선택을 고르는 단계와 확정하는 단계로 나눈다. 각 값은 아직
 // 확정하지 않은 후보의 번호이고, -1은 "고른 것 없음"이다. 첫 입력은 후보를
@@ -288,7 +289,9 @@ RECT RestartButtonRect();
 RECT CampaignResetRect();
 RECT FxLevelRect(int index);
 RECT StartButtonRect(int width, int height);
-RECT DriveCardRect(int i);
+RECT DriveCardRect(int index);
+RECT ReplayPrevRect();
+RECT ReplayNextRect();
 RECT DirectoryChoiceRect(int i);
 RECT EnemyRect(int i);
 RECT SlotRect(int i);

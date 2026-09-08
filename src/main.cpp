@@ -21,6 +21,7 @@ static uint8_t gCodex[ENEMY_KIND_COUNT];
 // click an undo rather than an irreversible mistake.
 uint8_t gPruneTsrPending[TSR_COUNT] = {};
 static int gKeyboardFocus = -1;
+static int gReplayPage;
 HWND gWindow;
 POINT gMouse;
 int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
@@ -881,6 +882,7 @@ static int CampaignSaveExistsBesideExecutable() {
 
 static void PersistCampaignProgress() {
     bool changed = RecordCampaignClears(&gCampaign, gGame.clearedMask);
+    if (gGame.selectedDrive >= 0 && gGame.selectedDrive < 6 && RecordCampaignReach(&gCampaign, gGame.selectedDrive, gGame.floor)) changed = true;
     if (gGame.finalVolumeCleared && !gCampaign.finalCleared) { gCampaign.finalCleared = 1; changed = true; }
     if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
     // 실패는 조용히 넘기지 않는다. 다음 저장이 성공하면 표시도 내려간다.
@@ -895,6 +897,10 @@ static void PersistCampaignProgress() {
 
 // 세이브를 비우고 타이틀로 돌아간다. 진행 중이던 런의 clearedMask가 살아남으면
 // 다음 클리어가 지운 조각을 다시 써 넣게 되므로, 런까지 함께 끝낸다.
+int CampaignBestFloor(int drive) {
+    return drive >= 0 && drive < 6 ? gCampaign.bestFloor[drive] : 0;
+}
+
 static void ResetCampaignProgress() {
     FinishDeath();
     FinishDirectoryEnter();
@@ -949,6 +955,7 @@ static void SyncAudioScene() {
 }
 
 static void BeginNewRun() {
+    gReplayPage = 0;
     FinishDeath();
     FinishDirectoryEnter();
     gUiFxPendingDescent = -1;
@@ -992,15 +999,15 @@ static void ExecuteCombatTurn() {
 }
 
 static void KeybRerollSelected() {
-    if (!gRolled || gGame.keybUsedThisTurn || gGame.selectedDie < 0) return;
-    if (!IsTsrInstalled(&gGame, TSR_KEYB)) return;
+    if (!gRolled || gGame.selectedDie < 0) return;
+    if (!TacticalRerollAvailable(&gGame)) return;
     KeybReroll(&gGame, gGame.selectedDie);
     PlaySfxPitched(SFX_DIE_LOCK, 3);
 }
 
 static void ClickCombat(int x, int y) {
     if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
-    if (IsTsrInstalled(&gGame, TSR_KEYB) && Inside(KeybButtonRect(), x, y)) { KeybRerollSelected(); return; }
+    if (TacticalRerollAvailable(&gGame) && Inside(KeybButtonRect(), x, y)) { KeybRerollSelected(); return; }
     if (!gRolled) return;
     for (int i = 0; i < gGame.enemyCount; ++i) if (!GimmickSummonPending(i) && Inside(EnemyRect(i), x, y)) { SelectEnemy(&gGame, i); PlaySfx(SFX_TARGET); return; }
     for (int i = 0; i < 3; ++i) if (Inside(DieRect(i), x, y)) { gGame.selectedDie = i; PlaySfxPitched(SFX_DIE_PICK, i * 2); return; }
@@ -1079,7 +1086,20 @@ static void ClickDirectory(int x, int y) {
     gDirectoryArmed = -1;
 }
 
+static void CycleReplayPage(int delta) {
+    if ((gGame.clearedMask & 0x3F) != 0x3F) return;
+    gReplayPage = (gReplayPage + delta) % 3;
+    if (gReplayPage < 0) gReplayPage += 3;
+    SetReplayDrivePage(&gGame, gReplayPage);
+    PlaySfx(SFX_UI_CLICK);
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
 static void ClickDriveSelect(int x, int y) {
+    if ((gGame.clearedMask & 0x3F) == 0x3F) {
+        if (Inside(ReplayPrevRect(), x, y)) { CycleReplayPage(-1); return; }
+        if (Inside(ReplayNextRect(), x, y)) { CycleReplayPage(1); return; }
+    }
     for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
         if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, i); }
@@ -1624,7 +1644,8 @@ static void HandleKey(WPARAM key) {
         }
     }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
-        if (key >= '1' && key <= '0' + gGame.driveChoiceCount) {
+        if ((gGame.clearedMask & 0x3F) == 0x3F && (key == VK_LEFT || key == VK_RIGHT)) { CycleReplayPage(key == VK_LEFT ? -1 : 1); }
+        else if (key >= '1' && key <= '0' + gGame.driveChoiceCount) {
             SelectDrive(&gGame, (int)(key - '1'));
             if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, (int)(key - '1')); }
         }

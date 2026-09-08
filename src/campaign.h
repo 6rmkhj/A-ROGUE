@@ -9,6 +9,8 @@ struct CampaignState {
     uint8_t cleared[6];
     uint8_t finalCleared;
     uint8_t endingSeen[3];
+    // 0 = never mounted, 1..3 = highest reached floor. This survives failed runs.
+    uint8_t bestFloor[6];
     uint32_t checksum;
 };
 
@@ -20,6 +22,8 @@ bool RecordCampaignClears(CampaignState* campaign, uint8_t clearedMask);
 uint8_t CampaignSeenEndingMask(const CampaignState* campaign);
 // Out-of-range endings are ignored and report no change.
 bool RecordCampaignEnding(CampaignState* campaign, int ending);
+// Records partial progress even when the run later fails. floor is zero-based.
+bool RecordCampaignReach(CampaignState* campaign, int drive, int floor);
 
 // Null path means AROGUE.SAV beside the executable, never the working directory.
 // Load failure resets to a fresh campaign. Failures are silent and return false.
