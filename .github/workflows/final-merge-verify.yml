@@ -1,0 +1,31 @@
+name: Final merge verification
+
+on:
+  push:
+    branches:
+      - fix/all-open-issues-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: ${{ !contains(github.event.head_commit.message, '[final-verify-passed]') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/all-open-issues-20260908
+      - name: Build and run regression suites
+        shell: cmd
+        run: build-msvc.bat
+      - name: Remove verification workflow after success
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/final-merge-verify.yml
+          git add -A
+          git commit -m "ci: final merge verification passed [final-verify-passed]"
+          git push origin HEAD:fix/all-open-issues-20260908
