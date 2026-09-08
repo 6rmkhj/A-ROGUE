@@ -17,7 +17,9 @@ repls = {
 '''        if (remaining <= 3 && seenVolumes != ((~mask) & 63))
             return Fail("late campaign must expose every remaining volume at once");
         if (mask == 0 && !(seenGrades & (1 << DIFF_BEGINNER)))
-            return Fail("a fresh campaign must always offer beginner difficulty");'''
+            return Fail("a fresh campaign must always offer beginner difficulty");''',
+'''    AssignDieToSlot(&corrupted, 0, SLOT_ATTACK); EndTurn(&corrupted);''':
+'''    if (!Strike(&corrupted)) return Fail("corrupted clear fixture needs an unquarantined attack die");'''
 }
 for old,new in repls.items():
     if s.count(old) != 1:
