@@ -154,8 +154,14 @@ void LoadTranslations() {
     }
 }
 
+int TranslationsLoaded() { return gTranslations.empty() ? 0 : 1; }
+
 void SetUiLanguage(int language) {
-    if (language >= 0 && language < LANGUAGE_COUNT) gUiLanguage = language;
+    if (language < 0 || language >= LANGUAGE_COUNT) return;
+    // Without the table English would fall back to Korean line by line, which
+    // reads as a broken setting rather than a missing file. Refuse the switch.
+    if (language == LANGUAGE_ENGLISH && !TranslationsLoaded()) return;
+    gUiLanguage = language;
 }
 
 int UiLanguage() { return gUiLanguage; }

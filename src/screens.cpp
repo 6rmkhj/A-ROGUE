@@ -66,6 +66,8 @@ void ApplyFullscreen(int enable) {
     }
 }
 
+int WindowedScale() { return gWindowedScale; }
+
 // BASE_WIDTH x BASE_HEIGHT 캔버스를 percent%로 표시할 창 크기를 계산해 적용한다 (창 모드에서만 의미가 있다).
 void ApplyWindowedScale(int percent) {
     gWindowedScale = percent;
@@ -150,13 +152,22 @@ static void DrawSettings(HDC dc, int width, int height) {
 
     Text(dc, 84, 132, L"언어", C_YELLOW, gFontMedium);
     static const wchar_t* const LANGUAGE_NAMES[LANGUAGE_COUNT] = {L"한국어", L"English"};
+    // translations.tsv가 없으면 English를 골라도 한국어가 그대로 나온다. 고를 수
+    // 있게 두면 설정이 고장난 것처럼 보이므로 잠그고 이유를 적는다.
+    int englishReady = TranslationsLoaded();
     for (int i = 0; i < LANGUAGE_COUNT; ++i) {
-        RECT r = LanguageOptionRect(i); int active = UiLanguage() == i; int hover = Inside(r, gMouse.x, gMouse.y);
+        RECT r = LanguageOptionRect(i); int active = UiLanguage() == i;
+        int usable = i != LANGUAGE_ENGLISH || englishReady;
+        int hover = usable && Inside(r, gMouse.x, gMouse.y);
         Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2,
             active ? C_GREEN : hover ? C_BLUE : C_LINE);
-        TextRect(dc, r, LANGUAGE_NAMES[i], active ? C_GREEN : C_TEXT, gFontMedium,
+        TextRect(dc, r, LANGUAGE_NAMES[i], active ? C_GREEN : usable ? C_TEXT : C_DIM, gFontMedium,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
+    if (!englishReady)
+        TextRect(dc, MakeRect(84, 208, panel.right - 30, 226),
+            L"translations.tsv를 찾지 못해 English를 쓸 수 없습니다. 실행 파일과 같은 폴더에 두십시오.",
+            C_RED, gFontSmall, DT_SINGLELINE);
 
     Text(dc, 84, 228, L"화면 배율", C_YELLOW, gFontMedium);
     for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) {
@@ -1481,9 +1492,12 @@ static void DrawDirectoryCard(HDC dc, int index) {
     const DirectoryChoice* choice = &gGame.directory.choices[index];
     const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(choice->kind);
     int hover = Inside(r, gMouse.x, gMouse.y);
+    int armed = gDirectoryArmed == index;
     COLORREF accent = info ? (COLORREF)info->color : C_LINE;
-    Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? accent : C_LINE);
-    DrawCardMotion(dc, r, accent, index, hover);
+    Panel(dc, r, armed ? MixColor(C_PANEL, accent, 26) : hover ? RGB(24, 37, 46) : C_PANEL,
+        armed || hover ? accent : C_LINE);
+    DrawCardMotion(dc, r, accent, index, armed || hover);
+    if (armed) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), accent, 2);
     if (!info) return;
 
     wchar_t b[192];
@@ -1522,8 +1536,11 @@ static void DrawDirectoryCard(HDC dc, int index) {
     TextRect(dc, MakeRect(r.left + 108, r.top + 360, r.right - 16, r.top + 382), b,
         info->rewardTier ? C_YELLOW : C_TEXT, gFontSmall, DT_RIGHT | DT_SINGLELINE);
 
+    // 진입은 되돌릴 수 없다. 세워 둔 카드만 확정 문구를 달고, 나머지는 고르는
+    // 동작이라는 것을 문구로 밝힌다.
     TextRect(dc, MakeRect(r.left + 12, r.bottom - 32, r.right - 12, r.bottom - 10),
-        hover ? L"클릭하여 진입" : L"클릭 또는 숫자 키", hover ? accent : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        armed ? L"한 번 더 누르면 진입 · [취소]로 해제" : hover ? L"클릭하여 선택" : L"클릭 또는 숫자 키",
+        armed ? accent : hover ? accent : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawDirectorySelect(HDC dc, int width, int height) {
@@ -1555,7 +1572,10 @@ static void DrawDirectorySelect(HDC dc, int width, int height) {
     Text(dc, 120, 664, destination, C_DIM, gFontMedium);
 
     TextRect(dc, MakeRect(0, height - 52, width, height - 28),
-        L"[1] / [2] 또는 디렉터리를 클릭하십시오  ·  선택지는 다시 뽑히지 않습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        gDirectoryArmed >= 0
+            ? L"고른 디렉터리를 한 번 더 누르면 진입합니다  ·  [취소]로 선택을 해제할 수 있습니다"
+            : L"[1] / [2] 또는 디렉터리를 클릭해 고르십시오  ·  선택지는 다시 뽑히지 않습니다",
+        gDirectoryArmed >= 0 ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawDirectorySelectionExit(HDC dc, int width, int height, int elapsed) {
@@ -2504,10 +2524,13 @@ RECT RewardRect(int i, int width) {
 int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 RECT FaceGridRect(int die, int face) { int left = 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
+RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 130, height - 156, width / 2 + 130, height - 112); }
 // 최종 명령 카드 3장. 폭이 좁아진 만큼 세로로 늘려 두 줄짜리 보존·상실 설명이
 // 카드 아래에서 잘리지 않게 한다 (아래 DrawEndingChoice의 오프셋과 함께 봐야 한다).
 RECT EndingChoiceRect(int index) { int left = 32 + index * 360; return MakeRect(left, 268, left + 336, 600); }
 RECT EndingRestartRect() { return MakeRect(410, 650, 710, 700); }
+// 최종 명령의 확정 버튼. 카드가 후보를 세우고 실행은 여기서만 일어난다.
+RECT EndingConfirmRect() { return MakeRect(410, 644, 710, 694); }
 
 static void BuildRecoveredCommand(uint8_t mask, wchar_t* text, int capacity) {
     if (capacity <= 0) return;
@@ -2562,7 +2585,11 @@ static void DrawStory(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), lines[i], lineColor, gFontMedium, DT_WORDBREAK);
         y += 54;
     }
-    TextRect(dc, MakeRect(panel.left, panel.bottom - 54, panel.right, panel.bottom - 20), L"[ENTER] CONTINUE", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 진행은 이 버튼과 엔터·스페이스뿐이다. 읽는 중에 패널을 잘못 눌러도
+    // 기록이 넘어가지 않는다.
+    RECT next = StoryNextRect(width, height); int hoverNext = Inside(next, gMouse.x, gMouse.y);
+    Panel(dc, next, hoverNext ? RGB(28, 70, 57) : C_PANEL_2, hoverNext ? C_GREEN : C_LINE);
+    TextRect(dc, next, L"다음 [ENTER]", hoverNext ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 // 최종 명령 카드의 강조색. 결과 화면도 같은 색을 써야 하므로 한 곳에 모아 둔다.
@@ -2589,9 +2616,12 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     };
     for (int i = 0; i < ENDING_COUNT; ++i) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
+        int armed = gEndingArmed == i;
         COLORREF accent = EndingAccent(i);
-        Panel(dc, r, hover ? MixColor(C_PANEL, accent, 18) : C_PANEL, hover ? accent : C_LINE);
-        DrawCardMotion(dc, r, accent, i, hover);
+        Panel(dc, r, armed ? MixColor(C_PANEL, accent, 30) : hover ? MixColor(C_PANEL, accent, 18) : C_PANEL,
+            armed || hover ? accent : C_LINE);
+        DrawCardMotion(dc, r, accent, i, armed || hover);
+        if (armed) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), accent, 2);
         TextRect(dc, MakeRect(r.left + 16, r.top + 20, r.right - 16, r.top + 56), title[i], accent, gFontLarge, DT_CENTER | DT_SINGLELINE);
         if (gGame.seenEndingMask & (1u << i))
             TextRect(dc, MakeRect(r.left + 16, r.top + 58, r.right - 16, r.top + 78), L"기록됨", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2602,7 +2632,21 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
         Text(dc, r.left + 26, r.top + 222, L"닫힌 것", C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 26, r.top + 246, r.right - 22, r.bottom - 16), lose[i], C_DIM, gFontSmall, DT_WORDBREAK);
     }
-    TextRect(dc, MakeRect(0, 612, width, 644), L"선택한 명령은 되돌릴 수 없습니다.", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 카드는 후보를 세우기만 한다. 실행은 아래 버튼 하나에서만 일어난다.
+    TextRect(dc, MakeRect(0, 610, width, 636),
+        gEndingArmed >= 0 ? L"선택한 명령은 되돌릴 수 없습니다 · [취소]로 다시 고를 수 있습니다"
+                          : L"선택한 명령은 되돌릴 수 없습니다 · 먼저 카드를 고르십시오",
+        C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    RECT confirm = EndingConfirmRect();
+    int ready = gEndingArmed >= 0 && gEndingArmed < ENDING_COUNT;
+    COLORREF accent = ready ? EndingAccent(gEndingArmed) : C_LINE;
+    int hoverConfirm = ready && Inside(confirm, gMouse.x, gMouse.y);
+    Panel(dc, confirm, ready ? MixColor(C_PANEL, accent, hoverConfirm ? 40 : 24) : C_PANEL_2, ready ? accent : C_LINE);
+    wchar_t label[96];
+    static const wchar_t* const COMMAND_NAMES[ENDING_COUNT] = {L"RESTORE HOST", L"EXEC ROGUE", L"MERGE SELF"};
+    if (ready) wsprintfW(label, L"%s 실행 [ENTER]", COMMAND_NAMES[gEndingArmed]);
+    else lstrcpyW(label, L"명령을 선택하십시오");
+    TextRect(dc, confirm, label, ready ? accent : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawFaceGrid(HDC dc, int mode) {
@@ -2611,13 +2655,19 @@ static void DrawFaceGrid(HDC dc, int mode) {
         for (int f = 0; f < 6; ++f) {
             RECT r = FaceGridRect(d, f); const Face* face = &gGame.dice[d].faces[f]; int hover = Inside(r, gMouse.x, gMouse.y);
             int undo = mode == 2 && CanUndoPrunedFace(&gGame, d, f);
-            COLORREF border = hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE; Panel(dc, r, hover ? RGB(28, 39, 48) : C_PANEL, border);
-            DrawCardMotion(dc, r, mode == 2 && !undo ? C_RED : FaceColor(face), d * 2 + f / 3, hover && mode);
+            // 보상 화면에서 덮을 자리로 세워 둔 칸. 확정 전까지는 표시만 바뀐다.
+            int armed = mode == 1 && gFaceSwapArmed == d * 6 + f;
+            COLORREF border = armed ? C_YELLOW : hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE;
+            Panel(dc, r, armed ? RGB(46, 42, 22) : hover ? RGB(28, 39, 48) : C_PANEL, border);
+            DrawCardMotion(dc, r, mode == 2 && !undo ? C_RED : FaceColor(face), d * 2 + f / 3, armed || (hover && mode));
+            if (armed) Outline(dc, MakeRect(r.left - 2, r.top - 2, r.right + 2, r.bottom + 2), C_YELLOW, 2);
             wchar_t value[24]; FormatFace(face, value); TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 37), value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
             wchar_t bytes[24];
-            if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
+            if (armed) lstrcpyW(bytes, L"다시 눌러 확정");
+            else if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
             else wsprintfW(bytes, L"%dB", FaceCost(face));
-            TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes, hover && undo ? C_GREEN : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes,
+                armed ? C_YELLOW : hover && undo ? C_GREEN : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
 }
@@ -2718,6 +2768,7 @@ static void DrawReward(HDC dc, int width, int height) {
         DrawCardMotion(dc, r, (COLORREF)info->color, i, hover);
         DrawRewardSocket(dc, r, (COLORREF)info->color, i, 1);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
+        if (gTsrArmed == i) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), (COLORREF)info->color, 2);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), info->name, (COLORREF)info->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64]; wsprintfW(b, L"상주  ·  %dB", info->cost);
         TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2725,8 +2776,11 @@ static void DrawReward(HDC dc, int width, int height) {
         // 설치 후 사용량을 미리 보여주고, 한도를 넘게 되면 경고한다.
         int after = UsedBytes(&gGame) + info->cost;
         int over = after > EffectiveCapacity(&gGame);
-        wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
-        TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b, over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        // 세워 둔 카드는 용량 대신 확정 문구를 단다. 숫자는 바로 위 줄에 이미 있다.
+        if (gTsrArmed == i) lstrcpyW(b, L"한 번 더 누르면 설치");
+        else wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
+        TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b,
+            gTsrArmed == i ? (COLORREF)info->color : over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     for (int i = 0; i < 3 && !gGame.rewardIsTsr; ++i) {
         RECT r = RewardRect(i, width); int selected = gGame.selectedReward == i, hover = Inside(r, gMouse.x, gMouse.y), kind = gGame.rewardKinds[i];
@@ -2765,8 +2819,37 @@ static void DrawReward(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
     if (gGame.rewardIsTsr) { Text(dc, 56, 304, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
-    else { Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0); }
-    RECT skip = ContinueRect(width, height); Panel(dc, skip, C_PANEL_2, C_LINE); TextRect(dc, skip, L"건너뛰기 [취소]", C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    else {
+        // 덮을 자리를 세워 두면 무엇이 무엇으로 바뀌고 용량이 어떻게 되는지
+        // 확정 전에 한 줄로 보여 준다.
+        wchar_t step[192];
+        COLORREF stepColor = gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN;
+        if (gGame.selectedReward >= 0 && gFaceSwapArmed >= 0) {
+            int d = gFaceSwapArmed / 6, f = gFaceSwapArmed % 6;
+            const Face* old = &gGame.dice[d].faces[f];
+            int reward = gGame.selectedReward, kind = gGame.rewardKinds[reward];
+            int newCost = kind == FACE_NUMBER ? gGame.rewardValues[reward] : FACE_INFO[kind].cost;
+            int after = UsedBytes(&gGame) - FaceCost(old) + newCost;
+            wchar_t oldText[24]; FormatFace(old, oldText);
+            wsprintfW(step, L"2/2  주사위 %d-%d  %s(%dB) → %s(%dB)  ·  용량 %dB → %dB  ·  다시 누르면 확정",
+                d + 1, f + 1, oldText, FaceCost(old), FACE_INFO[kind].name, newCost, UsedBytes(&gGame), after);
+            stepColor = after > EffectiveCapacity(&gGame) ? C_RED : C_YELLOW;
+        }
+        else if (gGame.selectedReward >= 0) lstrcpyW(step, L"2/2  교체할 기존 면을 클릭하세요 (한 번 더 누르면 확정)");
+        else lstrcpyW(step, L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요");
+        Text(dc, 56, 304, step, stepColor, gFontSmall);
+        DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
+    }
+    // 이 버튼은 진행이 아니라 손실이다. 문구로 결과를 밝히고, 확정은 두 번째
+    // 입력에서만 받는다 (설정의 "다시 시작"과 같은 방식).
+    RECT skip = ContinueRect(width, height); int hoverSkip = Inside(skip, gMouse.x, gMouse.y);
+    Panel(dc, skip, gRewardSkipArmed ? RGB(80, 30, 30) : hoverSkip ? RGB(48, 28, 28) : C_PANEL_2,
+        gRewardSkipArmed || hoverSkip ? C_RED : C_LINE);
+    TextRect(dc, skip, gRewardSkipArmed ? L"정말 포기?" : L"보상 포기 [취소]",
+        gRewardSkipArmed ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (gRewardSkipArmed)
+        TextRect(dc, MakeRect(skip.left - 300, skip.top, skip.left - 12, skip.bottom),
+            L"한 번 더 누르면 이 보상을 버리고 진행합니다.", C_RED, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
 RECT PruneTsrRect(int i) { int left = 150 + i * 180; return MakeRect(left, 252, left + 164, 320); }
@@ -2998,13 +3081,15 @@ static const wchar_t* PatternRoleLabel(int pattern) {
 static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
     Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 126),
-        L"1. 주사위를 클릭하거나 1·2·3으로 선택\n2. 서로 다른 슬롯을 클릭해 배치\n3. 적을 클릭해 공격 대상 선택\n4. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 140, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 172, middle - 28, top + 286),
+    // 판독이 전투 턴의 첫 입력이다. 이것이 빠지면 나머지 안내대로 눌러도
+    // 아무 일도 일어나지 않으므로 1번 자리에 둔다.
+    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 148),
+        L"1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
+    Text(dc, left, top + 162, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 194, middle - 28, top + 308),
         L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 300, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 332, middle - 28, panel.bottom - 88),
+    Text(dc, left, top + 322, L"상태와 적 의도", C_YELLOW, gFontMedium);
+    TextRect(dc, MakeRect(left, top + 354, middle - 28, panel.bottom - 52),
         L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
 
     Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
@@ -3016,7 +3101,7 @@ static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
     Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
     // 여섯 줄이 들어가야 한다. 페이지 이동 버튼이 y686부터라 680까지 쓸 수 있다.
     TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, panel.bottom - 52),
-        L"클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
+        L"R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
 }
 
 int GuideNoiseActive() {
@@ -4213,6 +4298,415 @@ void DrawUiInteractionFx(HDC dc) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 보스 조우 연출
+// ---------------------------------------------------------------------------
+// 디렉터리 화면은 구역마다 "LOCKED DESTINATION  ...\<BOSS>"를 띄워 놓고도, 정작
+// 그 자리에 도착하는 장면이 없었다. 두 번째 일반전의 보상을 고르고 나면 적 카드
+// 한 장이 조용히 갈릴 뿐이었다. 여기서 그 경로를 실제로 연다.
+//
+//   경보   목적지의 마지막 조각이 헥스 잡음에서 실제 코드로 풀린다
+//   게이트 그 경로를 막고 있던 철문의 잠금이 풀리고 좌우로 갈라진다
+//   강림   열린 틈에서 보스가 앞으로 나와 바닥을 딛는다 (충격파·흔들림)
+//   명패   코드·수치·기믹이 박히고, 명패가 위아래로 걷히며 전투판이 열린다
+//
+// 판은 이미 보스전 상태다 (StartCombat이 먼저 끝나 있다). 연출은 게임 상태를 한
+// 글자도 건드리지 않고 지금 판에 있는 값만 읽으므로 어느 시점에 건너뛰어도 결과가
+// 같고, 모든 값이 경과 ms의 순수 함수라 마우스 리페인트가 겹쳐도 같은 프레임이 나온다.
+
+static RECT BossGateRect() { return MakeRect(300, 112, 820, 588); }
+static RECT BossPlateRect() { return MakeRect(118, 596, BASE_WIDTH - 118, 730); }
+
+// 소실점으로 모이는 바닥 격자. 게이트가 화면에 붙은 그림이 아니라 저 안쪽에 서
+// 있는 물건으로 읽히게 하는 최소한의 깊이다.
+static void DrawBossFloorGrid(HDC dc, int horizon, int strength, COLORREF tone) {
+    if (!FxDecorOn() || strength <= 0) return;
+    int vx = BASE_WIDTH / 2;
+    for (int i = -8; i <= 8; ++i)
+        DrawLine(dc, vx + i * 21, horizon, vx + i * 250, BASE_HEIGHT,
+            MixColor(C_BG, tone, FxScale(strength * 3 / 10)), 1);
+    for (int i = 1; i <= 7; ++i) {
+        int y = horizon + (BASE_HEIGHT - horizon) * i * i / 49;
+        DrawLine(dc, 0, y, BASE_WIDTH, y, MixColor(C_BG, tone, FxScale(strength * (9 - i) / 18)), 1);
+    }
+}
+
+// 위험 빗금 띠. enter 0~1000 만큼 한쪽 끝에서 밀려 들어오고, drift만큼 무늬가
+// 흐른다. 공장 셔터와 통제선에 붙어 있는 그 무늬다.
+static void DrawBossHazard(HDC dc, const RECT& band, int enter, int drift, int fromRight, COLORREF tone) {
+    if (enter <= 0) return;
+    if (enter > 1000) enter = 1000;
+    int w = band.right - band.left, h = band.bottom - band.top;
+    int shown = w * enter / 1000;
+    RECT lit = fromRight ? MakeRect(band.right - shown, band.top, band.right, band.bottom)
+                         : MakeRect(band.left, band.top, band.left + shown, band.bottom);
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, lit.left, lit.top, lit.right, lit.bottom);
+    Fill(dc, lit, RGB(12, 9, 10));
+    for (int x = -h - (drift % 44); x < w + h; x += 44)
+        DrawLine(dc, band.left + x, band.bottom, band.left + x + h, band.top, tone, 15);
+    RestoreDC(dc, saved);
+    Fill(dc, MakeRect(lit.left, band.top - 2, lit.right, band.top), MixColor(C_BG, tone, 55));
+    Fill(dc, MakeRect(lit.left, band.bottom, lit.right, band.bottom + 2), MixColor(C_BG, tone, 55));
+}
+
+// 어둠의 장막. 가로줄 간격만으로 농도를 낸다 (DrawFxImpact와 같은 수법이다).
+// 보스는 이 장막이 걷히면서 그림자에서 걸어 나온다.
+static void DrawBossVeil(HDC dc, const RECT& area, int level) {
+    if (level <= 0) return;
+    if (level >= 1000) { Fill(dc, area, RGB(3, 4, 6)); return; }
+    int step = 1 + (1000 - level) / 105;
+    for (int y = area.top; y < area.bottom; y += step)
+        Fill(dc, MakeRect(area.left, y, area.right, y + 1), RGB(3, 4, 6));
+}
+
+// 게이트 안쪽에서 흘러내리는 데이터. 글자 대신 비트 칸을 쓰므로 한 프레임에
+// Fill 몇십 번으로 끝나고, 열린 문 너머가 "돌고 있는 장치"로 읽힌다.
+static void DrawBossDataRain(HDC dc, const RECT& area, uint32_t tick, int level, COLORREF tone) {
+    if (!FxDecorOn() || level <= 0) return;
+    int span = area.bottom - area.top, period = span + 140;
+    for (int c = 0; c < 14; ++c) {
+        uint32_t h = Hash3(c, 31, 7);
+        int x = area.left + 16 + c * (area.right - area.left - 32) / 14;
+        int head = area.top + (int)((tick / (30u + h % 40u) + h % 500u) % (uint32_t)period) - 70;
+        for (int i = 0; i < 9; ++i) {
+            int y = head - i * 15;
+            if (y < area.top + 2 || y > area.bottom - 6) continue;
+            int lit = (Hash3(c, i, (int)(tick / 70)) % 5u) == 0 ? 100 : 58;
+            Fill(dc, MakeRect(x, y, x + 9, y + 4), MixColor(RGB(3, 4, 6),
+                i == 0 ? RGB(220, 235, 255) : tone, FxScale(level * lit * (12 - i) / 120000)));
+        }
+    }
+}
+
+// 게이트 문짝 한 짝. 어두운 강판에 가로 보강대와 리벳을 두고, 이음매 쪽 모서리에
+// 빗금과 밝은 립을 붙인다. 슬롯 셔터(DrawShutter)와 같은 어휘지만 훨씬 무겁다.
+static void DrawBossGateLeaf(HDC dc, const RECT& leaf, int seamRight, COLORREF tone) {
+    if (leaf.right <= leaf.left) return;
+    Fill(dc, leaf, RGB(23, 27, 33));
+    for (int y = leaf.top + 24; y < leaf.bottom; y += 58) {
+        Fill(dc, MakeRect(leaf.left, y, leaf.right, y + 12), RGB(31, 36, 44));
+        Fill(dc, MakeRect(leaf.left, y, leaf.right, y + 2), RGB(54, 62, 73));
+        Fill(dc, MakeRect(leaf.left, y + 10, leaf.right, y + 12), RGB(12, 14, 18));
+        for (int x = leaf.left + 20; x < leaf.right - 14; x += 54)
+            Fill(dc, MakeRect(x, y + 3, x + 6, y + 9), RGB(72, 81, 94));
+    }
+    // 세로 보강대. 가로줄만 있으면 큰 판이 납작해 보인다.
+    for (int i = 1; i < 4; ++i) {
+        int x = leaf.left + (leaf.right - leaf.left) * i / 4;
+        Fill(dc, MakeRect(x - 5, leaf.top, x + 5, leaf.bottom), RGB(19, 22, 28));
+        Fill(dc, MakeRect(x - 5, leaf.top, x - 3, leaf.bottom), RGB(38, 44, 53));
+    }
+    RECT edge = seamRight ? MakeRect(leaf.right - 18, leaf.top, leaf.right, leaf.bottom)
+                          : MakeRect(leaf.left, leaf.top, leaf.left + 18, leaf.bottom);
+    Fill(dc, edge, RGB(15, 18, 23));
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, edge.left, edge.top, edge.right, edge.bottom);
+    for (int y = edge.top - 20; y < edge.bottom + 20; y += 30)
+        DrawLine(dc, edge.left, y + 20, edge.right, y, MixColor(C_BG, tone, 44), 8);
+    RestoreDC(dc, saved);
+    int lip = seamRight ? edge.right - 3 : edge.left;
+    Fill(dc, MakeRect(lip, leaf.top, lip + 3, leaf.bottom), MixColor(C_BG, tone, 72));
+}
+
+// 두 문짝. open 0~1000 만큼 좌우로 갈라진다. 문짝은 각자의 반쪽 밖으로 나가지
+// 않게 잘라 두므로, 열릴수록 틀 뒤로 사라지는 것처럼 보인다.
+static void DrawBossGate(HDC dc, const RECT& gate, int open, int shake, int step, COLORREF tone) {
+    int mid = (gate.left + gate.right) / 2, half = (gate.right - gate.left) / 2;
+    int slide = half * open / 1000;
+    for (int side = 0; side < 2; ++side) {
+        RECT window = side ? MakeRect(mid, gate.top, gate.right, gate.bottom)
+                           : MakeRect(gate.left, gate.top, mid, gate.bottom);
+        if (window.left + (side ? slide : 0) >= window.right - (side ? 0 : slide)) continue;
+        int jitter = shake > 0 ? (int)(Hash3(side, step, 17) % (uint32_t)(shake * 2 + 1)) - shake : 0;
+        int dx = (side ? slide : -slide) + jitter;
+        int saved = SaveDC(dc);
+        IntersectClipRect(dc, window.left, window.top, window.right, window.bottom);
+        DrawBossGateLeaf(dc, MakeRect(window.left + dx, gate.top, window.right + dx, gate.bottom), side == 0, tone);
+        RestoreDC(dc, saved);
+    }
+}
+
+// 게이트 틀. 문짝보다 앞에 서서 열린 구멍의 경계를 잡아 준다.
+static void DrawBossGateFrame(HDC dc, const RECT& gate, int glow, COLORREF tone) {
+    RECT outer = gate; InflateRect(&outer, 16, 16);
+    Fill(dc, MakeRect(outer.left, outer.top, gate.left, outer.bottom), RGB(17, 20, 25));
+    Fill(dc, MakeRect(gate.right, outer.top, outer.right, outer.bottom), RGB(17, 20, 25));
+    Fill(dc, MakeRect(gate.left, outer.top, gate.right, gate.top), RGB(17, 20, 25));
+    Fill(dc, MakeRect(gate.left, gate.bottom, gate.right, outer.bottom), RGB(17, 20, 25));
+    Outline(dc, outer, MixColor(C_BG, tone, 26 + glow / 40), 2);
+    Outline(dc, gate, MixColor(C_BG, tone, 40 + glow / 25), 2);
+    // 네 귀퉁이 브래킷. 틀이 벽에 물려 있다는 표시다.
+    for (int i = 0; i < 4; ++i) {
+        int x = (i & 1) ? outer.right - 26 : outer.left + 4, y = (i & 2) ? outer.bottom - 10 : outer.top + 4;
+        Fill(dc, MakeRect(x, y, x + 22, y + 6), MixColor(C_BG, tone, 34 + glow / 30));
+    }
+}
+
+// 보스 카드 색을 그대로 쓰는 계열 도장. 명패 아래줄에서 기믹의 정체를 말한다.
+static void DrawBossGimmickStamp(HDC dc, const RECT& box, const wchar_t* stamp, int settle, COLORREF fam) {
+    Fill(dc, box, RGB(9, 6, 8));
+    Outline(dc, box, MixColor(C_BG, fam, 40 + settle * 55 / 1000), 2);
+    if (settle >= 1000) {
+        TextRect(dc, box, stamp, fam, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    wchar_t garbled[40];
+    CorruptCode(stamp, garbled, 40, 917, GetTickCount());
+    int keep = lstrlenW(stamp) * settle / 1000;
+    for (int i = 0; i < keep && stamp[i] && i < 39; ++i) garbled[i] = stamp[i];
+    TextRect(dc, box, garbled, MixColor(fam, C_TEXT, 40), gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+void DrawBossIntro(HDC dc, int width, int height) {
+    int index = BossCardIndex();
+    if (index < 0) return;                       // 보스가 없으면 열 문도 없다
+    const EnemyState* enemy = &gGame.enemies[index];
+    const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+    const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[gGame.boss.gimmick];
+    COLORREF tone = (COLORREF)info->color;
+    int driveIndex = gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT ? 0 : gGame.selectedDrive;
+    const DriveInfo* drive = &DRIVE_INFO[driveIndex];
+    int floor = gGame.floor < 0 ? 0 : gGame.floor > 2 ? 2 : gGame.floor;
+
+    int t = (int)(GetTickCount() - gBossIntroStart);
+    if (t < 0) t = 0;
+    if (t > BOSS_INTRO_MS) t = BOSS_INTRO_MS;
+    uint32_t tick = GetTickCount();
+    int step = (int)(tick / NOISE_CHURN_MS);
+    RECT screen = MakeRect(0, 68, width, height);
+    RECT gate = BossGateRect();
+    int mid = (gate.left + gate.right) / 2;
+
+    // 마지막 구간에서는 그리는 자리 자체가 위아래로 걷힌다. 아래에 이미 그려져
+    // 있는 전투판이 가운데부터 드러나므로, 넘어가는 순간이 별도의 그림 없이 난다.
+    int wipe = EaseInCubic(Track(t, BOSS_HAND_AT, BOSS_INTRO_MS));
+    int midY = (68 + height) / 2;
+    int topEdge = 68 + (midY - 68) * (1000 - wipe) / 1000;
+    int botEdge = height - (height - midY) * (1000 - wipe) / 1000;
+    int savedAll = SaveDC(dc);
+    if (!savedAll) return;
+    if (wipe > 0) {
+        HRGN upper = CreateRectRgn(0, 68, width, topEdge);
+        HRGN lower = CreateRectRgn(0, botEdge, width, height);
+        CombineRgn(upper, upper, lower, RGN_OR);
+        ExtSelectClipRgn(dc, upper, RGN_AND);
+        DeleteObject(upper); DeleteObject(lower);
+    } else IntersectClipRect(dc, 0, 68, width, height);
+
+    // ---- 무대 -------------------------------------------------------------
+    Fill(dc, screen, RGB(4, 6, 9));
+    DrawBossFloorGrid(dc, gate.bottom + 8, 22 + 40 * Track(t, 0, 1100) / 1000, tone);
+
+    // ---- 게이트 안쪽 ------------------------------------------------------
+    int open = Track(t, BOSS_GATE_AT + 170, BOSS_RISE_AT + 60);
+    open = open * open / 1000;                   // 무거운 문은 천천히 떼어져 가속한다
+    int glow = Track(t, BOSS_GATE_AT, BOSS_RISE_AT + 300);
+    int savedGate = SaveDC(dc);
+    IntersectClipRect(dc, gate.left, gate.top, gate.right, gate.bottom);
+    Fill(dc, gate, RGB(3, 4, 6));
+    for (int i = 10; i >= 1; --i) {              // 안에서 새어 나오는 빛기둥
+        int band = (gate.right - gate.left) * i / 20;
+        Fill(dc, MakeRect(mid - band, gate.top, mid + band, gate.bottom),
+            MixColor(RGB(3, 4, 6), tone, FxScale(glow * (11 - i) / 380)));
+    }
+    Fill(dc, MakeRect(mid - 2, gate.top, mid + 2, gate.bottom), MixColor(RGB(3, 4, 6), tone, FxScale(glow / 12)));
+    DrawBossDataRain(dc, gate, tick, glow, tone);
+    // 주사선은 안쪽 벽에만 얹는다. 보스 위에 얹으면 도트 그림이 줄무늬로 갈린다.
+    if (FxDecorOn()) DrawScanlines(dc, gate);
+
+    // 보스. 안쪽 깊은 자리에서 앞으로 걸어 나와 바닥을 딛는다.
+    int rise = t - BOSS_RISE_AT;
+    if (rise > 0) {
+        int walk = EaseOutCubic(Track(rise, 0, 520));
+        int reach = Lerp(62, 168, walk);
+        int cy = Lerp(gate.top + 150, 396, walk);
+        int land = t - BOSS_LAND_AT;
+        int squash = land >= 0 && land < 300
+            ? FxScale(160 * (1000 - EaseOutCubic(Track(land, 0, 300))) / 1000) : 0;
+        int bob = land >= 0 ? SinMille(land * 2) * 5 / 1000 : 0;   // 착지 뒤의 느린 숨
+        RECT art = MakeRect(mid - reach, cy - reach, mid + reach, cy + reach);
+        for (int i = 3; i >= 1; --i)   // 발치에 고이는 빛. 서 있을 바닥이 생긴다.
+            Fill(dc, MakeRect(mid - reach * i / 2, art.bottom - 3 - i * 2, mid + reach * i / 2, art.bottom + i * 3),
+                MixColor(RGB(3, 4, 6), tone, FxScale(walk * (4 - i) / 90)));
+        DrawSpriteArt(dc, art, enemy->kind, 1, land >= 0 && land < 240 ? 1000 - land * 1000 / 240 : 0,
+            bob, 0, 1000 + squash, 1000 - squash);
+        DrawBossVeil(dc, art, 1000 - EaseOutCubic(Track(rise, 40, 540)));
+        if (land >= 0) {
+            int foot = art.bottom - 10;
+            if (FxDecorOn() && land < 460) {
+                DrawPixelBurst(dc, mid - 96, foot, land, 460, FxScale(16), enemy->kind * 5 + 1, tone);
+                DrawPixelBurst(dc, mid + 96, foot, land, 460, FxScale(16), enemy->kind * 5 + 2, tone);
+            }
+            DrawImpactBloom(dc, mid, foot, land, FxScale(13), enemy->kind + 71, tone);
+            if (FxDecorOn() && land < 520) {     // 바닥을 따라 퍼지는 충격파 두 겹
+                int p = EaseOutCubic(Track(land, 0, 520)), fade = 1000 - p;
+                DrawGlowRing(dc, mid, foot, 60 + p * 420 / 1000, 14 + p * 90 / 1000,
+                    MixColor(C_BG, tone, FxScale(70 * fade / 1000)), 3);
+                DrawGlowRing(dc, mid, foot, 28 + p * 300 / 1000, 7 + p * 62 / 1000,
+                    MixColor(C_BG, RGB(255, 255, 255), FxScale(42 * fade / 1000)), 2);
+            }
+        }
+    }
+    RestoreDC(dc, savedGate);
+
+    // ---- 문짝과 틀 --------------------------------------------------------
+    int shake = t >= BOSS_GATE_AT && t < BOSS_GATE_AT + 170 ? FxScale(3) : 0;
+    DrawBossGate(dc, gate, open, shake, (int)(tick / 24), tone);
+    if (open > 0 && open < 1000 && FxDecorOn()) {
+        // 갈라지는 이음매에서 불티가 튄다
+        int slide = (gate.right - gate.left) / 2 * open / 1000;
+        for (int i = 0; i < FxScale(5); ++i) {
+            int y = gate.top + 40 + (gate.bottom - gate.top - 80) * i / 5;
+            DrawPixelBurst(dc, mid - slide, y, (t + i * 90) % 260, 260, FxScale(6), i * 13 + 3, tone);
+            DrawPixelBurst(dc, mid + slide, y, (t + i * 90) % 260, 260, FxScale(6), i * 13 + 8, tone);
+        }
+    }
+    DrawBossGateFrame(dc, gate, glow, tone);
+    // 잠금이 풀리기 전에는 이음매에 봉인 표시가 붙어 있다.
+    if (t < BOSS_GATE_AT + 200) {
+        int seal = 1000 - Track(t, BOSS_GATE_AT, BOSS_GATE_AT + 200);
+        RECT tag = MakeRect(mid - 108, gate.top + 374, mid + 108, gate.top + 410);
+        Fill(dc, tag, RGB(18, 9, 11));
+        Outline(dc, tag, MixColor(C_BG, C_RED, 30 + seal * 60 / 1000), 2);
+        TextRect(dc, tag, L"SEALED PATH", MixColor(C_BG, C_RED, 30 + seal * 65 / 1000),
+            gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (t >= BOSS_GATE_AT && FxDecorOn())
+            DrawPixelBurst(dc, mid, gate.top + 392, t - BOSS_GATE_AT, 200, FxScale(16), 611, C_RED);
+    }
+
+    // ---- 위험 띠 ----------------------------------------------------------
+    int alarm = t >= BOSS_LAND_AT && t < BOSS_LAND_AT + 260 ? 1000 - (t - BOSS_LAND_AT) * 1000 / 260 : 0;
+    COLORREF hazard = MixColor(MixColor(C_BG, C_RED, 62), RGB(255, 236, 210), alarm / 12);
+    DrawBossHazard(dc, MakeRect(0, 74, width, 102), Track(t, 0, 400), t / 7, 0, hazard);
+    DrawBossHazard(dc, MakeRect(0, 734, width, 758), Track(t, 90, 490), t / 7, 1, hazard);
+
+    // ---- 경보 : 잠긴 목적지가 풀린다 ---------------------------------------
+    int alertOut = Track(t, BOSS_GATE_AT - 150, BOSS_GATE_AT + 30);
+    if (alertOut < 1000) {
+        int grow = EaseOutBack(Track(t, 40, 330));
+        if (grow > 1150) grow = 1150;
+        int reach = 88 * grow / 1000 * (1000 - alertOut) / 1000;
+        if (reach > 4) {
+            RECT plate = MakeRect(238, 366 - reach, width - 238, 366 + reach);
+            Fill(dc, plate, RGB(13, 9, 11));
+            Outline(dc, plate, C_RED, 2);
+            Fill(dc, MakeRect(plate.left, plate.top, plate.left + 4, plate.bottom), C_RED);
+            Fill(dc, MakeRect(plate.right - 4, plate.top, plate.right, plate.bottom), C_RED);
+            // 접히는 동안에는 틀만 남긴다. 줄이 반쯤 잘린 채로 남으면 접히는 게 아니라
+            // 글자가 깨진 것으로 읽힌다.
+            if (reach >= 84) {
+                int savedPlate = SaveDC(dc);
+                IntersectClipRect(dc, plate.left + 4, plate.top + 1, plate.right - 4, plate.bottom - 1);
+                TextRect(dc, MakeRect(plate.left, 288, plate.right, 310),
+                    L"LOCKED DESTINATION  ·  잠긴 목적지", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+                wchar_t base[96];
+                lstrcpynW(base, drive->paths[floor], 96);
+                AppendPathSegment(base, L"");
+                TextRect(dc, MakeRect(plate.left, 312, plate.right, 336), base, MixColor(C_BG, tone, 70),
+                    gFontMedium, DT_CENTER | DT_SINGLELINE);
+                // 판독의 핵심. <BOSS>로 가려져 있던 마지막 조각이 왼쪽부터 확정된다.
+                wchar_t code[40];
+                int settle = Track(t, 150, BOSS_ALERT_MS - 120);
+                if (settle >= 1000) lstrcpynW(code, info->code, 40);
+                else {
+                    CorruptCode(info->code, code, 40, enemy->kind * 13 + 7, tick);
+                    int keep = lstrlenW(info->code) * settle / 1000;
+                    for (int i = 0; i < keep && info->code[i] && i < 39; ++i) code[i] = info->code[i];
+                }
+                TextRect(dc, MakeRect(plate.left, 338, plate.right, 384), code,
+                    settle >= 1000 ? tone : MixColor(tone, C_TEXT, 45), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                const wchar_t* mark = L"THREAT SIGNATURE MATCHED";
+                DrawGlitchLine(dc, mid - TextWidth(dc, mark, gFontSmall) / 2, 392, mark,
+                    MixColor(C_BG, C_RED, 60), C_RED, gFontSmall, 419, tick);
+                TextRect(dc, MakeRect(plate.left, 416, plate.right, 440),
+                    L"경로 무결성 검사 실패 · 보스 프로세스가 이 경로를 점유하고 있습니다",
+                    C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+                RestoreDC(dc, savedPlate);
+            }
+            if (FxDecorOn() && t < 420) DrawPulseFrame(dc, plate, FxScale(2 + 16 * (420 - t) / 420), 3,
+                MixColor(C_BG, C_RED, 55));
+        }
+    }
+
+    // ---- 사건마다 한 번씩 튀는 노이즈 --------------------------------------
+    int burst = t < 240 ? 900 - t * 640 / 240 : 0;
+    if (t >= BOSS_GATE_AT && t < BOSS_GATE_AT + 170) burst = 480 - (t - BOSS_GATE_AT) * 480 / 170;
+    if (t >= BOSS_LAND_AT && t < BOSS_LAND_AT + 220) burst = 430 - (t - BOSS_LAND_AT) * 430 / 220;
+    if (burst > 0) DrawScreenStatic(dc, screen, step, FxScale(burst));
+    // 착지 섬광. 0ms부터 재생하면 한 프레임이 통째로 하얘져 정작 보스가 안 보인다.
+    // 이미 걷히기 시작한 지점부터 재생해 가로줄 3분의 1만 때리고 빠진다.
+    if (FxDecorOn() && t >= BOSS_LAND_AT && t - BOSS_LAND_AT < 80)
+        DrawFxImpact(dc, screen, t - BOSS_LAND_AT + 140, 230, tone);
+    if (t >= BOSS_LAND_AT && t - BOSS_LAND_AT < 340)
+        DrawEdgeGlow(dc, screen, tone, FxScale(1000 - (t - BOSS_LAND_AT) * 1000 / 340), 18);
+
+    // ---- 명패 : 코드·수치·기믹 --------------------------------------------
+    int nameIn = Track(t, BOSS_NAME_AT, BOSS_NAME_AT + 260);
+    if (nameIn > 0) {
+        RECT plate = BossPlateRect();
+        // 왼쪽에서 밀려 들어온다. EaseOutBack의 되돌아오기는 명패 폭이 커서 화면
+        // 밖까지 지나쳐 버리므로, 감속만 쓰고 도착의 충격은 밴드 글리치가 맡는다.
+        int slideIn = Lerp(-(plate.right - plate.left) - 40, 0, EaseOutCubic(nameIn));
+        OffsetRect(&plate, slideIn, 0);
+        Panel(dc, plate, RGB(11, 16, 22), tone);
+        Fill(dc, MakeRect(plate.left, plate.top, plate.left + 6, plate.bottom), tone);
+        int savedPlate = SaveDC(dc);
+        IntersectClipRect(dc, plate.left, plate.top, plate.right, plate.bottom);
+        int left = plate.left + 26, right = plate.right - 26;
+        wchar_t b[192];
+        wsprintfW(b, L"%d층 보스 프로세스  ·  %s%s", floor + 1, drive->letter, drive->label);
+        Text(dc, left, plate.top + 12, b, C_DIM, gFontSmall);
+        // 위협도는 층수 그대로다. 이 볼륨에서 몇 번째 문을 여는지가 곧 세기다.
+        wchar_t threat[40] = L"THREAT  ";
+        for (int i = 0; i < 3; ++i) lstrcatW(threat, i <= floor ? L"■" : L"□");
+        TextRect(dc, MakeRect(left, plate.top + 12, right, plate.top + 34), threat,
+            floor >= 2 ? C_RED : C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        Text(dc, left, plate.top + 34, info->code, tone, gFontLarge);
+        Text(dc, left + TextWidth(dc, info->code, gFontLarge) + 16, plate.top + 46, info->name, C_TEXT, gFontSmall);
+        wsprintfW(b, L"체력 %d  ·  피해 %d  ·  방어 %d", enemy->maxHp,
+            info->damage + info->damageGrowth * floor, info->guard + info->guardGrowth * floor);
+        TextRect(dc, MakeRect(left, plate.top + 40, right, plate.top + 70), b, C_TEXT, gFontMedium, DT_RIGHT | DT_SINGLELINE);
+        Fill(dc, MakeRect(left, plate.top + 78, plate.left + 26 + (right - left) * Track(t, BOSS_NAME_AT + 120, BOSS_NAME_AT + 420) / 1000, plate.top + 79), MixColor(C_BG, tone, 55));
+        if (gGame.boss.gimmick != GIMMICK_NONE) {
+            int stampAt = Track(t, BOSS_NAME_AT + 200, BOSS_NAME_AT + 520);
+            RECT stamp = MakeRect(left, plate.top + 88, left + 206, plate.top + 118);
+            DrawBossGimmickStamp(dc, stamp, gi->stamp, stampAt, tone);
+            // 기믹 이름과 규칙은 따로 찍는다. "%s — %s" 같은 조립 서식을 번역표에 넣으면
+            // 다른 화면의 두 칸짜리 줄까지 같이 걸린다.
+            int nameX = stamp.right + 16;
+            Text(dc, nameX, plate.top + 86, gi->name, C_YELLOW, gFontSmall);
+            int ruleX = nameX + TextWidth(dc, gi->name, gFontSmall) + 12;
+            Text(dc, ruleX, plate.top + 86, L"·", C_DIM, gFontSmall);
+            TextRect(dc, MakeRect(ruleX + 20, plate.top + 86, right, plate.top + 108),
+                gi->rule, C_TEXT, gFontSmall, DT_LEFT | DT_SINGLELINE);
+            wsprintfW(b, L"대응  %s", gi->counter);
+            TextRect(dc, MakeRect(stamp.right + 16, plate.top + 106, right, plate.top + 126), b,
+                C_DIM, gFontSmall, DT_LEFT | DT_SINGLELINE);
+            if (stampAt > 0 && stampAt < 1000 && FxDecorOn())
+                DrawPulseFrame(dc, stamp, FxScale(2 + 14 * (1000 - stampAt) / 1000), 2, MixColor(C_BG, tone, 60));
+        } else {
+            TextRect(dc, MakeRect(left, plate.top + 92, right, plate.top + 118),
+                L"기믹 없는 구형 보스 프로세스입니다 · 수치만으로 밀어붙입니다",
+                C_DIM, gFontSmall, DT_LEFT | DT_SINGLELINE);
+        }
+        RestoreDC(dc, savedPlate);
+        if (nameIn < 1000 && FxDecorOn())
+            DrawBandGlitch(dc, plate, t, FxScale(9 * (1000 - nameIn) / 1000), enemy->kind + 5, 7);
+    }
+    // 건너뛰기 안내는 무대 밖 구석에 둔다. 가운데에 두면 보스의 발치를 가린다.
+    if (t >= 520 && t < BOSS_HAND_AT)
+        TextRect(dc, MakeRect(width - 340, 108, width - 24, 130), L"클릭이나 키로 바로 넘기기",
+            C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+
+    RestoreDC(dc, savedAll);
+    // 걷히는 경계에는 밝은 줄 한 쌍이 남는다. 잘린 자리가 아니라 열리는 자리다.
+    if (wipe > 0 && wipe < 1000) {
+        Fill(dc, MakeRect(0, topEdge - 2, width, topEdge + 1), MixColor(C_BG, tone, 78));
+        Fill(dc, MakeRect(0, botEdge - 1, width, botEdge + 2), MixColor(C_BG, tone, 78));
+    }
+}
+
 void PaintGame(HWND window) {
     LARGE_INTEGER qpcFreq, qpcStart; QueryPerformanceFrequency(&qpcFreq); QueryPerformanceCounter(&qpcStart);
     SyncLastGasp();
@@ -4243,12 +4737,13 @@ void PaintGame(HWND window) {
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_ENDING_CHOICE) DrawEndingChoice(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
     else if (gGame.phase == PHASE_VICTORY || gGame.phase == PHASE_CHAPTER_CLEAR) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
-    if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive)
+    if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive && !gBossIntroActive)
         DrawSceneArrival(canvas, gGame.phase == PHASE_GAMEOVER ? C_RED : C_GREEN);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDirEnterActive) DrawDirectoryEnter(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gCombatClearActive) DrawCombatClear(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gBossIntroActive) DrawBossIntro(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDeckOpen) DrawDeck(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gSettingsOpen) DrawSettings(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGuideOpen) DrawGuide(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -4260,7 +4755,7 @@ void PaintGame(HWND window) {
         DrawBootInsert(canvas, BASE_WIDTH, BASE_HEIGHT, deviceW, deviceH);
     }
 
-    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive) {
+    if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive && !gBossIntroActive) {
         // 연출이 시작되는 첫 프레임의 판을 붙잡아 둔다. 잔상·트레일이 여기서 나온다.
         if (GimmickFxKind() > 0 && !FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawGimmickFx(canvas);
@@ -4289,6 +4784,14 @@ void PaintGame(HWND window) {
     else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
 
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
+    // 진행도를 못 쓰고 있다는 사실은 어느 화면에서도 보여야 한다. 쓰기 권한이
+    // 없는 폴더에서 돌리는 동안 정상 저장으로 믿고 계속 두면 안 된다.
+    if (gSaveFailed) {
+        RECT warn = MakeRect(BASE_WIDTH / 2 - 300, 2, BASE_WIDTH / 2 + 300, 22);
+        Panel(canvas, warn, RGB(48, 12, 12), C_RED);
+        TextRect(canvas, warn, L"진행도를 저장하지 못했습니다 · AROGUE.exe가 있는 폴더에 쓸 수 있는지 확인하십시오",
+            C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 
     // 2단계: 캔버스를 화면에 직접 올린다. 예전에는 창 크기 합성 버퍼에 배경을 깔고

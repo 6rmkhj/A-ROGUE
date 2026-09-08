@@ -69,7 +69,7 @@ bool RecordCampaignEnding(CampaignState* campaign, int ending) {
     return true;
 }
 
-static bool SavePath(wchar_t* path, const wchar_t* overridePath) {
+static bool BesideExecutable(wchar_t* path, const wchar_t* overridePath, const wchar_t* name) {
     if (overridePath) {
         DWORD length = GetFullPathNameW(overridePath, MAX_PATH, path, 0);
         return length > 0 && length < MAX_PATH;
@@ -77,9 +77,13 @@ static bool SavePath(wchar_t* path, const wchar_t* overridePath) {
     DWORD length = GetModuleFileNameW(0, path, MAX_PATH);
     if (!length || length >= MAX_PATH) return false;
     wchar_t* slash = wcsrchr(path, L'\\');
-    if (!slash || (slash + 1 - path) + 11 > MAX_PATH) return false;
-    lstrcpyW(slash + 1, L"AROGUE.SAV");
+    if (!slash || (slash + 1 - path) + lstrlenW(name) + 1 > MAX_PATH) return false;
+    lstrcpyW(slash + 1, name);
     return true;
+}
+
+static bool SavePath(wchar_t* path, const wchar_t* overridePath) {
+    return BesideExecutable(path, overridePath, L"AROGUE.SAV");
 }
 
 bool LoadCampaign(CampaignState* campaign, const wchar_t* overridePath) {
@@ -103,12 +107,10 @@ bool LoadCampaign(CampaignState* campaign, const wchar_t* overridePath) {
     return true;
 }
 
-bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
-    uint8_t bytes[SAVE_SIZE];
-    Encode(campaign, bytes);
-    for (int i = 6; i < 16; ++i) if (bytes[i] > 1) return false;
-    wchar_t path[MAX_PATH], directory[MAX_PATH], temporary[MAX_PATH];
-    if (!SavePath(path, overridePath)) return false;
+// Write through a sibling temporary file and rename over the target, so a
+// failure at any point leaves the previous file intact.
+static bool WriteFileAtomically(const wchar_t* path, const uint8_t* bytes, DWORD size) {
+    wchar_t directory[MAX_PATH], temporary[MAX_PATH];
     lstrcpyW(directory, path);
     wchar_t* slash = wcsrchr(directory, L'\\');
     if (!slash) return false;
@@ -119,14 +121,91 @@ bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
     DWORD written = 0;
     bool ok = false;
     if (file != INVALID_HANDLE_VALUE) {
-        ok = WriteFile(file, bytes, SAVE_SIZE, &written, 0) && written == SAVE_SIZE;
+        ok = WriteFile(file, bytes, size, &written, 0) && written == size;
         if (ok) ok = FlushFileBuffers(file) != 0;
         if (!CloseHandle(file)) ok = false;
     }
     if (ok) ok = MoveFileExW(temporary, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
     if (!ok) { DeleteFileW(temporary); return false; }
+    return true;
+}
+
+bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
+    uint8_t bytes[SAVE_SIZE];
+    Encode(campaign, bytes);
+    for (int i = 6; i < 16; ++i) if (bytes[i] > 1) return false;
+    wchar_t path[MAX_PATH];
+    if (!SavePath(path, overridePath)) return false;
+    if (!WriteFileAtomically(path, bytes, SAVE_SIZE)) return false;
     campaign->magic = CAMPAIGN_MAGIC;
     campaign->version = CAMPAIGN_VERSION;
     campaign->checksum = Get32(bytes + 16);
     return true;
+}
+
+// ---- Preferences ----------------------------------------------------------
+// Same shape as the campaign save: magic, version, payload, FNV checksum. The
+// two files stay independent, so wiping progress keeps the environment and a
+// damaged AROGUE.CFG never costs anyone their recovered shards.
+static const uint32_t SETTINGS_MAGIC = 0x47464341u; // On disk: ACFG
+static const uint16_t SETTINGS_VERSION = 1;
+static const DWORD SETTINGS_SIZE = 16;
+
+static uint32_t SettingsChecksum(const uint8_t* bytes) {
+    uint32_t hash = 2166136261u;
+    for (int i = 0; i < 12; ++i) hash = (hash ^ bytes[i]) * 16777619u;
+    return hash;
+}
+
+void InitSettings(UserSettings* settings) {
+    if (!settings) return;
+    settings->language = 0;
+    settings->scalePercent = 100;
+    settings->fullscreen = 0;
+    settings->fxLevel = 0;
+    settings->musicEnabled = 1;
+    settings->volume = 100;
+}
+
+bool LoadSettings(UserSettings* settings, const wchar_t* overridePath) {
+    if (!settings) return false;
+    InitSettings(settings);
+    wchar_t path[MAX_PATH];
+    if (!BesideExecutable(path, overridePath, L"AROGUE.CFG")) return false;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    uint8_t bytes[SETTINGS_SIZE + 1];
+    DWORD read = 0;
+    bool ok = ReadFile(file, bytes, sizeof(bytes), &read, 0) != 0;
+    CloseHandle(file);
+    if (!ok || read != SETTINGS_SIZE || Get32(bytes) != SETTINGS_MAGIC
+        || (bytes[4] | ((uint16_t)bytes[5] << 8)) != SETTINGS_VERSION
+        || Get32(bytes + 12) != SettingsChecksum(bytes)) { InitSettings(settings); return false; }
+    // Values are clamped by the caller against its own option tables; only the
+    // ranges this file owns are enforced here.
+    settings->language = bytes[6];
+    settings->scalePercent = bytes[7];
+    settings->fullscreen = bytes[8] ? 1 : 0;
+    settings->fxLevel = bytes[9];
+    settings->musicEnabled = bytes[10] ? 1 : 0;
+    settings->volume = bytes[11] > 100 ? 100 : bytes[11];
+    return true;
+}
+
+bool SaveSettings(const UserSettings* settings, const wchar_t* overridePath) {
+    if (!settings) return false;
+    wchar_t path[MAX_PATH];
+    if (!BesideExecutable(path, overridePath, L"AROGUE.CFG")) return false;
+    uint8_t bytes[SETTINGS_SIZE] = {0};
+    Put32(bytes, SETTINGS_MAGIC);
+    bytes[4] = (uint8_t)SETTINGS_VERSION;
+    bytes[5] = (uint8_t)(SETTINGS_VERSION >> 8);
+    bytes[6] = settings->language;
+    bytes[7] = settings->scalePercent;
+    bytes[8] = settings->fullscreen ? 1 : 0;
+    bytes[9] = settings->fxLevel;
+    bytes[10] = settings->musicEnabled ? 1 : 0;
+    bytes[11] = settings->volume > 100 ? 100 : settings->volume;
+    Put32(bytes + 12, SettingsChecksum(bytes));
+    return WriteFileAtomically(path, bytes, SETTINGS_SIZE);
 }

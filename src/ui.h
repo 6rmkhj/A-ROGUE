@@ -53,6 +53,28 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define BOOT_SEEK_END  (BOOT_CLUNK_AT + BOOT_SEEK_MS)
 #define BOOT_INSERT_MS (BOOT_SEEK_END + BOOT_ZOOM_MS)
 
+// ---- 보스 조우 연출 --------------------------------------------------------
+// 일반전 앞에는 디렉터리 2택과 진입 연출이 있지만 보스 구역에는 둘 다 없다.
+// 두 번째 일반전의 보상을 고르면 판이 곧장 보스전으로 갈렸다 - 이 게임에서
+// 가장 큰 사건이 카드 한 장 바뀌는 것으로 끝났다는 뜻이다. 디렉터리 화면이
+// 내내 "LOCKED DESTINATION ...\<BOSS>"로 가리켜 온 그 자리를 여기서 연다.
+//   경보   잠긴 목적지의 마지막 조각이 실제 코드로 풀린다
+//   게이트 그 경로를 막고 있던 철문이 좌우로 갈라진다
+//   강림   열린 틈에서 보스가 걸어 나와 바닥을 딛는다 (충격파·흔들림)
+//   명패   코드·수치·기믹이 박히고 명패가 걷히며 전투판이 열린다
+// 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
+#define BOSS_ALERT_MS  680     // 경보가 올라오고 목적지가 판독된다
+#define BOSS_GATE_MS   760     // 잠금이 풀리고 문짝이 갈라진다
+#define BOSS_RISE_MS   860     // 보스가 앞으로 나와 바닥을 딛는다
+#define BOSS_NAME_MS   800     // 명패가 박히고 기믹 도장이 찍힌다
+#define BOSS_HAND_MS   420     // 명패가 좌우로 걷히며 전투판을 내보낸다
+#define BOSS_GATE_AT   BOSS_ALERT_MS
+#define BOSS_RISE_AT   (BOSS_GATE_AT + BOSS_GATE_MS)
+#define BOSS_LAND_AT   (BOSS_RISE_AT + 520)            // 발이 바닥에 닿는 순간
+#define BOSS_NAME_AT   (BOSS_RISE_AT + BOSS_RISE_MS)
+#define BOSS_HAND_AT   (BOSS_NAME_AT + BOSS_NAME_MS)
+#define BOSS_INTRO_MS  (BOSS_HAND_AT + BOSS_HAND_MS)
+
 // ---- 피격·위독·정지 연출 --------------------------------------------------
 #define CRITICAL_HP 10         // 이 체력 이하부터 화면이 노이즈에 잠식된다
 #define STRIKE_MS 440          // 적이 달려들었다가 제자리로 돌아오는 시간
@@ -112,6 +134,21 @@ extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
 extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 1=한 번 더 누르면 확정
 extern int gCampaignResetArmed; // "진행도 초기화" 버튼. 런이 아니라 세이브를 지우므로 확정을 따로 받는다
+// 보상 포기 버튼. 되돌릴 수 없는 손실이라 "다시 시작"과 같은 두 번 누르기를 쓴다.
+// 보상 화면을 벗어나거나 카드를 새로 고르면 0으로 풀린다.
+extern int gRewardSkipArmed;
+// 마지막 캠페인 세이브가 실패했으면 1. 한 번 서면 그 실행 동안 유지되고,
+// 다음 저장이 성공하면 다시 0으로 내려간다.
+extern int gSaveFailed;
+
+// 되돌릴 수 없는 선택을 고르는 단계와 확정하는 단계로 나눈다. 각 값은 아직
+// 확정하지 않은 후보의 번호이고, -1은 "고른 것 없음"이다. 첫 입력은 후보를
+// 세우고 카드에 확정 문구를 띄우기만 하며, 같은 후보에 한 번 더 와야 실제로
+// 적용된다. 다른 후보를 누르면 그쪽으로 옮겨 가고 취소 키로 풀린다.
+extern int gDirectoryArmed;   // 디렉터리 카드
+extern int gTsrArmed;         // 보스 전리품 카드
+extern int gFaceSwapArmed;    // 보상 면을 덮어쓸 기존 면 (die * 6 + face)
+extern int gEndingArmed;      // 최종 명령 카드
 
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
@@ -126,6 +163,10 @@ extern int gDescentChoiceIndex; // 최초 마운트 때 고른 카드 (층 하�
 // 디렉터리 진입: 고른 경로 조각이 타이핑되는 짧은 오버레이
 extern int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 extern DWORD gDirEnterStart;
+// 보스 조우: 잠긴 목적지가 열리고 보스가 걸어 나오는 동안. 판은 이미 보스전
+// 상태다 (StartCombat이 먼저 끝나 있다) - 그래서 언제 건너뛰어도 결과가 같다.
+extern int gBossIntroActive;
+extern DWORD gBossIntroStart;
 // 새 게임: 화면이 디스크로 빨려 들어가 드라이브에 꽂힐 때까지. 이 연출이 도는
 // 동안 판은 아직 누르기 직전 그대로다 (런은 연출이 끝날 때 만들어진다).
 extern int gBootActive;
@@ -204,6 +245,11 @@ int NoiseFrameStep();
 // `(백틱)으로 열고 닫는다. 보스까지 가는 데 걸리는 시간을 줄이려고 넣은 개발용
 // 창이라 규칙에는 관여하지 않는다. 명령이 부르는 것은 전부 정규 규칙 함수다.
 // 커서를 깜빡이지 않으므로 리페인트를 따로 돌릴 필요가 없다.
+//
+// 배포 빌드에서는 열리지 않는다. AROGUE_DEV로 빌드했거나 실행 인자에 -dev가
+// 있을 때만 gDevMode가 서고, 그때만 백틱이 먹는다. 일반 플레이어가 실수로
+// 승리 명령을 눌러 캠페인 기록을 망치는 길을 아예 없앤다.
+extern int gDevMode;
 #define TERM_LOG_LINES 10
 #define TERM_LOG_CAP   72
 #define TERM_INPUT_MAX 40
@@ -216,6 +262,7 @@ void DrawTerminal(HDC dc, int width, int height);
 
 // 새 게임 삽입 연출. 붙잡아 둔 판을 돌려 얹으므로 캔버스의 실제 픽셀 크기가 필요하다.
 void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH);
+void DrawBossIntro(HDC dc, int width, int height);
 
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);
@@ -247,7 +294,12 @@ RECT ReadButtonRect();
 RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
+// 스토리 화면의 [다음]. 패널 아무 곳이나 눌러 넘어가지 않도록 진행 입력을
+// 이 버튼 하나로 좁힌다 (엔터·스페이스는 그대로 받는다).
+RECT StoryNextRect(int width, int height);
 RECT EndingChoiceRect(int index);
+// 최종 명령의 확정 버튼. 카드 선택과 실행을 갈라 놓는다.
+RECT EndingConfirmRect();
 RECT EndingRestartRect();
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
@@ -261,6 +313,8 @@ int VictoryElapsed();
 // ---- 화면 -----------------------------------------------------------------
 void ApplyFullscreen(int enable);
 void ApplyWindowedScale(int percent);
+// 지금 적용된 창 배율(%). 설정 저장이 화면 상태가 아니라 값을 읽어야 한다.
+int WindowedScale();
 void PaintGame(HWND window);
 // 페인트 계측. 터미널 perf 명령이 읽는다.
 int PaintLastMs();

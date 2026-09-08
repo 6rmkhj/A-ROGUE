@@ -2631,6 +2631,16 @@ int DebugWinDrive(GameState* game) {
     return 1;
 }
 
+// 관리자 터미널 전용. 남은 일반전과 그 보상을 건너뛰고 지금 층의 보스 구역으로
+// 바로 들어간다. 층·볼륨·덱·체력은 그대로이므로 보스 조우 연출과 기믹을 손으로
+// 확인할 때 쓴다. 진행 중인 볼륨이 없으면 판을 건드리지 않고 0을 반환한다.
+int DebugJumpToBoss(GameState* game) {
+    if (!game || !InsideVolume(game)) return 0;
+    game->encounter = 2;
+    ClearDirectoryCombatEffects(game);
+    return StartCombat(game);
+}
+
 void EndTurn(GameState* game) {
     if (game->phase != PHASE_COMBAT) return;
     int assigned = 0;
