@@ -249,6 +249,81 @@ static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
     {FAM_QUARANTINE, L"마지막 쓰기", L"4턴마다 증폭·연쇄·방어 순으로 슬롯을 영구 봉인합니다.", L"한 턴 보스 피해 12+로 카운트다운을 멈추십시오. 공격은 보존됩니다.", L"SLOT SEALED", 4, 12, 0}
 };
 
+// ---------------------------------------------------------------------------
+// 몹 특성 (몹 기믹)
+//
+// 보스 기믹이 "턴마다 일어나는 사건"이라면 몹 특성은 "전투 내내 참인 성질"이다.
+// 몹은 2~4턴에 죽으므로 게이지가 차는 구조가 발동할 틈이 없고, 런당 6번 나오므로
+// 놀라움보다 학습이 값어치다. 그래서 예고 없이 카드에 항상 적혀 있다.
+//
+// 상태는 BossRuntime이 아니라 EnemyState에 개체별로 둔다. BossRuntime은 판에
+// 하나뿐이라 SANDBOX.BREACH가 적을 둘로 만들면 두 마리가 같은 칸을 밟는다.
+//
+// 네 유형으로 나누고 볼륨마다 겹치지 않게 배분했다.
+//   카운터  눈에 보이는 숫자. 내 선택이 깎는다. 0이면 사건
+//   거래    "~하면 ~한다". 뺏지 않고 값을 치르게 한다
+//   맞붙음  내 눈과 적 숫자를 직접 비교한다
+//   처형    죽이는 방법·순서·타이밍이 조건이 된다
+// ---------------------------------------------------------------------------
+
+enum EnemyTrait {
+    TRAIT_NONE = 0,
+    TRAIT_INTERCEPT,    // C 가로채기 : 증폭을 쓸 때마다 감소, 0이면 증폭이 적 방어도로
+    TRAIT_REGISTRY,     // C 레지스트리 : 매 턴 방어 +2, 공격 눈이 홀수면 그 턴은 안 올림
+    TRAIT_CLASH,        // C 감시 필터 : 눈이 의도값보다 커야 온전, 아니면 절반
+    TRAIT_DECAY,        // D 부패 : 매 턴 감소, 0이면 면 손상. 한 턴 6+ 피해면 1 회복
+    TRAIT_INDEX,        // D 블록 색인 : 4 이상만 온전, 3 이하 절반
+    TRAIT_BOMB,         // D 압축 해제 : 처치 시 6 피해. 방어도 6 이상이면 막는다
+    TRAIT_FIRST,        // E 자동 실행 : 1턴에 플레이어보다 먼저 행동
+    TRAIT_LOSS,         // E 유실 : 처치 시 면 1개 전투 격리. 연쇄를 채웠으면 면제
+    TRAIT_NOREPEAT,     // E 쓰기 방지 : 직전 턴과 같은 눈이면 절반
+    TRAIT_SNIFF,        // N 도청 : 매 턴 감소, 0이면 최고 눈을 복사해 그 값으로 공격
+    TRAIT_ODDONLY,      // N 포트 필터 : 홀수만 온전, 짝수 절반
+    TRAIT_FLOOD,        // N 폭주 : 매 턴 피해 +1. 방어에 4 이상을 넣은 턴엔 안 오름
+    TRAIT_LEAKLOW,      // R 누수 : 3 이하 피해가 +3
+    TRAIT_TWOINTENT,    // R 경쟁 상태 : 의도 둘, 공격 눈이 짝수면 왼쪽 홀수면 오른쪽
+    TRAIT_DANGLING,     // R 허상 참조 : 처치되어도 그 턴 행동은 실행
+    TRAIT_MUTATE,       // X 변이 : 맞을 때마다 약점이 홀 <-> 짝으로 뒤집힌다
+    TRAIT_FLEE,         // X 탈주 : 체력 30% 이하면 다음 턴 도망 (보상 없음)
+    TRAIT_ENCRYPT,      // X 암호화 : 한 턴 8 미만이면 회복. 8+ 한 방 처치면 보상 +1
+    TRAIT_COPY,         // A 거짓 사본 : 직전 턴과 같은 눈이면 2배
+    TRAIT_INCOMPLETE,   // A 미완성 : 매 턴 감소, 0이면 절반 회복. 짝수 눈이면 2 감소
+    TRAIT_ECHO,         // A 반향 : 직전 턴 준 피해 절반을 되돌림. 방어를 비웠으면 면제
+    TRAIT_COUNT
+};
+
+struct EnemyTraitInfo {
+    const wchar_t* badge;   // 적 카드에 찍히는 짧은 이름
+    const wchar_t* rule;    // 규칙 한 줄 (가이드·카드 아래)
+    uint8_t usesCounter;    // 1이면 카드에 카운터 숫자를 함께 보여 준다
+    int p1, p2;             // 특성별 매개변수
+};
+
+static const EnemyTraitInfo ENEMY_TRAIT_INFO[TRAIT_COUNT] = {
+    {L"", L"", 0, 0, 0},
+    {L"가로채기", L"증폭 쓰면 1 감소. 0이면 증폭을 뺏깁니다.", 1, 3, 0},
+    {L"레지스트리", L"매 턴 방어 +2. 공격 눈이 홀수면 면제.", 0, 2, 0},
+    {L"감시 필터", L"공격 눈이 의도값보다 커야 온전합니다.", 0, 0, 0},
+    {L"부패", L"매 턴 감소. 0이면 면 손상. 6+로 회복.", 1, 4, 6},
+    {L"블록 색인", L"4 이상만 온전. 3 이하는 절반.", 0, 4, 0},
+    {L"압축 해제", L"처치 시 6 피해. 방어도 6이면 막습니다.", 0, 6, 6},
+    {L"자동 실행", L"1턴 공격은 방어도를 무시합니다.", 0, 0, 0},
+    {L"유실", L"처치 시 면 격리. 연쇄를 채우면 면제.", 0, 0, 0},
+    {L"쓰기 방지", L"직전 턴과 같은 눈이면 절반.", 0, 0, 0},
+    {L"도청", L"매 턴 감소. 0이면 내 최고 눈을 복사.", 1, 3, 0},
+    {L"포트 필터", L"홀수만 온전. 짝수는 절반.", 0, 0, 0},
+    {L"폭주", L"매 턴 피해 +1. 방어 4+면 안 오릅니다.", 1, 1, 4},
+    {L"누수", L"3 이하 피해가 +3.", 0, 3, 3},
+    {L"경쟁 상태", L"공격 눈 짝수면 왼쪽, 홀수면 오른쪽.", 0, 0, 0},
+    {L"허상 참조", L"처치되어도 그 턴 행동은 실행.", 0, 0, 0},
+    {L"변이", L"맞을 때마다 약점이 홀/짝 뒤집힘.", 0, 0, 0},
+    {L"탈주", L"체력 30% 이하면 다음 턴 도망.", 0, 30, 0},
+    {L"암호화", L"한 턴 8+ 못 넣으면 회복.", 0, 8, 0},
+    {L"거짓 사본", L"직전 턴과 같은 눈이면 2배.", 0, 0, 0},
+    {L"미완성", L"매 턴 감소. 0이면 절반 회복.", 1, 4, 0},
+    {L"반향", L"준 피해 절반 반사. 방어 비우면 면제.", 0, 0, 0}
+};
+
 struct EnemyInfo {
     const wchar_t* name;    // 기록·로그용 이름
     const wchar_t* code;    // 카드 표시명
@@ -261,6 +336,7 @@ struct EnemyInfo {
     uint8_t role;           // EnemyRole
     uint8_t pattern;        // EnemyPattern
     uint8_t gimmick;        // BossGimmickKind (몹과 레거시 보스는 GIMMICK_NONE)
+    uint8_t trait;          // EnemyTrait (보스와 레거시는 TRAIT_NONE)
     uint32_t color;
 };
 
@@ -278,53 +354,53 @@ static const EnemyInfo ENEMY_INFO[ENEMY_KIND_COUNT] = {
     {L"부트 섹터", L"부트 섹터", 52, 8, 7, 3, 1, 2, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NONE, AR_COLOR(255, 170, 70)},
     {L"포맷", L"포맷", 68, 10, 9, 3, 1, 2, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NONE, AR_COLOR(245, 65, 90)},
     // ---- C:\ SYSTEM ----
-    {L"DLL 하이재커", L"DLL.HIJACK", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(120, 190, 255)},
-    {L"레지스트리 고스트", L"REG.GHOST", 18, 4, 4, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(150, 200, 250)},
-    {L"워치독 서비스", L"WATCHDOG", 20, 5, 4, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(80, 150, 235)},
-    {L"액세스 거부", L"ACCESS.DENIED", 34, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ACCESS_DENIED, AR_COLOR(96, 168, 255)},
-    {L"커널 패닉", L"KERNEL.PANIC", 48, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_KERNEL_PANIC, AR_COLOR(70, 140, 245)},
-    {L"블루 스크린", L"BLUE.SCREEN", 62, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_BLUE_SCREEN, AR_COLOR(58, 122, 240)},
+    {L"DLL 하이재커", L"DLL.HIJACK", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, TRAIT_INTERCEPT, AR_COLOR(120, 190, 255)},
+    {L"레지스트리 고스트", L"REG.GHOST", 18, 4, 4, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, TRAIT_REGISTRY, AR_COLOR(150, 200, 250)},
+    {L"워치독 서비스", L"WATCHDOG", 20, 5, 4, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, TRAIT_CLASH, AR_COLOR(80, 150, 235)},
+    {L"액세스 거부", L"ACCESS.DENIED", 34, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ACCESS_DENIED, TRAIT_NONE, AR_COLOR(96, 168, 255)},
+    {L"커널 패닉", L"KERNEL.PANIC", 48, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_KERNEL_PANIC, TRAIT_NONE, AR_COLOR(70, 140, 245)},
+    {L"블루 스크린", L"BLUE.SCREEN", 62, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_BLUE_SCREEN, TRAIT_NONE, AR_COLOR(58, 122, 240)},
     // ---- D:\ ARCHIVE ----
-    {L"비트 부패", L"BIT.ROT", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(235, 190, 90)},
-    {L"인덱서", L"INDEXER", 21, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, AR_COLOR(255, 214, 110)},
-    {L"집 폭탄", L"ZIP.BOMB", 16, 6, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(255, 180, 55)},
-    {L"복원 프로그램", L"RESTORE.EXE", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_RESTORE_POINT, AR_COLOR(255, 208, 96)},
-    {L"테이프 루프", L"TAPE.LOOP", 36, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TAPE_LOOP, AR_COLOR(238, 186, 70)},
-    {L"마스터 백업", L"MASTER.BACKUP", 46, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_MASTER_BACKUP, AR_COLOR(220, 165, 52)},
+    {L"비트 부패", L"BIT.ROT", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, TRAIT_DECAY, AR_COLOR(235, 190, 90)},
+    {L"인덱서", L"INDEXER", 21, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, TRAIT_INDEX, AR_COLOR(255, 214, 110)},
+    {L"집 폭탄", L"ZIP.BOMB", 16, 6, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, TRAIT_BOMB, AR_COLOR(255, 180, 55)},
+    {L"복원 프로그램", L"RESTORE.EXE", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_RESTORE_POINT, TRAIT_NONE, AR_COLOR(255, 208, 96)},
+    {L"테이프 루프", L"TAPE.LOOP", 36, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TAPE_LOOP, TRAIT_NONE, AR_COLOR(238, 186, 70)},
+    {L"마스터 백업", L"MASTER.BACKUP", 46, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_MASTER_BACKUP, TRAIT_NONE, AR_COLOR(220, 165, 52)},
     // ---- E:\ REMOVABLE ----
-    {L"오토런", L"AUTORUN.INF", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_OPENER, GIMMICK_NONE, AR_COLOR(120, 230, 150)},
-    {L"유실 클러스터", L"LOST.CLUSTER", 18, 4, 3, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(96, 210, 176)},
-    {L"쓰기 방지", L"WRITE.PROTECT", 20, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(78, 190, 140)},
-    {L"자동 재생", L"AUTOPLAY", 35, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_AUTOPLAY, AR_COLOR(110, 235, 168)},
-    {L"강제 제거", L"UNSAFE.EJECT", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_UNSAFE_EJECT, AR_COLOR(84, 216, 150)},
-    {L"미디어 없음", L"NO.MEDIA", 55, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NO_MEDIA, AR_COLOR(60, 196, 128)},
+    {L"오토런", L"AUTORUN.INF", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_OPENER, GIMMICK_NONE, TRAIT_FIRST, AR_COLOR(120, 230, 150)},
+    {L"유실 클러스터", L"LOST.CLUSTER", 18, 4, 3, 7, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, TRAIT_LOSS, AR_COLOR(96, 210, 176)},
+    {L"쓰기 방지", L"WRITE.PROTECT", 20, 4, 6, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, TRAIT_NOREPEAT, AR_COLOR(78, 190, 140)},
+    {L"자동 재생", L"AUTOPLAY", 35, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_AUTOPLAY, TRAIT_NONE, AR_COLOR(110, 235, 168)},
+    {L"강제 제거", L"UNSAFE.EJECT", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_UNSAFE_EJECT, TRAIT_NONE, AR_COLOR(84, 216, 150)},
+    {L"미디어 없음", L"NO.MEDIA", 55, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_NO_MEDIA, TRAIT_NONE, AR_COLOR(60, 196, 128)},
     // ---- N:\ NETWORK ----
-    {L"패킷 스니퍼", L"SNIFFER", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(110, 205, 240)},
-    {L"방화벽", L"FIREWALL", 22, 3, 7, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, AR_COLOR(90, 190, 230)},
-    {L"핑 폭주", L"PING.FLOOD", 16, 5, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(70, 220, 255)},
-    {L"프록시", L"PROXY", 40, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_PROXY, AR_COLOR(96, 200, 245)},
-    {L"라우팅 루프", L"ROUTING.LOOP", 56, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ROUTING_LOOP, AR_COLOR(72, 180, 235)},
-    {L"타임아웃", L"TIMEOUT", 68, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TIMEOUT, AR_COLOR(52, 160, 225)},
+    {L"패킷 스니퍼", L"SNIFFER", 15, 4, 3, 6, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, TRAIT_SNIFF, AR_COLOR(110, 205, 240)},
+    {L"방화벽", L"FIREWALL", 22, 3, 7, 8, 1, 1, ROLE_MOB, PATTERN_SIEGE, GIMMICK_NONE, TRAIT_ODDONLY, AR_COLOR(90, 190, 230)},
+    {L"핑 폭주", L"PING.FLOOD", 16, 5, 1, 6, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, TRAIT_FLOOD, AR_COLOR(70, 220, 255)},
+    {L"프록시", L"PROXY", 40, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_PROXY, TRAIT_NONE, AR_COLOR(96, 200, 245)},
+    {L"라우팅 루프", L"ROUTING.LOOP", 56, 7, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ROUTING_LOOP, TRAIT_NONE, AR_COLOR(72, 180, 235)},
+    {L"타임아웃", L"TIMEOUT", 68, 8, 7, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_TIMEOUT, TRAIT_NONE, AR_COLOR(52, 160, 225)},
     // ---- R:\ RAMDISK ----
-    {L"메모리 누수", L"MEM.LEAK", 17, 3, 2, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, AR_COLOR(220, 130, 245)},
-    {L"경쟁 상태", L"RACE.COND", 16, 5, 3, 6, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, AR_COLOR(200, 110, 230)},
-    {L"허상 포인터", L"DANGLING.PTR", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_SPIKE, GIMMICK_NONE, AR_COLOR(235, 96, 220)},
-    {L"누수 라이브러리", L"LEAK.DLL", 30, 5, 3, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LEAK, AR_COLOR(214, 118, 240)},
-    {L"힙 오버플로", L"HEAP.OVERFLOW", 44, 6, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_HEAP_OVERFLOW, AR_COLOR(192, 92, 226)},
-    {L"메모리 고갈", L"OUT.OF.MEMORY", 55, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_OUT_OF_MEMORY, AR_COLOR(170, 70, 212)},
+    {L"메모리 누수", L"MEM.LEAK", 17, 3, 2, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, TRAIT_LEAKLOW, AR_COLOR(220, 130, 245)},
+    {L"경쟁 상태", L"RACE.COND", 16, 5, 3, 6, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, TRAIT_TWOINTENT, AR_COLOR(200, 110, 230)},
+    {L"허상 포인터", L"DANGLING.PTR", 15, 5, 2, 6, 1, 1, ROLE_MOB, PATTERN_SPIKE, GIMMICK_NONE, TRAIT_DANGLING, AR_COLOR(235, 96, 220)},
+    {L"누수 라이브러리", L"LEAK.DLL", 30, 5, 3, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LEAK, TRAIT_NONE, AR_COLOR(214, 118, 240)},
+    {L"힙 오버플로", L"HEAP.OVERFLOW", 44, 6, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_HEAP_OVERFLOW, TRAIT_NONE, AR_COLOR(192, 92, 226)},
+    {L"메모리 고갈", L"OUT.OF.MEMORY", 55, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_OUT_OF_MEMORY, TRAIT_NONE, AR_COLOR(170, 70, 212)},
     // ---- X:\ QUARANTINE ----
-    {L"변이 샘플", L"MUTANT.SMP", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, AR_COLOR(255, 120, 108)},
-    {L"샌드박스 탈주", L"ESCAPEE", 17, 6, 2, 7, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, AR_COLOR(255, 96, 130)},
-    {L"랜섬웨어", L"RANSOMWARE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, AR_COLOR(230, 70, 96)},
-    {L"검체-13", L"SAMPLE-13", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SAMPLE13, AR_COLOR(255, 104, 92)},
-    {L"샌드박스 침입", L"SANDBOX.BREACH", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SANDBOX_BREACH, AR_COLOR(240, 80, 78)},
-    {L"제로데이", L"ZERO.DAY", 60, 9, 8, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ZERO_DAY, AR_COLOR(255, 56, 66)},
-    {L"거짓 사본", L"FALSE.COPY", 18, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, AR_COLOR(90, 235, 190)},
-    {L"미완성 쓰기", L"HALF.WRITE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, AR_COLOR(125, 210, 245)},
-    {L"반향 프로세스", L"ECHO.PROC", 17, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, AR_COLOR(190, 150, 245)},
-    {L"원본 서명", L"SIGNATURE", 44, 6, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SIGNATURE, AR_COLOR(90, 235, 190)},
-    {L"열일곱 번째", L"SEVENTEENTH", 48, 4, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SEVENTEENTH, AR_COLOR(140, 210, 245)},
-    {L"마지막 쓰기", L"LAST.WRITE", 74, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LAST_WRITE, AR_COLOR(235, 150, 205)}
+    {L"변이 샘플", L"MUTANT.SMP", 16, 5, 2, 7, 1, 1, ROLE_MOB, PATTERN_CORRUPTER, GIMMICK_NONE, TRAIT_MUTATE, AR_COLOR(255, 120, 108)},
+    {L"샌드박스 탈주", L"ESCAPEE", 17, 6, 2, 7, 1, 0, ROLE_MOB, PATTERN_ASSAULT, GIMMICK_NONE, TRAIT_FLEE, AR_COLOR(255, 96, 130)},
+    {L"랜섬웨어", L"RANSOMWARE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_MEDIC, GIMMICK_NONE, TRAIT_ENCRYPT, AR_COLOR(230, 70, 96)},
+    {L"검체-13", L"SAMPLE-13", 36, 5, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SAMPLE13, TRAIT_NONE, AR_COLOR(255, 104, 92)},
+    {L"샌드박스 침입", L"SANDBOX.BREACH", 50, 7, 5, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SANDBOX_BREACH, TRAIT_NONE, AR_COLOR(240, 80, 78)},
+    {L"제로데이", L"ZERO.DAY", 60, 9, 8, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_ZERO_DAY, TRAIT_NONE, AR_COLOR(255, 56, 66)},
+    {L"거짓 사본", L"FALSE.COPY", 18, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_ERRATIC, GIMMICK_NONE, TRAIT_COPY, AR_COLOR(90, 235, 190)},
+    {L"미완성 쓰기", L"HALF.WRITE", 20, 4, 5, 8, 1, 1, ROLE_MOB, PATTERN_BULWARK, GIMMICK_NONE, TRAIT_INCOMPLETE, AR_COLOR(125, 210, 245)},
+    {L"반향 프로세스", L"ECHO.PROC", 17, 5, 3, 7, 1, 1, ROLE_MOB, PATTERN_RAMP, GIMMICK_NONE, TRAIT_ECHO, AR_COLOR(190, 150, 245)},
+    {L"원본 서명", L"SIGNATURE", 44, 6, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SIGNATURE, TRAIT_NONE, AR_COLOR(90, 235, 190)},
+    {L"열일곱 번째", L"SEVENTEENTH", 48, 4, 4, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_SEVENTEENTH, TRAIT_NONE, AR_COLOR(140, 210, 245)},
+    {L"마지막 쓰기", L"LAST.WRITE", 74, 8, 6, 0, 0, 0, ROLE_BOSS, PATTERN_BOSS, GIMMICK_LAST_WRITE, TRAIT_NONE, AR_COLOR(235, 150, 205)}
 };
 
 // 잘못된 kind가 UI·렌더에 흘러들었을 때 대신 그리는 안전 데이터.

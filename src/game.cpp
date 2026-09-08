@@ -660,6 +660,123 @@ static int RestoreBossHp(GameState* game, EnemyState* enemy, int targetHp, int c
 }
 
 // 턴말 훅: 적 행동이 끝난 뒤 게이지·복원·격리·카운트다운을 진행한다.
+static int SlotPower(const GameState* game, int slot, int* kindOut);
+static void QuarantineRandomFace(GameState* game, int turns);
+static int FirstLivingEnemy(const GameState* game);
+
+// 몹 특성의 턴 끝 처리. 보스 기믹(GimmickTurnEnd)과 나란히 돌지만 BossRuntime을
+// 전혀 건드리지 않으므로 적이 여럿이어도 개체마다 독립적으로 진행된다.
+//
+// 여기서 도는 것은 카운터 계열과 "한 턴에 얼마를 넣었는가"를 조건으로 삼는
+// 특성들이다. 눈 하나만 보면 되는 판정은 DamageEnemy 쪽에 있다.
+static void MobTraitTurnEnd(GameState* game) {
+    int chainUsed = SlotPower(game, SLOT_CHAIN, 0) > 0;
+    int defendPower = SlotPower(game, SLOT_DEFEND, 0);
+    int amplifyPower = SlotPower(game, SLOT_AMPLIFY, 0);
+    int attackPower = SlotPower(game, SLOT_ATTACK, 0);
+    (void)chainUsed;
+    wchar_t buffer[96];
+    for (int i = 0; i < game->enemyCount; ++i) {
+        EnemyState* enemy = &game->enemies[i];
+        if (!enemy->alive) continue;
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+        const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
+        switch (enemy->trait) {
+        case TRAIT_REGISTRY:
+            // 지우려 해도 다시 등록된다. 공격 눈이 홀수인 턴만 막을 수 있다.
+            if ((attackPower & 1) == 0) {
+                enemy->block += t->p1;
+                PushLog2(game, L"%s: 레지스트리에 다시 등록되었습니다.", info->code, 0);
+            }
+            break;
+        case TRAIT_INTERCEPT:
+            // 증폭을 쓸 때마다 깎인다. 0이 되면 증폭 보너스가 그대로 적의 방어도가 된다.
+            if (amplifyPower > 0) {
+                if (enemy->counter > 0) {
+                    --enemy->counter;
+                    if (enemy->counter == 0) PushLog2(game, L"%s: 가로채기 완료. 이후 증폭이 적에게 갑니다.", info->code, 0);
+                } else {
+                    enemy->block += amplifyPower;
+                    wsprintfW(buffer, L"가로채기: 증폭 %d가 %s의 방어도가 되었습니다.", amplifyPower, info->code);
+                    PushLog(game, buffer);
+                }
+            }
+            break;
+        case TRAIT_DECAY:
+            // 한 턴 p2 이상 넣으면 되돌린다. 아니면 깎이고, 0에서 면이 손상된다.
+            if (game->lastDamage >= t->p2) {
+                if (enemy->counter < t->p1) ++enemy->counter;
+            } else if (enemy->counter > 0) {
+                --enemy->counter;
+                if (enemy->counter == 0) {
+                    QuarantineRandomFace(game, 0);
+                    enemy->counter = (uint8_t)t->p1;
+                    PushLog2(game, L"%s: 부패가 면 1개를 이번 전투 동안 삭혔습니다.", info->code, 0);
+                }
+            }
+            break;
+        case TRAIT_SNIFF:
+            if (enemy->counter > 0) {
+                --enemy->counter;
+                if (enemy->counter == 0) PushLog2(game, L"%s: 도청 완료. 다음 턴 내 최고 눈을 복사합니다.", info->code, 0);
+            }
+            break;
+        case TRAIT_FLOOD:
+            // 방어에 p2 이상을 넣은 턴에는 오르지 않는다.
+            if (defendPower < t->p2) {
+                if (enemy->counter < 99) enemy->counter = (uint8_t)(enemy->counter + t->p1);
+            }
+            break;
+        case TRAIT_INCOMPLETE:
+            if (enemy->counter > 0) {
+                --enemy->counter;
+                if (enemy->counter == 0) {
+                    int before = enemy->hp;
+                    enemy->hp = ClampInt(enemy->hp + enemy->maxHp / 2, 0, enemy->maxHp);
+                    enemy->counter = (uint8_t)t->p1;
+                    wsprintfW(buffer, L"미완성 쓰기: %s 체력 +%d", info->code, enemy->hp - before);
+                    PushLog(game, buffer);
+                }
+            }
+            break;
+        case TRAIT_ENCRYPT:
+            // 한 턴 p1 미만이면 회복한다. 몸값을 한 번에 치러야 한다.
+            if (game->lastDamage < t->p1) {
+                int before = enemy->hp;
+                enemy->hp = ClampInt(enemy->hp + 4, 0, enemy->maxHp);
+                if (enemy->hp > before) PushLog2(game, L"%s: 암호화가 손상을 되돌립니다.", info->code, 0);
+            }
+            break;
+        case TRAIT_ECHO:
+            // 직전 턴 준 피해의 절반을 되돌린다. 방어를 비웠으면 면제.
+            if (enemy->memo > 0 && defendPower > 0) {
+                int back = enemy->memo / 2;
+                if (back > 0) {
+                    game->playerHp = ClampInt(game->playerHp - back, 0, game->playerMaxHp);
+                    wsprintfW(buffer, L"반향: 준 피해가 %d 되돌아왔습니다.", back);
+                    PushLog(game, buffer);
+                    if (game->playerHp <= 0) game->phase = PHASE_GAMEOVER;
+                }
+            }
+            enemy->memo = (uint8_t)ClampInt(game->lastDamage, 0, 255);
+            break;
+        case TRAIT_FLEE:
+            // 임계 아래로 내려간 다음 턴에 사라진다. 보상은 없다.
+            if (enemy->flags & 1) {
+                enemy->alive = 0;
+                enemy->hp = 0;
+                PushLog2(game, L"%s: 탈주했습니다. 보상 없음.", info->code, 0);
+                game->targetEnemy = FirstLivingEnemy(game);
+            } else if (enemy->hp * 100 <= enemy->maxHp * t->p1) {
+                enemy->flags |= 1;
+                PushLog2(game, L"%s: 다음 턴 탈주합니다.", info->code, 0);
+            }
+            break;
+        default: break;
+        }
+    }
+}
+
 static void GimmickTurnEnd(GameState* game) {
     // 임시 격리 타이머는 보스 생사와 무관하게 턴이 지나면 줄어든다.
     for (int d = 0; d < 3; ++d) {
@@ -1385,6 +1502,11 @@ static void AddEnemy(GameState* game, int kind) {
     else if (weaken < 0) hp = hp * (100 - weaken) / 100;
     enemy->hp = hp;
     enemy->maxHp = hp;
+    // 몹 특성. 카운터 계열은 시작값을 p1에서 가져오고, 변이는 처음에 홀수가 약점이다.
+    enemy->trait = info->trait;
+    const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
+    if (t->usesCounter) enemy->counter = (uint8_t)t->p1;
+    if (enemy->trait == TRAIT_MUTATE) enemy->memo = 1;
 }
 
 static void BeginTurn(GameState* game);
@@ -1405,6 +1527,7 @@ int StartCombat(GameState* game) {
     game->turn = 1;
     game->enemyCount = 0;
     game->targetEnemy = 0;
+    game->encryptBonus = 0;
     for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
     game->driveRule.boostedDie = -1;
     game->driveRule.boostedSlot = -1;
@@ -1548,9 +1671,45 @@ static void PlanMob(GameState* game, EnemyState* enemy, int enemyIndex) {
     }
 }
 
+// 패턴이 의도를 정한 뒤 특성이 덧씌운다. 예고를 깨지 않도록, 바뀐 결과가 곧
+// 카드에 그대로 표시되는 값이어야 한다.
+static void MobTraitPlan(GameState* game, EnemyState* enemy) {
+    const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
+    switch (enemy->trait) {
+    case TRAIT_FLOOD:
+        // 누적된 만큼 이번 턴 피해가 커진다. 방치하면 감당할 수 없어진다.
+        if (enemy->intent == INTENT_ATTACK || enemy->intent == INTENT_HEAVY)
+            enemy->intentValue += enemy->counter;
+        break;
+    case TRAIT_SNIFF:
+        // 카운터가 0이면 지금 판에서 가장 큰 눈을 그대로 복사해 그 값으로 때린다.
+        if (enemy->counter == 0) {
+            int best = 0;
+            for (int d = 0; d < 3; ++d) {
+                int power = FacePower(RolledFace(game, d));
+                if (power > best) best = power;
+            }
+            if (best > 0) { enemy->intent = INTENT_ATTACK; enemy->intentValue = best; }
+            enemy->counter = (uint8_t)t->p1;   // 복사한 뒤 다시 센다
+        }
+        break;
+    case TRAIT_TWOINTENT: {
+        // 두 번째 의도를 만들어 둔다. 어느 쪽이 실행될지는 플레이어의 공격 눈이
+        // 정한다 (짝수면 왼쪽, 홀수면 오른쪽). 둘 다 카드에 보이므로 예고는 지켜진다.
+        const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
+        int damage = info->damage + info->damageGrowth * game->floor;
+        int guard = info->guard + info->guardGrowth * game->floor;
+        if (enemy->intent == INTENT_GUARD) { enemy->flags = (uint8_t)((enemy->flags & ~0x70) | (INTENT_HEAVY << 4)); enemy->memo = (uint8_t)(damage + 2); }
+        else { enemy->flags = (uint8_t)((enemy->flags & ~0x70) | (INTENT_GUARD << 4)); enemy->memo = (uint8_t)guard; }
+        break;
+    }
+    default: break;
+    }
+}
+
 static void PlanEnemy(GameState* game, EnemyState* enemy, int enemyIndex) {
     if (IsBossKind(enemy->kind)) PlanBoss(game, enemy);
-    else PlanMob(game, enemy, enemyIndex);
+    else { PlanMob(game, enemy, enemyIndex); MobTraitPlan(game, enemy); }
     // 소환된 개체는 본체보다 약하다. 방어 의도는 깎지 않는다 (0으로 무너진다).
     if (enemy->power > 0 && enemy->power < 100 && enemy->intent != INTENT_GUARD) {
         enemy->intentValue = enemy->intentValue * enemy->power / 100;
@@ -1670,10 +1829,94 @@ static int ChainTarget(const GameState* game) {
     return primary;
 }
 
-static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
+// 몹 특성이 피해를 바꾼다. rollValue는 그 피해를 만든 주사위 눈이고, 0이면 화상·
+// 폭발처럼 눈이 없는 피해라 특성이 걸리지 않는다.
+//
+// 이 판정을 DamageEnemy 안에 두는 것이 중요하다. 미리보기는 PreviewTurn이 상태를
+// 복사해 EndTurn을 그대로 돌리므로, 여기 있으면 화면에 뜨는 예상 숫자와 실제로
+// 들어가는 피해가 자동으로 일치한다. 바깥으로 빼면 그 보장이 깨진다.
+static int TraitDamage(const EnemyState* enemy, int damage, int rollValue) {
+    if (rollValue <= 0 || damage <= 0) return damage;
+    const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
+    switch (enemy->trait) {
+    case TRAIT_CLASH:    return rollValue > enemy->intentValue ? damage : damage / 2;
+    case TRAIT_INDEX:    return rollValue >= t->p1 ? damage : damage / 2;
+    case TRAIT_ODDONLY:  return (rollValue & 1) ? damage : damage / 2;
+    case TRAIT_LEAKLOW:  return rollValue <= t->p1 ? damage + t->p2 : damage;
+    case TRAIT_MUTATE:   return ((rollValue & 1) == (enemy->memo & 1)) ? damage : damage / 2;
+    case TRAIT_NOREPEAT: return (enemy->memo && rollValue == (int)enemy->memo) ? damage / 2 : damage;
+    case TRAIT_COPY:     return (enemy->memo && rollValue == (int)enemy->memo) ? damage * 2 : damage;
+    default: return damage;
+    }
+}
+
+// 눈을 기억해 두는 특성들. 피해를 실제로 넣은 뒤에 부른다.
+static void TraitRemember(EnemyState* enemy, int rollValue) {
+    if (rollValue <= 0) return;
+    if (enemy->trait == TRAIT_MUTATE) enemy->memo = (uint8_t)(enemy->memo ? 0 : 1);
+    else if (enemy->trait == TRAIT_NOREPEAT || enemy->trait == TRAIT_COPY) enemy->memo = (uint8_t)rollValue;
+    else if (enemy->trait == TRAIT_INCOMPLETE && (rollValue & 1) == 0 && enemy->counter > 0)
+        enemy->counter = (uint8_t)(enemy->counter > 1 ? enemy->counter - 1 : 0);
+}
+
+static int SlotPower(const GameState* game, int slot, int* kindOut);
+
+// 출력이 있는 면 하나를 이번 전투 동안 격리한다. 보스 격리(FireQuarantine)는
+// BossRuntime의 예고 대상을 쓰므로 몹이 부를 수 없어 따로 둔다.
+// 마지막 남은 출력은 건드리지 않는다 - 아무것도 할 수 없는 판을 만들지 않는다.
+static void QuarantineRandomFace(GameState* game, int turns) {
+    if (UsableFaceCount(game) <= 3) return;
+    int candidates[18], count = 0;
+    for (int d = 0; d < 3; ++d)
+        for (int f = 0; f < 6; ++f) {
+            Face* face = &game->dice[d].faces[f];
+            if (face->quarantined == QUAR_NONE && FacePower(face) >= 1) candidates[count++] = d * 6 + f;
+        }
+    if (count <= 0) return;
+    int pick = candidates[RandomRange(game, count)];
+    game->dice[pick / 6].faces[pick % 6].quarantined = (uint8_t)(turns > 0 ? turns : QUAR_COMBAT);
+}
+
+// 처치되는 순간 터지는 특성들. rollValue는 마지막 일격의 눈이다.
+static void TraitOnDeath(GameState* game, int enemyIndex, int rollValue) {
+    EnemyState* enemy = &game->enemies[enemyIndex];
+    const EnemyTraitInfo* t = &ENEMY_TRAIT_INFO[enemy->trait];
+    switch (enemy->trait) {
+    case TRAIT_BOMB:
+        // 방어도를 들고 죽이면 막는다. "죽이지 마라"가 아니라 "준비하고 죽여라".
+        if (game->playerBlock >= t->p2) {
+            game->playerBlock -= t->p2;
+            PushLog(game, L"압축 해제: 방어도가 폭발을 막았습니다.");
+        } else {
+            game->playerHp = ClampInt(game->playerHp - t->p1, 0, game->playerMaxHp);
+            wchar_t boom[64]; wsprintfW(boom, L"압축 해제: 폭발로 체력 -%d.", t->p1);
+            PushLog(game, boom);
+            if (game->playerHp <= 0) game->phase = PHASE_GAMEOVER;
+        }
+        break;
+    case TRAIT_LOSS:
+        // 연쇄를 채운 턴이면 면제된다. 죽어 있던 슬롯에 처음으로 쓸 자리가 생긴다.
+        if (SlotPower(game, SLOT_CHAIN, 0) > 0) PushLog(game, L"유실: 연쇄가 클러스터를 붙잡았습니다.");
+        else { QuarantineRandomFace(game, 0); PushLog(game, L"유실: 면 1개가 이번 전투 격리되었습니다."); }
+        break;
+    case TRAIT_ENCRYPT:
+        // 한 방으로 끊으면 보상이 하나 늘어난다 (이해가 곧 무장).
+        if (rollValue > 0 && game->lastDamage >= t->p1) {
+            game->encryptBonus = 1;
+            PushLog(game, L"암호화 해제: 이번 전투 보상 후보가 하나 늘어납니다.");
+        }
+        break;
+    default: break;
+    }
+}
+
+static int DamageEnemy(GameState* game, int enemyIndex, int damage, int rollValue) {
     if (enemyIndex < 0 || damage <= 0) return 0;
     EnemyState* enemy = &game->enemies[enemyIndex];
     if (!enemy->alive) return 0;
+    damage = TraitDamage(enemy, damage, rollValue);
+    TraitRemember(enemy, rollValue);
+    if (damage <= 0) return 0;
     int absorbed = enemy->block < damage ? enemy->block : damage;
     enemy->block -= absorbed;
     damage -= absorbed;
@@ -1689,6 +1932,8 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage) {
         // 처치한 순간 그 종류가 판독된다. 가이드의 노이즈가 여기서 걷힌다.
         if (IsValidEnemyKind(enemy->kind)) game->enemyScanned[enemy->kind] = 1;
         PushLog2(game, L"%s 삭제 완료. 피해 %d.", GetEnemyInfoOrUnknown(enemy->kind)->name, damage);
+        if (enemy->trait == TRAIT_DANGLING) enemy->flags |= 2;   // 그 턴 행동은 남는다
+        TraitOnDeath(game, enemyIndex, rollValue);
         game->targetEnemy = FirstLivingEnemy(game);
     }
     return damage;
@@ -1875,7 +2120,7 @@ static void ResolveAttack(GameState* game, ResolveContext* ctx) {
     int target = FirstLivingEnemy(game);
     int targetBlockBefore = target >= 0 ? game->enemies[target].block : 0;
     int targetHpBefore = target >= 0 ? game->enemies[target].hp : 0;
-    int dealt = DamageEnemy(game, target, attackDamage);
+    int dealt = DamageEnemy(game, target, attackDamage, attackPower);
     int targetHpAfter = target >= 0 ? game->enemies[target].hp : 0;
     if (attackPower > 0) {
         wsprintfW(trace, L"[공격/%s] 기본 %d + 증폭 %d + 특수 %d + 체크섬 %d = %d 피해",
@@ -1974,7 +2219,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
         int chainTarget = ChainTarget(game);
         int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
         int blockBefore = chainTarget >= 0 ? game->enemies[chainTarget].block : 0;
-        DamageEnemy(game, chainTarget, repeat);
+        DamageEnemy(game, chainTarget, repeat, chainPower);
         int hpAfter = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
         int absorbed = blockBefore < repeat ? blockBefore : repeat;
         ctx->slotOutput[SLOT_CHAIN] = repeat;
@@ -2059,14 +2304,25 @@ static void ResolvePlayer(GameState* game) {
 }
 
 static void ResolveEnemies(GameState* game) {
+    // 경쟁 상태가 어느 의도를 실행할지는 이번 턴 공격 눈의 홀짝이 정한다.
+    int attackRoll = SlotPower(game, SLOT_ATTACK, 0);
     for (int i = 0; i < game->enemyCount; ++i) {
         EnemyState* enemy = &game->enemies[i];
-        if (!enemy->alive) continue;
+        // 허상 참조는 처치된 그 턴의 행동까지는 실행한다.
+        int dangling = !enemy->alive && enemy->trait == TRAIT_DANGLING && (enemy->flags & 2);
+        if (!enemy->alive && !dangling) continue;
+        if (dangling) enemy->flags &= (uint8_t)~2;
+        if (enemy->alive && enemy->trait == TRAIT_TWOINTENT && (attackRoll & 1)) {
+            // 홀수면 오른쪽(두 번째) 의도로 갈아탄다.
+            uint8_t second = (uint8_t)((enemy->flags >> 4) & 7);
+            enemy->intent = second;
+            enemy->intentValue = enemy->memo;
+        }
         const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
         if (enemy->burn > 0) {
             --enemy->burn;
             int hpBefore = enemy->hp;
-            DamageEnemy(game, i, 3);
+            DamageEnemy(game, i, 3, 0);   // 화상은 눈이 없어 특성이 걸리지 않는다
             wchar_t burnTrace[96]; wsprintfW(burnTrace, L"[화상] %s 체력 -%d (%d → %d)",
                 info->code, hpBefore - enemy->hp, hpBefore, enemy->hp);
             CombatFxEvent* burnFx = PushCombatFx(game, CFX_BURN, game->turnTraceCount);
@@ -2099,6 +2355,10 @@ static void ResolveEnemies(GameState* game) {
                 absorbed = usable < damage ? usable : damage;
                 game->playerBlock -= absorbed * 2;
                 damage -= absorbed;
+            } else if (enemy->trait == TRAIT_FIRST && game->turn == 1) {
+                // 자동 실행: 1턴은 준비하기 전에 실행된다. 그 턴 방어도를 무시한다.
+                // 턴 순서를 바꾸지 않고 "먼저 맞는다"는 체감만 낸다.
+                PushLog(game, L"자동 실행: 준비 전에 실행되어 방어도가 소용없습니다.");
             } else {
                 absorbed = game->playerBlock < damage ? game->playerBlock : damage;
                 game->playerBlock -= absorbed;
@@ -2207,6 +2467,7 @@ static void GenerateRewards(GameState* game) {
     int count = node ? node->rewardChoices : 3;
     count = ClampInt(count, 1, 3);
     game->rewardTier = tuned;
+    if (game->encryptBonus && count < 3) { ++count; game->encryptBonus = 0; }
     game->rewardChoiceCount = count;
     for (int i = 0; i < count; ++i) {
         int kind, duplicate;
@@ -2404,6 +2665,7 @@ void EndTurn(GameState* game) {
     PushLog(game, result);
     if (game->phase == PHASE_GAMEOVER) return;
     GimmickTurnEnd(game);
+    MobTraitTurnEnd(game);
     if (LivingEnemyCount(game) == 0) {
         CombatWon(game);
         return;

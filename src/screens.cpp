@@ -870,10 +870,16 @@ static void DrawEnemy(HDC dc, int index) {
     }
     Text(dc, r.left + 12, r.top + 140, info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontMedium);
     wchar_t b[96];
-    if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
+    if (selected && !hasGimmick && !isBoss && enemy->trait != TRAIT_NONE)
+        wsprintfW(b, L"▶ 대상 · %s", ENEMY_TRAIT_INFO[enemy->trait].badge);
+    else if (selected && !hasGimmick) lstrcpyW(b, L"▶ 공격 대상");
     else if (hasGimmick) wsprintfW(b, selected ? L"▶ 보스 · %s" : L"보스 기믹: %s", BOSS_GIMMICK_INFO[gGame.boss.gimmick].name);
+    else if (!isBoss && enemy->trait != TRAIT_NONE)
+        wsprintfW(b, L"특성: %s", ENEMY_TRAIT_INFO[enemy->trait].badge);
     else lstrcpyW(b, isBoss ? L"보스 프로세스" : L"적 프로세스");
-    Text(dc, r.left + 12, r.top + 165, b, selected ? C_YELLOW : hasGimmick ? (COLORREF)info->color : C_DIM, gFontSmall);
+    Text(dc, r.left + 12, r.top + 165, b,
+        selected ? C_YELLOW : hasGimmick ? (COLORREF)info->color
+        : (!isBoss && enemy->trait != TRAIT_NONE) ? (COLORREF)info->color : C_DIM, gFontSmall);
     int shownHp = EnemyDisplayHp(index);
     if (enemy->block > 0 || enemy->burn > 0) wsprintfW(b, L"체력 %d/%d · 방%d 화%d", shownHp, enemy->maxHp, enemy->block, enemy->burn);
     else wsprintfW(b, L"체력 %d / %d", shownHp, enemy->maxHp);
@@ -900,9 +906,33 @@ static void DrawEnemy(HDC dc, int index) {
                     gGame.boss.empowered ? C_RED : (COLORREF)info->color, C_LINE);
             }
             TextRect(dc, MakeRect(r.left + 12, r.top + 250, r.right - 10, r.bottom), status, active ? C_RED : C_YELLOW, gFontSmall, DT_WORDBREAK);
-        } else if (enemy->block > 0 || enemy->burn > 0) {
-            wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
-            Text(dc, r.left + 12, r.top + 250, b, C_DIM, gFontSmall);
+        } else {
+            // 몹 특성. 카운터 계열은 남은 숫자를 함께 보여 준다 - 위협이 숫자로 보여야
+            // 플레이어가 자기 선택으로 그것을 관리할 수 있다.
+            const EnemyTraitInfo* et = &ENEMY_TRAIT_INFO[enemy->trait];
+            int line = r.top + 250;
+            // 카운터는 의도 줄 오른쪽 끝에 붙인다. 줄을 따로 쓰면 아래 규칙문이
+            // 카드 밑변에서 잘린다 (250~384 = 두 줄뿐이다).
+            if (enemy->trait != TRAIT_NONE && et->usesCounter) {
+                wsprintfW(b, L"%d", enemy->counter);
+                TextRect(dc, MakeRect(r.left + 12, r.top + 231, r.right - 12, r.top + 249), b,
+                    C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+            }
+            if (enemy->trait == TRAIT_TWOINTENT) {
+                // 두 번째 의도까지 보여 준다. 둘 다 보이므로 예고가 지켜진다.
+                uint8_t second = (uint8_t)((enemy->flags >> 4) & 7);
+                wsprintfW(b, L"또는 %s %d (홀수 눈)", INTENT_NAMES[second], enemy->memo);
+                Text(dc, r.left + 12, line, b, C_RED, gFontSmall);
+                line += 20;
+            }
+            if ((enemy->block > 0 || enemy->burn > 0) && enemy->trait == TRAIT_NONE) {
+                // 체력 줄이 이미 "방N 화N"을 보여 준다. 특성이 있으면 이 줄을 규칙문에 내준다.
+                wsprintfW(b, L"방어도 %d   화상 %d", enemy->block, enemy->burn);
+                Text(dc, r.left + 12, line, b, C_DIM, gFontSmall);
+                line += 20;
+            }
+            if (enemy->trait != TRAIT_NONE && enemy->trait != TRAIT_TWOINTENT && line < r.bottom - 18)
+                TextRect(dc, MakeRect(r.left + 12, line, r.right - 10, r.bottom), et->rule, C_DIM, gFontSmall, DT_WORDBREAK);
         }
     } else {
         Text(dc, r.left + 12, r.top + 231, L"[ 삭제됨 ]", C_DIM, gFontSmall);
