@@ -10,6 +10,8 @@ repls = {
 '''            if (game.driveChoiceCount != (remaining ? 3 : 1)) return Fail("campaign candidate count");''':
 '''            int expectedCount = remaining ? (remaining < 3 ? remaining : 3) : 1;
             if (game.driveChoiceCount != expectedCount) return Fail("campaign candidate count");''',
+'''                    if ((remaining >= 3) == (game.driveChoices[j] == d)) return Fail("campaign volume uniqueness or late-game repetition");''':
+'''                    if (game.driveChoices[j] == d) return Fail("campaign volume choices must stay unique");''',
 '''        if (seenVolumes != ((~mask) & 63)) return Fail("all remaining volumes must be reachable across seeds");
         if (remaining && seenGrades != ((1 << DIFFICULTY_COUNT) - 1)) return Fail("all difficulty grades must remain available");''':
 '''        if (remaining <= 3 && seenVolumes != ((~mask) & 63))
