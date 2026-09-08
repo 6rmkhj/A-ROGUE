@@ -24,6 +24,8 @@ jobs:
         run: python tools/fix_final_gameplay_bootstrap.py
       - name: Apply final gameplay fixes
         run: python tools/fix_final_gameplay_issues.py
+      - name: Update campaign storage regressions
+        run: python tools/fix_final_gameplay_followup.py
       - name: Build and run regression suites
         shell: cmd
         run: build-msvc.bat
@@ -32,7 +34,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm tools/fix_final_gameplay_issues.py tools/fix_final_gameplay_bootstrap.py .github/workflows/fix-final-gameplay-issues.yml
+          git rm tools/fix_final_gameplay_issues.py tools/fix_final_gameplay_bootstrap.py tools/fix_final_gameplay_followup.py .github/workflows/fix-final-gameplay-issues.yml
           git add -A
           git commit -m "fix: add failed-run progress replay and deeper combat choices [final-gameplay-applied]"
           git push origin HEAD:fix/all-open-issues-20260908
