@@ -997,6 +997,13 @@ static void SetupStartingDice(GameState* game) {
     }
 }
 
+static uint32_t CampaignChoiceRandom(uint8_t clearedMask) {
+    clearedMask &= 0x3Fu;
+    uint32_t x = 0xA341316Cu ^ ((uint32_t)clearedMask * 0x9E3779B9u);
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    return x ? x : 0x51ED270Bu;
+}
+
 static void PickDriveChoices(GameState* game, uint8_t clearedMask) {
     int remaining[DRIVE_SELECTABLE_COUNT], remainingCount = 0;
     game->driveChoiceCount = 0;
@@ -1004,21 +1011,25 @@ static void PickDriveChoices(GameState* game, uint8_t clearedMask) {
     for (int i = 0; i < DRIVE_SELECTABLE_COUNT; ++i)
         if (!(clearedMask & (1u << i))) remaining[remainingCount++] = i;
     if (!remainingCount) { game->driveChoiceCount = 1; game->driveChoices[0] = DRIVE_FINAL; return; }
-    game->driveChoiceCount = 3;
-    if (remainingCount < 3) {
-        int pick = remaining[RandomRange(game, remainingCount)];
-        for (int i = 0; i < game->driveChoiceCount; ++i) game->driveChoices[i] = pick;
+
+    // Once the campaign has narrowed to three or fewer targets, never hide a
+    // remaining volume behind RNG. The UI simply renders the remaining cards.
+    if (remainingCount <= 3) {
+        game->driveChoiceCount = remainingCount;
+        for (int i = 0; i < remainingCount; ++i) game->driveChoices[i] = remaining[i];
         return;
     }
-    // Retain the original draws (including duplicate rejection) for mask == 0.
-    int count = 0;
-    while (count < game->driveChoiceCount) {
-        int pick = RandomRange(game, DRIVE_SELECTABLE_COUNT);
-        if (clearedMask & (1u << pick)) continue;
-        int duplicate = 0;
-        for (int i = 0; i < count; ++i) if (game->driveChoices[i] == pick) duplicate = 1;
-        if (!duplicate) game->driveChoices[count++] = pick;
+
+    // Earlier in the campaign, choose three deterministically from progress.
+    // Relaunching the executable cannot reroll the offer.
+    uint32_t rng = CampaignChoiceRandom(clearedMask);
+    for (int i = remainingCount - 1; i > 0; --i) {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        int j = (int)(rng % (uint32_t)(i + 1));
+        int swap = remaining[i]; remaining[i] = remaining[j]; remaining[j] = swap;
     }
+    game->driveChoiceCount = 3;
+    for (int i = 0; i < 3; ++i) game->driveChoices[i] = remaining[i];
 }
 
 // 카드 3장에 서로 다른 난이도를 배정한다. 드라이브 추첨과 같은 난수열을 쓰면
@@ -1038,6 +1049,12 @@ static void PickDriveDifficulties(GameState* game, uint32_t seed) {
         int swap = pool[i]; pool[i] = pool[j]; pool[j] = swap;
     }
     for (int i = 0; i < game->driveChoiceCount; ++i) game->driveDifficulty[i] = pool[i];
+    if (game->clearedMask == 0) {
+        int hasBeginner = 0;
+        for (int i = 0; i < game->driveChoiceCount; ++i)
+            if (game->driveDifficulty[i] == DIFF_BEGINNER) hasBeginner = 1;
+        if (!hasBeginner && game->driveChoiceCount > 0) game->driveDifficulty[0] = DIFF_BEGINNER;
+    }
 }
 
 // 시드에서 파생한 독립 난수로 세 몹의 순서를 섞고 A,B / C,A / B,C로 배치해
@@ -1102,7 +1119,7 @@ void NewRun(GameState* game, uint32_t seed, uint8_t clearedMask) {
     game->boss.nextTargetFace = -1;
     SetupStartingDice(game);
     PickDriveChoices(game, clearedMask);
-    PickDriveDifficulties(game, game->rng ^ 0x9E3779B9u);
+    PickDriveDifficulties(game, CampaignChoiceRandom(game->clearedMask) ^ 0x9E3779B9u);
     BeginStory(game, STORY_INTRO, 0, PHASE_DRIVE_SELECT);
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
 }
@@ -1767,15 +1784,22 @@ static void ApplyFragmentationIfAllowed(GameState* game) {
 }
 
 static void RollDice(GameState* game) {
+    const int offline = game->boss.offlineDie;
     for (int d = 0; d < 3; ++d) {
-        game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
+        // A disconnected die has no read at all: keep its last face and consume
+        // no gameplay RNG. This makes the visual rule and simulation identical.
+        if (d != offline) game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
         game->dice[d].assignedSlot = -1;
         game->dice[d].disabled = 0;
         game->dice[d].unstable = 0;
-        game->dice[d].offline = 0;
+        game->dice[d].offline = (uint8_t)(d == offline);
     }
     game->selectedDie = -1;
-    if (IsModifierActive(game, MOD_READ_ERROR)) game->dice[RandomRange(game, 3)].unstable = 1;
+    if (IsModifierActive(game, MOD_READ_ERROR)) {
+        int candidates[3], count = 0;
+        for (int d = 0; d < 3; ++d) if (d != offline) candidates[count++] = d;
+        if (count > 0) game->dice[candidates[RandomRange(game, count)]].unstable = 1;
+    }
 }
 
 static void BeginTurn(GameState* game) {
@@ -1974,27 +1998,23 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage, int rollValu
 }
 
 static void ApplyFragmentation(GameState* game) {
-    if (!IsModifierActive(game, MOD_FRAGMENTATION)) return;
-    if (IsTsrInstalled(game, TSR_DEFRAG)) {
-        for (int i = 0; i < 3; ++i) game->dice[i].disabled = 0;
-        return;
+    for (int d = 0; d < 3; ++d) game->dice[d].disabled = 0;
+    if (!IsModifierActive(game, MOD_FRAGMENTATION) || IsTsrInstalled(game, TSR_DEFRAG)) return;
+    int rerolled = 0, fragmented = 0;
+    for (int d = 1; d < 3; ++d) {
+        int duplicate = 0;
+        for (int p = 0; p < d; ++p)
+            if (!game->dice[p].disabled && game->dice[p].rolledFace == game->dice[d].rolledFace) duplicate = 1;
+        if (!duplicate) continue;
+        game->dice[d].rolledFace = (uint8_t)RandomRange(game, 6);
+        ++rerolled;
+        duplicate = 0;
+        for (int p = 0; p < d; ++p)
+            if (!game->dice[p].disabled && game->dice[p].rolledFace == game->dice[d].rolledFace) duplicate = 1;
+        if (duplicate) { game->dice[d].disabled = 1; ++fragmented; }
     }
-    int fragmented = 0;
-    for (int i = 0; i < 3; ++i) game->dice[i].disabled = 0;
-    for (int i = 1; i < 3; ++i) {
-        const Face* current = RolledFace(game, i);
-        if (!current || current->damaged || current->kind == FACE_EMPTY) continue;
-        for (int j = 0; j < i; ++j) {
-            const Face* previous = RolledFace(game, j);
-            if (!previous || previous->damaged || previous->kind == FACE_EMPTY) continue;
-            if (current->kind == previous->kind && current->value == previous->value) {
-                game->dice[i].disabled = 1;
-                ++fragmented;
-                break;
-            }
-        }
-    }
-    if (fragmented > 0) PushLog(game, L"조각화: 중복 주사위가 비활성화되었습니다.");
+    if (rerolled > 0) PushLog(game, L"조각화: 중복 주사위를 한 번 재굴림했습니다.");
+    if (fragmented > 0) PushLog(game, L"조각화: 재굴림 후에도 겹친 주사위만 비활성화됩니다.");
 }
 
 static int RollOutputSum(const GameState* game) {
@@ -2755,8 +2775,17 @@ static void ClearPruneUndo(GameState* game) {
 
 // 층 하강. CACHE의 임시 한도는 다음 층 용량 검사보다 먼저 사라진다.
 static void EnterNextFloor(GameState* game) {
+    int previousCapacity = EffectiveCapacity(game);
     ++game->floor;
     game->encounter = 0;
+    if (game->floor < 3) {
+        int nextCapacity = EffectiveCapacity(game);
+        if (nextCapacity < previousCapacity) {
+            wchar_t capacityNotice[96];
+            wsprintfW(capacityNotice, L"SECTOR LOSS: 용량 한도 %dB → %dB · 손상된 디스크에서 남길 데이터를 고르십시오.", previousCapacity, nextCapacity);
+            PushLog(game, capacityNotice);
+        }
+    }
     if (game->floor >= 3) {
         game->floor = 2;
         game->encounter = 2;

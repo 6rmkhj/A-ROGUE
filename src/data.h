@@ -36,7 +36,7 @@ static const FaceInfo FACE_INFO[FACE_KIND_COUNT] = {
     {L"흡수", L"흡수", L"공격 피해 일부를 회복", 18, 6, AR_COLOR(182, 96, 220)},
     {L"와일드", L"와일드", L"어느 슬롯에서도 높은 출력", 26, 9, AR_COLOR(255, 205, 64)},
     {L"증폭", L"증폭", L"증폭 슬롯에서 보너스 2배", 15, 5, AR_COLOR(95, 225, 176)},
-    {L"메아리", L"메아리", L"연쇄 슬롯에서 직전 효과 반복", 17, 5, AR_COLOR(255, 139, 209)},
+    {L"메아리", L"메아리", L"연쇄 슬롯에서 이번 턴 공격/방어 효과 반복", 17, 5, AR_COLOR(255, 139, 209)},
     {L"빈 면", L"----", L"효과와 비용이 모두 0", 0, 0, AR_COLOR(55, 63, 73)}
 };
 
@@ -426,7 +426,7 @@ static const int SECTOR_REPAIR_HEAL[3] = {10, 13, 16};
 // 나눠 쓰면서 상시 효과를 낸다. 층이 내려가 한도가 조여들면 정리 화면에서
 // 면처럼 제거(언인스톨)할 수 있다.
 enum TsrKind {
-    TSR_HIMEM = 0,   // 용량 한도 +60B
+    TSR_HIMEM = 0,   // 용량 한도 +45B
     TSR_DEFRAG,      // 조각화 무효
     TSR_SCANDISK,    // 층 하강 시 배드 섹터 손상 무효
     TSR_UNDELETE,    // 전투 승리 시 체력 회복
@@ -445,7 +445,7 @@ struct TsrInfo {
 };
 
 static const TsrInfo TSR_INFO[TSR_COUNT] = {
-    {L"HIMEM.SYS", L"용량 한도 +60B",                 20, 60, -1,                AR_COLOR(255, 204, 75)},
+    {L"HIMEM.SYS", L"용량 한도 +45B",                 20, 45, -1,                AR_COLOR(255, 204, 75)},
     {L"DEFRAG",    L"조각화 비활성을 무효화",          22,  0, MOD_FRAGMENTATION, AR_COLOR(83, 170, 255)},
     {L"SCANDISK",  L"층 하강 시 배드 섹터 손상 무효",  24,  0, MOD_BAD_SECTOR,    AR_COLOR(95, 225, 176)},
     {L"UNDELETE",  L"전투 승리 시 체력 6 회복",        26,  6, -1,                AR_COLOR(182, 96, 220)},

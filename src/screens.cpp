@@ -1099,10 +1099,11 @@ static void DrawDie(HDC dc, int index) {
     wchar_t statuses[64] = L""; int statusCount = 0;
     if (face && face->damaged) { AppendStatus(statuses, L"손상"); ++statusCount; }
     if (face && face->quarantined != QUAR_NONE) { AppendStatus(statuses, L"격리"); ++statusCount; }
-    if (die->unstable) { AppendStatus(statuses, L"읽기 오류"); ++statusCount; }
+    if (die->unstable && gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"읽기 오류 → 다음 오프라인"); ++statusCount; }
+    else if (die->unstable) { AppendStatus(statuses, L"읽기 오류"); ++statusCount; }
     if (die->disabled) { AppendStatus(statuses, L"조각화"); ++statusCount; }
     if (die->offline) { AppendStatus(statuses, L"오프라인"); ++statusCount; }
-    if (gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"다음 턴 오프라인"); ++statusCount; }
+    if (!die->unstable && gGame.boss.nextOfflineDie == index) { AppendStatus(statuses, L"다음 턴 오프라인"); ++statusCount; }
     if (statusCount == 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     else if (statusCount > 1) TextRect(dc, statusRect, statuses, C_RED, gFontSmall, DT_CENTER | DT_WORDBREAK);
     else {

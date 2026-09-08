@@ -1728,7 +1728,7 @@ static int CheckDirectoryNodes() {
     if (UsableFaceCount(&corrupted) != usableBefore - 1) return Fail("corrupted must remove exactly one usable face");
     corrupted.playerMaxHp = 999; corrupted.playerHp = 999;
     for (int i = 0; i < corrupted.enemyCount; ++i) { corrupted.enemies[i].hp = 1; corrupted.enemies[i].block = 0; }
-    AssignDieToSlot(&corrupted, 0, SLOT_ATTACK); EndTurn(&corrupted);
+    if (!Strike(&corrupted)) return Fail("corrupted clear fixture needs an unquarantined attack die");
     if (corrupted.dice[target / 6].faces[target % 6].quarantined != QUAR_NONE)
         return Fail("winning must release the directory quarantine");
     if (corrupted.rewardTier != 1) return Fail("corrupted must produce a tuned reward");
@@ -1810,8 +1810,9 @@ static int CheckDirectoryPath() {
 }
 
 static int TestCampaignDriveChoices() {
-    // Exhaust every progress subset with enough seeds to cover both late-game
-    // volume choices and all five difficulty grades, without touching save I/O.
+    // Exhaust every progress subset. Campaign offers are now intentionally
+    // stable across executable restarts: the seed must not reroll volumes or
+    // difficulty (#96). Late game exposes every remaining volume (#95).
     for (int mask = 0; mask < 64; ++mask) {
         int remaining = 0, seenVolumes = 0, seenGrades = 0;
         for (int d = 0; d < 6; ++d) if (!(mask & (1 << d))) ++remaining;
@@ -1820,7 +1821,8 @@ static int TestCampaignDriveChoices() {
             NewRun(&game, seed, (uint8_t)mask);
             NewRun(&repeat, seed, (uint8_t)(mask | 0xC0));
             if (memcmp(&game, &repeat, sizeof(game))) return Fail("campaign choices must be deterministic and ignore unused mask bits");
-            if (game.driveChoiceCount != (remaining ? 3 : 1)) return Fail("campaign candidate count");
+            int expectedCount = remaining ? (remaining < 3 ? remaining : 3) : 1;
+            if (game.driveChoiceCount != expectedCount) return Fail("campaign candidate count");
             for (int i = 0; i < game.driveChoiceCount; ++i) {
                 int d = game.driveChoices[i], grade = game.driveDifficulty[i];
                 if (remaining ? (d < 0 || d >= DRIVE_SELECTABLE_COUNT || (mask & (1 << d))) : (d != DRIVE_FINAL || grade != DIFF_EXPERT))
@@ -1830,7 +1832,7 @@ static int TestCampaignDriveChoices() {
                 seenGrades |= 1 << grade;
                 for (int j = 0; j < i; ++j) {
                     if (game.driveDifficulty[j] == grade) return Fail("campaign cards must offer distinct difficulties");
-                    if ((remaining >= 3) == (game.driveChoices[j] == d)) return Fail("campaign volume uniqueness or late-game repetition");
+                    if (game.driveChoices[j] == d) return Fail("campaign volume choices must stay unique");
                 }
                 GameState mounted = game;
                 SelectDrive(&mounted, i);
@@ -1849,8 +1851,10 @@ static int TestCampaignDriveChoices() {
                     return Fail("unlocked final volume must have only one selectable card");
             }
         }
-        if (seenVolumes != ((~mask) & 63)) return Fail("all remaining volumes must be reachable across seeds");
-        if (remaining && seenGrades != ((1 << DIFFICULTY_COUNT) - 1)) return Fail("all difficulty grades must remain available");
+        if (remaining <= 3 && seenVolumes != ((~mask) & 63))
+            return Fail("late campaign must expose every remaining volume at once");
+        if (mask == 0 && !(seenGrades & (1 << DIFF_BEGINNER)))
+            return Fail("a fresh campaign must always offer beginner difficulty");
     }
     // Future single-card layouts must reject hidden card slots even if populated.
     GameState single, before;

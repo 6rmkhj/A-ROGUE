@@ -239,7 +239,7 @@ KEYB · 판독 후	KEYB · AFTER SCAN
 공격 피해 일부를 회복	Recover some attack damage as HP
 어느 슬롯에서도 높은 출력	High output in any slot
 증폭 슬롯에서 보너스 2배	Double bonus in the Amplify slot
-연쇄 슬롯에서 직전 효과 반복	Repeat the previous effect in the Chain slot
+연쇄 슬롯에서 이번 턴 공격/방어 효과 반복	Repeat this turn's Attack or Defend effect in the Chain slot
 효과와 비용이 모두 0	Zero effect and cost
 대상에게 피해를 줍니다.	Deals damage to the target.
 이번 턴의 적 피해를 막습니다.	Blocks enemy damage this turn.
@@ -272,7 +272,7 @@ KEYB · 판독 후	KEYB · AFTER SCAN
 변칙형 · 첫 턴 강공 압박	Anomaly · Heavy pressure on turn one
 변칙형	Anomaly
 알 수 없음	UNKNOWN
-용량 한도 +60B	Capacity limit +60B
+용량 한도 +45B	Capacity limit +45B
 조각화 비활성을 무효화	Negates fragmentation disable
 층 하강 배드 섹터 손상 무효	Negates bad-sector damage on descent
 전투 승리 시 체력 회복	Recover HP after winning combat
