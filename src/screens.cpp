@@ -77,7 +77,18 @@ void ApplyWindowedScale(int percent) {
     RECT desired = {0, 0, BASE_WIDTH * percent / 100, BASE_HEIGHT * percent / 100};
     AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0);
     int width = desired.right - desired.left, height = desired.bottom - desired.top;
-    int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+
+    MONITORINFO info = {}; info.cbSize = sizeof(info);
+    HMONITOR monitor = MonitorFromWindow(gWindow, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(monitor, &info)) {
+        info.rcWork = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    }
+    int workW = info.rcWork.right - info.rcWork.left;
+    int workH = info.rcWork.bottom - info.rcWork.top;
+    if (width > workW) width = workW;
+    if (height > workH) height = workH;
+    int x = info.rcWork.left + (workW - width) / 2;
+    int y = info.rcWork.top + (workH - height) / 2;
     SetWindowPos(gWindow, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED);
 }
 
@@ -349,7 +360,7 @@ static void DrawTitle(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(0, height / 2 + 234, width, height / 2 + 258), seen, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     TextRect(dc, MakeRect(150, height - 105, width - 150, height - 25),
-        L"마우스 또는 1·2·3으로 주사위 선택  /  슬롯 클릭으로 배치  /  스페이스 키로 실행  /  취소 키로 보상 건너뛰기",
+        L"1·2·3 주사위 선택 / 슬롯 클릭 배치 / Space 실행 / 보상 Esc: 선택 취소 · 선택 없음에서 두 번 눌러 포기",
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
@@ -4781,11 +4792,15 @@ void PaintGame(HWND window) {
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     // 진행도를 못 쓰고 있다는 사실은 어느 화면에서도 보여야 한다. 쓰기 권한이
     // 없는 폴더에서 돌리는 동안 정상 저장으로 믿고 계속 두면 안 된다.
-    if (gSaveFailed) {
-        RECT warn = MakeRect(BASE_WIDTH / 2 - 300, 2, BASE_WIDTH / 2 + 300, 22);
+    if (gCampaignCorrupt || gSaveFailed || gSettingsSaveFailed) {
+        RECT warn = MakeRect(BASE_WIDTH / 2 - 390, 2, BASE_WIDTH / 2 + 390, 22);
         Panel(canvas, warn, RGB(48, 12, 12), C_RED);
-        TextRect(canvas, warn, L"진행도를 저장하지 못했습니다 · AROGUE.exe가 있는 폴더에 쓸 수 있는지 확인하십시오",
-            C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const wchar_t* warning = gCampaignCorrupt
+            ? L"세이브 검증 실패 · 원본 AROGUE.SAV는 보호 중입니다 · 설정의 진행도 초기화로 새로 시작할 수 있습니다"
+            : gSettingsSaveFailed
+                ? L"설정을 저장하지 못했습니다 · AROGUE.CFG를 쓸 수 있는지 확인하십시오"
+                : L"진행 데이터를 저장하지 못했습니다 · 실행 폴더에 쓸 수 있는지 확인하십시오";
+        TextRect(canvas, warn, warning, C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (gTermOpen) DrawTerminal(canvas, BASE_WIDTH, BASE_HEIGHT);
 

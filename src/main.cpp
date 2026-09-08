@@ -58,6 +58,10 @@ int gEndingArmed = -1;
 // 마지막 세이브 시도가 실패했으면 1. 쓰기 권한이 없는 폴더에서 돌리는 동안
 // 조용히 진행하다 기록을 통째로 잃는 일을 막으려고 화면에 띄운다.
 int gSaveFailed;
+// Settings and corrupt-input failures are tracked separately so a successful
+// campaign write cannot hide a failed CFG write, and vice versa.
+int gSettingsSaveFailed;
+int gCampaignCorrupt;
 int gFxLevel = FX_FULL;
 
 // 직접 조작 연출은 게임 판정과 분리된 마지막 사건 하나만 기억한다. 연타가 가능한
@@ -836,7 +840,7 @@ static void CaptureSettings() {
 
 static void PersistSettings() {
     CaptureSettings();
-    SaveSettings(&gSettings);
+    gSettingsSaveFailed = SaveSettings(&gSettings) ? 0 : 1;
 }
 
 // 읽어 온 값을 검사해 적용한다. 표에 없는 배율이나 범위 밖 연출 강도는 버리고
@@ -865,12 +869,22 @@ static void ClearStaleConfirmations() {
     if (gGame.phase != PHASE_PRUNE) ZeroMemory(gPruneTsrPending, sizeof(gPruneTsrPending));
 }
 
+static int CampaignSaveExistsBesideExecutable() {
+    wchar_t path[MAX_PATH];
+    DWORD length = GetModuleFileNameW(0, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return 0;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (slash) lstrcpyW(slash + 1, L"AROGUE.SAV");
+    DWORD attr = GetFileAttributesW(path);
+    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 static void PersistCampaignProgress() {
     bool changed = RecordCampaignClears(&gCampaign, gGame.clearedMask);
     if (gGame.finalVolumeCleared && !gCampaign.finalCleared) { gCampaign.finalCleared = 1; changed = true; }
     if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
     // 실패는 조용히 넘기지 않는다. 다음 저장이 성공하면 표시도 내려간다.
-    if (changed) gSaveFailed = SaveCampaign(&gCampaign) ? 0 : 1;
+    if (changed && !gCampaignCorrupt) gSaveFailed = SaveCampaign(&gCampaign) ? 0 : 1;
     bool codexChanged = false;
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) {
         if (gGame.enemyScanned[i] && !gCodex[i]) { gCodex[i] = 1; codexChanged = true; }
@@ -888,8 +902,17 @@ static void ResetCampaignProgress() {
     FinishUiFx();
     gUiFxPendingDescent = -1;
     gVictoryStart = 0;
+    CampaignState previous = gCampaign;
     InitCampaign(&gCampaign);
-    SaveCampaign(&gCampaign);
+    // Reset is the explicit authorization to replace a corrupt/old save. Do not
+    // show 0/6 unless the replacement reached disk; roll memory back on failure.
+    if (!SaveCampaign(&gCampaign)) {
+        gCampaign = previous;
+        gSaveFailed = 1;
+        return;
+    }
+    gCampaignCorrupt = 0;
+    gSaveFailed = 0;
     InitTitle(&gGame, 0, 0);
 }
 
@@ -1111,7 +1134,7 @@ static void ClickReward(int x, int y) {
         return;
     }
     if (gGame.rewardIsTsr) {
-        // 보스 전리품: 카드 클릭 한 번으로 즉시 상주한다.
+        // 보스 전리품: 첫 입력은 후보, 같은 카드를 다시 누르면 설치 확정이다.
         for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; ArmOrTakeTsrReward(i); return; }
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ArmOrConfirmRewardSkip(); return; }
         gRewardSkipArmed = 0; gTsrArmed = -1;
@@ -1685,7 +1708,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             InvalidateRect(window, 0, FALSE);
         }
         return 0;
-    case WM_CAPTURECHANGED: gVolumeDragging = 0; return 0;
+    case WM_CAPTURECHANGED: gVolumeDragging = -1; return 0;
     case WM_LBUTTONDOWN: {
         POINT p = ScreenToCanvas(window, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         HandleClick(p.x, p.y); SyncUiFocus();
@@ -1786,7 +1809,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     }
     case WM_DESTROY:
         PersistSettings();
-        SaveCampaign(&gCampaign);
+        if (!gCampaignCorrupt) SaveCampaign(&gCampaign);
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
         KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID); KillTimer(window, BOSS_INTRO_TIMER_ID);
@@ -1820,7 +1843,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
     // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
     timeBeginPeriod(1);
-    LoadCampaign(&gCampaign);
+    int hadCampaignSave = CampaignSaveExistsBesideExecutable();
+    if (!LoadCampaign(&gCampaign) && hadCampaignSave) gCampaignCorrupt = 1;
     LoadCodex(gCodex, ENEMY_KIND_COUNT);
     LoadTranslations();
     // 번역을 읽은 뒤라야 English 설정이 실제로 받아들여진다.

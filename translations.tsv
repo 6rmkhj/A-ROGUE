@@ -1,3 +1,4 @@
+# AROGUE_TRANSLATIONS_V2
 # A:\ROGUE UI translations (UTF-8, tab-separated)
 # Korean source<TAB>English. Use \n for line breaks and keep printf tokens in order.
 # The game reloads this file on launch; rebuilding is not required after text edits.
@@ -31,7 +32,7 @@
 닫힌 것	Closed
 [ 새 게임 ]	[ New Game ]
 18개의 주사위 면이 당신의 덱이자 디스크입니다.\n강한 면은 더 많은 바이트를 차지합니다.\n층이 내려갈수록 줄어드는 용량 안에서 시스템을 복구하십시오.	Your 18 die faces are both your deck and disk.\nStronger faces consume more bytes.\nRestore the system within a capacity that shrinks each floor.
-마우스 또는 1·2·3으로 주사위 선택  /  슬롯 클릭으로 배치  /  스페이스 키로 실행  /  취소 키로 보상 건너뛰기	Select a die with the mouse or 1/2/3  /  Click a slot to place  /  Space to execute  /  Esc to skip rewards
+1·2·3 주사위 선택 / 슬롯 클릭 배치 / Space 실행 / 보상 Esc: 선택 취소 · 선택 없음에서 두 번 눌러 포기	1/2/3 select a die / click a slot / Space executes / reward Esc cancels selection; press twice with none selected to skip
 시스템 가이드 1/2	System Guide 1/2
 드라이브 정보 2/2	Drive Information 2/2
 ◀ 이전 페이지	◀ Previous

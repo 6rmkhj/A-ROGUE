@@ -141,6 +141,8 @@ extern int gRewardSkipArmed;
 // 마지막 캠페인 세이브가 실패했으면 1. 한 번 서면 그 실행 동안 유지되고,
 // 다음 저장이 성공하면 다시 0으로 내려간다.
 extern int gSaveFailed;
+extern int gSettingsSaveFailed;
+extern int gCampaignCorrupt;
 
 // 되돌릴 수 없는 선택을 고르는 단계와 확정하는 단계로 나눈다. 각 값은 아직
 // 확정하지 않은 후보의 번호이고, -1은 "고른 것 없음"이다. 첫 입력은 후보를
