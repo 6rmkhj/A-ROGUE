@@ -53,6 +53,28 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define BOOT_SEEK_END  (BOOT_CLUNK_AT + BOOT_SEEK_MS)
 #define BOOT_INSERT_MS (BOOT_SEEK_END + BOOT_ZOOM_MS)
 
+// ---- 보스 조우 연출 --------------------------------------------------------
+// 일반전 앞에는 디렉터리 2택과 진입 연출이 있지만 보스 구역에는 둘 다 없다.
+// 두 번째 일반전의 보상을 고르면 판이 곧장 보스전으로 갈렸다 - 이 게임에서
+// 가장 큰 사건이 카드 한 장 바뀌는 것으로 끝났다는 뜻이다. 디렉터리 화면이
+// 내내 "LOCKED DESTINATION ...\<BOSS>"로 가리켜 온 그 자리를 여기서 연다.
+//   경보   잠긴 목적지의 마지막 조각이 실제 코드로 풀린다
+//   게이트 그 경로를 막고 있던 철문이 좌우로 갈라진다
+//   강림   열린 틈에서 보스가 걸어 나와 바닥을 딛는다 (충격파·흔들림)
+//   명패   코드·수치·기믹이 박히고 명패가 걷히며 전투판이 열린다
+// 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
+#define BOSS_ALERT_MS  680     // 경보가 올라오고 목적지가 판독된다
+#define BOSS_GATE_MS   760     // 잠금이 풀리고 문짝이 갈라진다
+#define BOSS_RISE_MS   860     // 보스가 앞으로 나와 바닥을 딛는다
+#define BOSS_NAME_MS   800     // 명패가 박히고 기믹 도장이 찍힌다
+#define BOSS_HAND_MS   420     // 명패가 좌우로 걷히며 전투판을 내보낸다
+#define BOSS_GATE_AT   BOSS_ALERT_MS
+#define BOSS_RISE_AT   (BOSS_GATE_AT + BOSS_GATE_MS)
+#define BOSS_LAND_AT   (BOSS_RISE_AT + 520)            // 발이 바닥에 닿는 순간
+#define BOSS_NAME_AT   (BOSS_RISE_AT + BOSS_RISE_MS)
+#define BOSS_HAND_AT   (BOSS_NAME_AT + BOSS_NAME_MS)
+#define BOSS_INTRO_MS  (BOSS_HAND_AT + BOSS_HAND_MS)
+
 // ---- 피격·위독·정지 연출 --------------------------------------------------
 #define CRITICAL_HP 10         // 이 체력 이하부터 화면이 노이즈에 잠식된다
 #define STRIKE_MS 440          // 적이 달려들었다가 제자리로 돌아오는 시간
@@ -141,6 +163,10 @@ extern int gDescentChoiceIndex; // 최초 마운트 때 고른 카드 (층 하�
 // 디렉터리 진입: 고른 경로 조각이 타이핑되는 짧은 오버레이
 extern int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 extern DWORD gDirEnterStart;
+// 보스 조우: 잠긴 목적지가 열리고 보스가 걸어 나오는 동안. 판은 이미 보스전
+// 상태다 (StartCombat이 먼저 끝나 있다) - 그래서 언제 건너뛰어도 결과가 같다.
+extern int gBossIntroActive;
+extern DWORD gBossIntroStart;
 // 새 게임: 화면이 디스크로 빨려 들어가 드라이브에 꽂힐 때까지. 이 연출이 도는
 // 동안 판은 아직 누르기 직전 그대로다 (런은 연출이 끝날 때 만들어진다).
 extern int gBootActive;
@@ -236,6 +262,7 @@ void DrawTerminal(HDC dc, int width, int height);
 
 // 새 게임 삽입 연출. 붙잡아 둔 판을 돌려 얹으므로 캔버스의 실제 픽셀 크기가 필요하다.
 void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH);
+void DrawBossIntro(HDC dc, int width, int height);
 
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);

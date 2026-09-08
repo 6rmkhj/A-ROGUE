@@ -52,6 +52,7 @@ static int gUiFxPendingDescent = -1;
 static void BeginDescent(int toFloor, int choiceIndex);
 
 #define UIFX_TIMER_ID 11
+#define BOSS_INTRO_TIMER_ID 12
 #define UIFX_PLACE_MS 300
 #define UIFX_REWARD_MS 520
 #define UIFX_PRUNE_MS 340
@@ -295,9 +296,12 @@ int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
 
 static int GimmickShakeAmplitude();
 static int BootShakeAmplitude();
+static int BossIntroShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
+    int arrive = BossIntroShakeAmplitude();
+    if (arrive > fx) fx = arrive;
     for (int i = 0; i < gGame.combatFxCount; ++i) {
         int t = CombatFxElapsed(i);
         const CombatFxEvent& event = gGame.combatFx[i];
@@ -562,6 +566,64 @@ static void BeginDirectoryEnter(int kind, int choiceIndex) {
     SetTimer(gWindow, 9, FX_TIMER_MS, 0);
 }
 
+// ---- 보스 조우 연출 --------------------------------------------------------
+// 보스 구역에는 디렉터리 2택이 없다. 두 번째 일반전의 보상을 고르면 판이 곧장
+// 보스전으로 갈렸고, 만나는 장면 자체가 없었다. 여기서 잠긴 목적지를 실제로 연다.
+// 판은 이미 보스전 상태라 (StartCombat이 먼저 끝나 있다) 연출은 그림과 소리만
+// 맡고, 언제 건너뛰어도 결과가 같다.
+int gBossIntroActive;
+DWORD gBossIntroStart;
+
+// 구간이 바뀌는 시점마다 한 번씩 울린다. 그림은 경과 시간만 보고 그려지므로
+// 타이머가 할 일은 이 소리와 리페인트뿐이다 (삽입 연출과 같은 방식이다).
+static const struct BossCue { int at; int sfx; int pitch; } BOSS_CUES[] = {
+    { 0,                  SFX_CRASH,       0 },   // 판이 끊기고 경보가 올라온다
+    { 200,                SFX_READ_START,  0 },   // 잠긴 목적지를 판독한다
+    { BOSS_ALERT_MS - 140, SFX_DIE_LOCK,   5 },   // 마지막 조각이 확정된다
+    { BOSS_GATE_AT,       SFX_DIE_LOCK,    0 },   // 잠금이 풀린다 (철컥)
+    { BOSS_GATE_AT + 170, SFX_PRUNE,       0 },   // 문짝이 갈라지기 시작한다
+    { BOSS_RISE_AT,       SFX_CHARGE,      0 },   // 안쪽에서 무언가 걸어 나온다
+    { BOSS_LAND_AT,       SFX_HEAVY_HIT,   0 },   // 바닥을 딛는다
+    { BOSS_LAND_AT + 60,  SFX_BOSS_ARRIVE, 0 },   // 보스 등장 신호
+    { BOSS_NAME_AT,       SFX_SLOT_SET,    1 },   // 명패가 박힌다
+    { BOSS_NAME_AT + 200, SFX_FX_LOCK,     0 },   // 기믹 도장이 찍힌다
+    { BOSS_HAND_AT,       SFX_CONFIRM,     0 },   // 명패가 걷히고 전투판이 열린다
+};
+static int gBossIntroCue;
+static int gBossArriveFired;   // 등장 신호가 이미 울렸는가 (건너뛰어도 한 번은 울린다)
+
+// 바닥을 딛는 순간이 가장 크게 흔들리고, 문짝이 갈라지는 동안에는 낮게 떤다.
+static int BossIntroShakeAmplitude() {
+    if (!gBossIntroActive) return 0;
+    int elapsed = (int)(GetTickCount() - gBossIntroStart);
+    int land = elapsed - BOSS_LAND_AT;
+    if (land >= 0 && land < 340) return FxScale(11 * (340 - land) / 340);
+    if (elapsed >= BOSS_GATE_AT && elapsed < BOSS_GATE_AT + 170) return FxScale(4);
+    if (elapsed >= BOSS_GATE_AT + 170 && elapsed < BOSS_RISE_AT) return FxScale(2);
+    if (elapsed < 200) return FxScale(2 + (200 - elapsed) * 5 / 200);
+    return 0;
+}
+
+static void FinishBossIntro() {
+    if (!gBossIntroActive) return;
+    gBossIntroActive = 0;
+    KillTimer(gWindow, BOSS_INTRO_TIMER_ID);
+    // 중간에 건너뛰었으면 등장 신호가 아직 울리지 않았다. 보스전이 예고 없이
+    // 시작되지 않도록 그 한 소리는 반드시 남긴다.
+    if (!gBossArriveFired) { gBossArriveFired = 1; PlaySfx(SFX_BOSS_ARRIVE); }
+    InvalidateRect(gWindow, 0, FALSE);
+}
+
+static void BeginBossIntro() {
+    if (gBossIntroActive) return;
+    gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0;
+    gBossIntroCue = 0;
+    gBossArriveFired = 0;
+    gBossIntroStart = GetTickCount();
+    gBossIntroActive = 1;
+    SetTimer(gWindow, BOSS_INTRO_TIMER_ID, FX_TIMER_MS, 0);
+}
+
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
 // 새 게임은 즉시 넘어가지 않는다. 지금 화면이 돌면서 줄어들어 플로피 한 장의
 // 라벨이 되고, 그 디스크가 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤 드라이브가 읽고
@@ -691,6 +753,8 @@ int EnemyBob(int index) {
 }
 
 static int gIdleActive;
+// 이미 문을 연 보스 구역 (볼륨, 층). 새 런에서 다시 -1로 돌아간다.
+static int gBossIntroFloor = -1, gBossIntroDrive = -1;
 static int gSceneKey = -1;
 static DWORD gSceneStart;
 static int VisibleSceneKey() {
@@ -702,12 +766,21 @@ int SceneElapsed() { return gSceneKey < 0 ? 1200 : (int)(GetTickCount() - gScene
 void SyncIdleAnimation() {
     SyncUiFocus();
     int key = VisibleSceneKey();
+    // 보스 조우 연출은 그 층의 보스전이 처음 보이는 프레임에 한 번만 연다. 연출이
+    // 도는 동안에는 장면 시계를 되돌려 두므로(아래 gSceneKey = -1) 씬이 바뀌었다는
+    // 사실만으로는 두 번 여는 것을 막을 수 없다. 어느 볼륨 몇 층의 문을 이미
+    // 열었는지 따로 적어 두고, 볼륨 선택으로 돌아가면(= 새 런) 그 기록을 지운다.
+    if (gGame.phase == PHASE_TITLE || gGame.phase == PHASE_DRIVE_SELECT) { gBossIntroFloor = -1; gBossIntroDrive = -1; }
     // Count from the first visible frame, not while descent/install covers it.
-    if (gDescentActive || gDirEnterActive || gBootActive || UiFxSnapshotActive()) gSceneKey = -1;
+    if (gDescentActive || gDirEnterActive || gBootActive || gBossIntroActive || UiFxSnapshotActive()) gSceneKey = -1;
     else if (key != gSceneKey) {
         gSceneKey = key; gSceneStart = GetTickCount();
         if (gWindow && !gTurnTraceActive && !gCombatClearActive && !gDeathActive) {
-            if (gGame.phase == PHASE_COMBAT && gGame.encounter == 2) PlaySfx(SFX_BOSS_ARRIVE);
+            if (gGame.phase == PHASE_COMBAT && gGame.encounter == 2
+                && !(gBossIntroFloor == gGame.floor && gBossIntroDrive == gGame.selectedDrive)) {
+                gBossIntroFloor = gGame.floor; gBossIntroDrive = gGame.selectedDrive;
+                BeginBossIntro();
+            }
             else if (gGame.phase == PHASE_REWARD) PlaySfx(SFX_LOOT_REVEAL);
         }
     }
@@ -781,6 +854,7 @@ static void PersistCampaignProgress() {
 static void ResetCampaignProgress() {
     FinishDeath();
     FinishDirectoryEnter();
+    FinishBossIntro();
     FinishUiFx();
     gUiFxPendingDescent = -1;
     gVictoryStart = 0;
@@ -1047,7 +1121,7 @@ static void ClickPrune(int x, int y) {
 // -1은 "호버 없음". 마우스가 움직여도 이 id가 바뀌지 않으면 화면을 다시 그릴 필요가 없다.
 static int HoverId(int x, int y) {
     if (gTermOpen || gDeathActive || gBootActive || UiFxBlocksInput() || gTurnTraceActive
-        || gDescentActive || gDirEnterActive || gCombatClearActive) return -1;
+        || gDescentActive || gDirEnterActive || gBossIntroActive || gCombatClearActive) return -1;
     if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) return 1000;
     if (gDeckOpen) return Inside(DeckCloseRect(BASE_WIDTH), x, y) ? 1001 : -1;
     if (Inside(SettingsButtonRect(BASE_WIDTH), x, y)) return 900;
@@ -1137,7 +1211,8 @@ static void SyncUiFocus() {
     int scope = gDeckOpen | (gSettingsOpen << 1) | (gGuideOpen << 2) | (gTermOpen << 3)
         | (gGuidePage << 4) | (gDeathActive << 6) | (gBootActive << 7)
         | (UiFxSnapshotActive() << 8) | (gTurnTraceActive << 9) | (gDescentActive << 10)
-        | (gDirEnterActive << 11) | (gCombatClearActive << 12) | (gReadActive << 13);
+        | (gDirEnterActive << 11) | (gCombatClearActive << 12) | (gReadActive << 13)
+        | (gBossIntroActive << 14);
     int hover = gMouseInClient && !gVolumeDragging ? HoverId(gMouse.x, gMouse.y) : -1;
     if (UpdateUiFocusState(&gUiFocus, hover, VisibleSceneKey(), scope,
             gGame.phase == PHASE_COMBAT ? gGame.turn : -1, GetTickCount())) {
@@ -1157,6 +1232,7 @@ static void HandleClick(int x, int y) {
     if (gTurnTraceActive) { FinishTurnTrace(); return; }
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
+    if (gBossIntroActive) { FinishBossIntro(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (gDeckOpen) {
         if (Inside(DeckCloseRect(BASE_WIDTH), x, y) || Inside(DeckButtonRect(BASE_WIDTH), x, y)) gDeckOpen = 0;
@@ -1257,7 +1333,7 @@ static void TermPrint(const wchar_t* line) {
 // 연출이 도는 중에 판을 갈아엎으면 재생과 결과가 어긋난다. 그동안은 막는다.
 static int TermBusy() {
     return gTurnTraceActive || gDeathActive || gCombatClearActive
-        || gDescentActive || gDirEnterActive || gBootActive || GimmickFxKind() > 0
+        || gDescentActive || gDirEnterActive || gBossIntroActive || gBootActive || GimmickFxKind() > 0
         || UiFxBlocksInput();
 }
 
@@ -1306,6 +1382,15 @@ static void TermRun() {
         BeginCombatClear(gGame.floor, gGame.encounter);
         return;
     }
+    // 보스 조우 연출과 기믹은 층마다 한 번뿐이라 손으로 보려면 두 판을 이겨야 한다.
+    if (lstrcmpW(cmd, L"boss") == 0) {
+        if (TermBusy()) { TermPrint(L"  연출이 끝난 뒤에 다시 실행하십시오."); return; }
+        if (!DebugJumpToBoss(&gGame)) { TermPrint(L"  볼륨 안에서만 됩니다."); return; }
+        gTermOpen = 0;
+        SyncRollAnimation();
+        TermPrint(L"  보스 구역으로 이동했습니다.");
+        return;
+    }
     if (lstrcmpW(cmd, L"hp") == 0) {
         if (gGame.phase == PHASE_TITLE) { TermPrint(L"  런이 시작되지 않았습니다."); return; }
         int want = hasArg ? arg : gGame.playerMaxHp;
@@ -1320,6 +1405,7 @@ static void TermRun() {
     if (lstrcmpW(cmd, L"help") == 0) {
         TermPrint(L"  win       현재 전투를 즉시 승리 처리한다");
         TermPrint(L"  winwin    현재 드라이브를 즉시 클리어 처리한다");
+        TermPrint(L"  boss      지금 층의 보스 구역으로 바로 이동한다");
         TermPrint(L"  hp [n]    체력을 n으로 (생략하면 최대치)");
         TermPrint(L"  perf      페인트 시간과 오디오 언더런");
         TermPrint(L"  clear     기록 지우기");
@@ -1378,6 +1464,7 @@ static void HandleKey(WPARAM key) {
     }
     if (gDescentActive) { FinishDescent(); return; }
     if (gDirEnterActive) { FinishDirectoryEnter(); return; }
+    if (gBossIntroActive) { FinishBossIntro(); return; }
     if (gCombatClearActive) { FinishCombatClear(); return; }
     if (key == VK_F3 && gGame.phase != PHASE_TITLE) { gDeckOpen = !gDeckOpen; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gDeckOpen) { if (key == VK_ESCAPE) gDeckOpen = 0; InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1566,6 +1653,17 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             if (bootElapsed >= BOOT_INSERT_MS) FinishBootInsert();
             else InvalidateRect(window, 0, FALSE);
         }
+        else if (wParam == BOSS_INTRO_TIMER_ID) {
+            int bossElapsed = (int)(GetTickCount() - gBossIntroStart);
+            int cueCount = (int)(sizeof(BOSS_CUES) / sizeof(BOSS_CUES[0]));
+            while (gBossIntroCue < cueCount && bossElapsed >= BOSS_CUES[gBossIntroCue].at) {
+                if (BOSS_CUES[gBossIntroCue].sfx == SFX_BOSS_ARRIVE) gBossArriveFired = 1;
+                PlaySfxPitched(BOSS_CUES[gBossIntroCue].sfx, BOSS_CUES[gBossIntroCue].pitch);
+                ++gBossIntroCue;
+            }
+            if (bossElapsed >= BOSS_INTRO_MS) FinishBossIntro();
+            else InvalidateRect(window, 0, FALSE);
+        }
         else if (wParam == UIFX_TIMER_ID) {
             if (UiFxElapsed() >= UiFxDuration()) FinishUiFx();
             else InvalidateRect(window, 0, FALSE);
@@ -1590,7 +1688,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         SaveCampaign(&gCampaign);
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
-        KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID);
+        KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID); KillTimer(window, BOSS_INTRO_TIMER_ID);
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }

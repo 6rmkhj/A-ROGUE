@@ -863,3 +863,10 @@ C:의 법칙은 네 복구 루틴에서 시작됐다.	The law of C: began in you
 짝수 서명 필요	EVEN FACE REQUIRED
 최종 볼륨 [ENTER]	FINAL VOLUME [ENTER]
 출력 복제 +%d	OUTPUT COPIED +%d
+# 보스 조우 연출
+LOCKED DESTINATION  ·  잠긴 목적지	LOCKED DESTINATION
+경로 무결성 검사 실패 · 보스 프로세스가 이 경로를 점유하고 있습니다	Path integrity check failed · A boss process is holding this path
+%d층 보스 프로세스  ·  %s%s	FLOOR %d BOSS PROCESS  ·  %s%s
+체력 %d  ·  피해 %d  ·  방어 %d	HP %d  ·  DMG %d  ·  ARMOR %d
+대응  %s	COUNTER  %s
+기믹 없는 구형 보스 프로세스입니다 · 수치만으로 밀어붙입니다	Legacy boss process with no mechanic · it pushes with raw numbers

@@ -342,6 +342,9 @@ void DebugWinCombat(GameState* game);
 // 태우므로 조각 획득과 볼륨 종료가 평소 완주와 같은 경로로 돈다. 진행 중인
 // 볼륨이 없으면(타이틀·드라이브 선택·결과 화면) 판을 건드리지 않고 0을 반환.
 int DebugWinDrive(GameState* game);
+// 관리자 터미널(`)의 boss 전용. 남은 일반전과 보상을 건너뛰고 지금 층의 보스
+// 구역으로 바로 들어간다. 보스 조우 연출과 기믹을 손으로 확인할 때 쓴다.
+int DebugJumpToBoss(GameState* game);
 void SelectReward(GameState* game, int rewardIndex);
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex);
 void InstallTsr(GameState* game, int rewardIndex);
