@@ -148,12 +148,13 @@ bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
 // two files stay independent, so wiping progress keeps the environment and a
 // damaged AROGUE.CFG never costs anyone their recovered shards.
 static const uint32_t SETTINGS_MAGIC = 0x47464341u; // On disk: ACFG
-static const uint16_t SETTINGS_VERSION = 1;
-static const DWORD SETTINGS_SIZE = 16;
+static const uint16_t SETTINGS_VERSION = 2;
+static const DWORD SETTINGS_V1_SIZE = 16;
+static const DWORD SETTINGS_SIZE = 18;
 
-static uint32_t SettingsChecksum(const uint8_t* bytes) {
+static uint32_t SettingsChecksum(const uint8_t* bytes, int length) {
     uint32_t hash = 2166136261u;
-    for (int i = 0; i < 12; ++i) hash = (hash ^ bytes[i]) * 16777619u;
+    for (int i = 0; i < length; ++i) hash = (hash ^ bytes[i]) * 16777619u;
     return hash;
 }
 
@@ -165,6 +166,8 @@ void InitSettings(UserSettings* settings) {
     settings->fxLevel = 0;
     settings->musicEnabled = 1;
     settings->volume = 100;
+    settings->bgmVolume = 100;
+    settings->sfxVolume = 100;
 }
 
 bool LoadSettings(UserSettings* settings, const wchar_t* overridePath) {
@@ -174,21 +177,27 @@ bool LoadSettings(UserSettings* settings, const wchar_t* overridePath) {
     if (!BesideExecutable(path, overridePath, L"AROGUE.CFG")) return false;
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (file == INVALID_HANDLE_VALUE) return false;
-    uint8_t bytes[SETTINGS_SIZE + 1];
+    uint8_t bytes[SETTINGS_SIZE + 1] = {0};
     DWORD read = 0;
     bool ok = ReadFile(file, bytes, sizeof(bytes), &read, 0) != 0;
     CloseHandle(file);
-    if (!ok || read != SETTINGS_SIZE || Get32(bytes) != SETTINGS_MAGIC
-        || (bytes[4] | ((uint16_t)bytes[5] << 8)) != SETTINGS_VERSION
-        || Get32(bytes + 12) != SettingsChecksum(bytes)) { InitSettings(settings); return false; }
-    // Values are clamped by the caller against its own option tables; only the
-    // ranges this file owns are enforced here.
+    if (!ok || Get32(bytes) != SETTINGS_MAGIC) { InitSettings(settings); return false; }
+    uint16_t version = bytes[4] | ((uint16_t)bytes[5] << 8);
+    if (version == 1) {
+        if (read != SETTINGS_V1_SIZE || Get32(bytes + 12) != SettingsChecksum(bytes, 12)) { InitSettings(settings); return false; }
+    } else if (version == SETTINGS_VERSION) {
+        if (read != SETTINGS_SIZE || Get32(bytes + 14) != SettingsChecksum(bytes, 14)) { InitSettings(settings); return false; }
+    } else { InitSettings(settings); return false; }
     settings->language = bytes[6];
     settings->scalePercent = bytes[7];
     settings->fullscreen = bytes[8] ? 1 : 0;
     settings->fxLevel = bytes[9];
     settings->musicEnabled = bytes[10] ? 1 : 0;
     settings->volume = bytes[11] > 100 ? 100 : bytes[11];
+    if (version >= 2) {
+        settings->bgmVolume = bytes[12] > 100 ? 100 : bytes[12];
+        settings->sfxVolume = bytes[13] > 100 ? 100 : bytes[13];
+    }
     return true;
 }
 
@@ -206,6 +215,8 @@ bool SaveSettings(const UserSettings* settings, const wchar_t* overridePath) {
     bytes[9] = settings->fxLevel;
     bytes[10] = settings->musicEnabled ? 1 : 0;
     bytes[11] = settings->volume > 100 ? 100 : settings->volume;
-    Put32(bytes + 12, SettingsChecksum(bytes));
+    bytes[12] = settings->bgmVolume > 100 ? 100 : settings->bgmVolume;
+    bytes[13] = settings->sfxVolume > 100 ? 100 : settings->sfxVolume;
+    Put32(bytes + 14, SettingsChecksum(bytes, 14));
     return WriteFileAtomically(path, bytes, SETTINGS_SIZE);
 }

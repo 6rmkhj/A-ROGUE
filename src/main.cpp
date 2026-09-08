@@ -29,8 +29,17 @@ wchar_t gTermLog[TERM_LOG_LINES][TERM_LOG_CAP];
 int gTermLogCount;
 wchar_t gTermInput[TERM_INPUT_MAX + 1];
 int gTermInputLen;
-// 소리 슬라이더를 붙잡고 있는 동안 1. 커서가 슬라이더 밖으로 나가도 계속 따라온다.
-static int gVolumeDragging;
+// 소리 슬라이더를 붙잡고 있는 동안 채널 번호를 기억한다. -1이면 드래그 중이 아니다.
+static int gVolumeDragging = -1;
+static int gVolumeKeyboardChannel = AUDIO_VOLUME_MASTER;
+static int AudioChannelVolume(int channel) {
+    return channel == AUDIO_VOLUME_BGM ? AudioMusicVolume() : channel == AUDIO_VOLUME_SFX ? AudioSfxVolume() : AudioVolume();
+}
+static void SetAudioChannelVolume(int channel, int value) {
+    if (channel == AUDIO_VOLUME_BGM) AudioSetMusicVolume(value);
+    else if (channel == AUDIO_VOLUME_SFX) AudioSetSfxVolume(value);
+    else SetAudioVolume(value);
+}
 int gGuidePage;
 int gRestartArmed;
 int gCampaignResetArmed;
@@ -811,6 +820,8 @@ static void CaptureSettings() {
     gSettings.fxLevel = (uint8_t)gFxLevel;
     gSettings.musicEnabled = (uint8_t)(AudioMusicEnabled() ? 1 : 0);
     gSettings.volume = (uint8_t)AudioVolume();
+    gSettings.bgmVolume = (uint8_t)AudioMusicVolume();
+    gSettings.sfxVolume = (uint8_t)AudioSfxVolume();
 }
 
 static void PersistSettings() {
@@ -831,6 +842,8 @@ static void ApplySettings(int applyWindow) {
     if (gSettings.fullscreen) ApplyFullscreen(1);
     AudioSetMusicEnabled(gSettings.musicEnabled ? 1 : 0);
     SetAudioVolume(gSettings.volume);
+    AudioSetMusicVolume(gSettings.bgmVolume);
+    AudioSetSfxVolume(gSettings.sfxVolume);
 }
 
 // 화면을 벗어나면 세워 둔 후보는 남지 않는다. 다음 보상에서 첫 취소가 곧바로
@@ -1130,8 +1143,9 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < LANGUAGE_COUNT; ++i) if (Inside(LanguageOptionRect(i), x, y)) return 902 + i;
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) return 910 + i;
         for (int i = 0; i < FX_LEVEL_COUNT; ++i) if (Inside(FxLevelRect(i), x, y)) return 930 + i;
-        if (Inside(BgmToggleRect(), x, y)) return 941;
-        if (Inside(VolumeSliderRect(), x, y)) return 940;
+        if (Inside(BgmToggleRect(), x, y)) return 944;
+        for (int channel = 0; channel < AUDIO_VOLUME_COUNT; ++channel)
+            if (Inside(VolumeSliderRect(channel), x, y)) return 940 + channel;
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
         if (Inside(CampaignResetRect(), x, y)) return 922;
@@ -1213,7 +1227,7 @@ static void SyncUiFocus() {
         | (UiFxSnapshotActive() << 8) | (gTurnTraceActive << 9) | (gDescentActive << 10)
         | (gDirEnterActive << 11) | (gCombatClearActive << 12) | (gReadActive << 13)
         | (gBossIntroActive << 14);
-    int hover = gMouseInClient && !gVolumeDragging ? HoverId(gMouse.x, gMouse.y) : -1;
+    int hover = gMouseInClient && gVolumeDragging < 0 ? HoverId(gMouse.x, gMouse.y) : -1;
     if (UpdateUiFocusState(&gUiFocus, hover, VisibleSceneKey(), scope,
             gGame.phase == PHASE_COMBAT ? gGame.turn : -1, GetTickCount())) {
         if (gWindow) InvalidateRect(gWindow, 0, FALSE);
@@ -1267,10 +1281,12 @@ static void HandleClick(int x, int y) {
         if (Inside(BgmToggleRect(), x, y)) { AudioSetMusicEnabled(!AudioMusicEnabled()); PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return; }
         // 슬라이더는 누른 순간 값이 따라오고, 놓을 때까지 커서를 붙잡는다.
         // 미리듣기는 놓는 순간에만 울린다. 끄는 동안 계속 울리면 시끄럽다.
-        if (Inside(VolumeSliderRect(), x, y)) {
-            gVolumeDragging = 1;
+        for (int channel = 0; channel < AUDIO_VOLUME_COUNT; ++channel) {
+            if (!Inside(VolumeSliderRect(channel), x, y)) continue;
+            gVolumeDragging = channel;
+            gVolumeKeyboardChannel = channel;
             SetCapture(gWindow);
-            SetAudioVolume(VolumeFromX(x));
+            SetAudioChannelVolume(channel, VolumeFromX(channel, x));
             InvalidateRect(gWindow, 0, FALSE); return;
         }
         if (Inside(FullscreenToggleRect(), x, y)) { ApplyFullscreen(!gFullscreen); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1472,8 +1488,8 @@ static void HandleKey(WPARAM key) {
     if (gSettingsOpen) {
         if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; PersistSettings(); }
         // 마우스로 정확히 맞추기 어려운 값을 위해 5씩 움직인다.
-        else if (key == VK_LEFT)  { SetAudioVolume(AudioVolume() - 5); PlaySfx(SFX_UI_CLICK); }
-        else if (key == VK_RIGHT) { SetAudioVolume(AudioVolume() + 5); PlaySfx(SFX_UI_CLICK); }
+        else if (key == VK_LEFT)  { SetAudioChannelVolume(gVolumeKeyboardChannel, AudioChannelVolume(gVolumeKeyboardChannel) - 5); PlaySfx(SFX_UI_CLICK); }
+        else if (key == VK_RIGHT) { SetAudioChannelVolume(gVolumeKeyboardChannel, AudioChannelVolume(gVolumeKeyboardChannel) + 5); PlaySfx(SFX_UI_CLICK); }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (key == VK_F1) { gGuideOpen = !gGuideOpen; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; if (gGuideOpen) gGuidePage = 0; InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1565,7 +1581,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             TRACKMOUSEEVENT track = {sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0};
             TrackMouseEvent(&track); gMouseInClient = 1;
         }
-        if (gVolumeDragging) { SetAudioVolume(VolumeFromX(gMouse.x)); InvalidateRect(window, 0, FALSE); return 0; }
+        if (gVolumeDragging >= 0) { SetAudioChannelVolume(gVolumeDragging, VolumeFromX(gVolumeDragging, gMouse.x)); InvalidateRect(window, 0, FALSE); return 0; }
         SyncUiFocus();
         return 0;
     }
@@ -1576,8 +1592,8 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         if (!wParam) { gMouseInClient = 0; gMouse.x = gMouse.y = -1; SyncUiFocus(); }
         return 0;
     case WM_LBUTTONUP:
-        if (gVolumeDragging) {
-            gVolumeDragging = 0;
+        if (gVolumeDragging >= 0) {
+            gVolumeDragging = -1;
             ReleaseCapture();
             PlaySfx(SFX_CONFIRM);          // 맞춘 크기를 귀로 확인시킨다
             SyncUiFocus(); gUiFocus.cued = 1;

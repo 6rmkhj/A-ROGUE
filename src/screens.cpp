@@ -23,26 +23,28 @@ RECT LanguageOptionRect(int index) { int left = 84 + index * 150; return MakeRec
 // 오른쪽 열. 설정 화면은 왼쪽 364px만 쓰고 나머지가 비어 있었다. 화면 배율 행은
 // x=716까지 뻗으므로 겹치지 않게 한 행 아래(전체화면과 같은 높이)에 둔다.
 // 판정용 사각형은 홈보다 두껍다. 얇은 선을 정확히 집어야 하면 쓰기 나쁘다.
-RECT VolumeSliderRect() { return MakeRect(560, 380, 990, 422); }
+RECT VolumeSliderRect(int channel) {
+    int top = 370 + channel * 50;
+    return MakeRect(690, top, 960, top + 32);
+}
 
-RECT VolumeHandleRect(int volume) {
-    RECT r = VolumeSliderRect();
+RECT VolumeHandleRect(int channel, int volume) {
+    RECT r = VolumeSliderRect(channel);
     int travel = (r.right - r.left) - VOL_HANDLE_W;
     int left = r.left + travel * volume / 100;
     return MakeRect(left, r.top, left + VOL_HANDLE_W, r.bottom);
 }
 
-int VolumeFromX(int x) {
-    RECT r = VolumeSliderRect();
+int VolumeFromX(int channel, int x) {
+    RECT r = VolumeSliderRect(channel);
     int travel = (r.right - r.left) - VOL_HANDLE_W;
     if (travel < 1) return 0;
-    // 손잡이 한가운데를 잡은 것으로 친다. 그래야 커서와 손잡이가 어긋나지 않는다.
     int v = (x - r.left - VOL_HANDLE_W / 2) * 100 / travel;
     return v < 0 ? 0 : v > 100 ? 100 : v;
 }
 RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 // 소리 슬라이더 안내문(y434~458) 아래로 내려온다. 468이면 라벨이 안내문을 덮는다.
-RECT BgmToggleRect() { return MakeRect(560, 500, 780, 542); }
+RECT BgmToggleRect() { return MakeRect(600, 420, 675, 452); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT CampaignResetRect() { return MakeRect(560, 658, 840, 700); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
@@ -178,41 +180,32 @@ static void DrawSettings(HDC dc, int width, int height) {
     }
     TextRect(dc, MakeRect(84, 312, panel.right - 30, 336), L"전체화면에서는 적용되지 않습니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 
-    // 소리 크기. 마스터 볼륨 하나로 모든 효과음에 함께 걸린다.
-    Text(dc, 560, 348, L"소리 크기", C_YELLOW, gFontMedium);
-    {
-        int vol = AudioVolume();
-        RECT slider = VolumeSliderRect();
-        RECT handle = VolumeHandleRect(vol);
+    // Master / BGM / SFX를 같은 영역에서 독립적으로 조절한다.
+    Text(dc, 560, 342, L"오디오", C_YELLOW, gFontMedium);
+    static const wchar_t* const volumeNames[AUDIO_VOLUME_COUNT] = {L"Master", L"BGM", L"SFX"};
+    int volumes[AUDIO_VOLUME_COUNT] = {AudioVolume(), AudioMusicVolume(), AudioSfxVolume()};
+    for (int channel = 0; channel < AUDIO_VOLUME_COUNT; ++channel) {
+        int vol = volumes[channel];
+        RECT slider = VolumeSliderRect(channel);
+        RECT handle = VolumeHandleRect(channel, vol);
         int hover = Inside(slider, gMouse.x, gMouse.y);
         int mid = (slider.top + slider.bottom) / 2;
-
-        // 홈은 얇게, 채워진 만큼만 초록으로. 음소거면 홈만 남는다.
-        RECT groove = MakeRect(slider.left, mid - 4, slider.right, mid + 4);
+        Text(dc, 560, slider.top + 5, volumeNames[channel], channel == AUDIO_VOLUME_MASTER ? C_GREEN : C_TEXT, gFontSmall);
+        RECT groove = MakeRect(slider.left, mid - 3, slider.right, mid + 3);
         Panel(dc, groove, C_PANEL_2, C_LINE);
         int filled = (handle.left + handle.right) / 2;
-        if (filled > groove.left)
-            Fill(dc, MakeRect(groove.left + 1, groove.top + 1, filled, groove.bottom - 1),
-                vol == 0 ? C_LINE : C_GREEN);
-
-        // 눈금 25%마다. 값을 대충 맞출 때 기준이 된다.
+        if (filled > groove.left) Fill(dc, MakeRect(groove.left + 1, groove.top + 1, filled, groove.bottom - 1), vol == 0 ? C_LINE : C_GREEN);
         for (int t = 0; t <= 4; ++t) {
             int tx = slider.left + VOL_HANDLE_W / 2 + ((slider.right - slider.left - VOL_HANDLE_W) * t / 4);
-            Fill(dc, MakeRect(tx, groove.bottom + 3, tx + 1, groove.bottom + 8), C_LINE);
+            Fill(dc, MakeRect(tx, groove.bottom + 2, tx + 1, groove.bottom + 6), C_LINE);
         }
-
         Panel(dc, handle, hover ? RGB(28, 70, 57) : C_PANEL_2, hover ? C_GREEN : C_LINE);
-        Fill(dc, MakeRect(handle.left + 6, handle.top + 10, handle.left + 10, handle.bottom - 10),
-            vol == 0 ? C_DIM : C_GREEN);
-
+        Fill(dc, MakeRect(handle.left + 6, handle.top + 7, handle.left + 10, handle.bottom - 7), vol == 0 ? C_DIM : C_GREEN);
         wchar_t label[24];
-        if (vol == 0) lstrcpyW(label, L"음소거");
-        else wsprintfW(label, L"%d%%", vol);
-        TextRect(dc, MakeRect(slider.right + 14, slider.top, panel.right - 20, slider.bottom),
-            label, vol == 0 ? C_DIM : C_GREEN, gFontMedium, DT_VCENTER | DT_SINGLELINE);
+        if (vol == 0) lstrcpyW(label, L"음소거"); else wsprintfW(label, L"%d%%", vol);
+        TextRect(dc, MakeRect(slider.right + 8, slider.top, 1060, slider.bottom), label, vol == 0 ? C_DIM : C_GREEN, gFontSmall, DT_VCENTER | DT_SINGLELINE);
     }
-    TextRect(dc, MakeRect(560, 434, panel.right - 30, 458),
-        L"끌거나 좌우 방향키로 조절합니다.", C_DIM, gFontSmall, DT_SINGLELINE);
+    TextRect(dc, MakeRect(560, 510, panel.right - 30, 532), L"끌거나 좌우 방향키로 조절합니다.", C_DIM, gFontSmall, DT_SINGLELINE);
 
     // 캠페인 진행도. 지우는 것이 런 하나가 아니라 세이브 전체라 런 초기화와
     // 멀리 떨어뜨려 두고, 확정도 따로 받는다.
@@ -234,7 +227,6 @@ static void DrawSettings(HDC dc, int width, int height) {
         gCampaignResetArmed ? L"한 번 더 클릭하면 확정되고 타이틀로 돌아갑니다."
                             : L"복구한 조각과 엔딩 기록을 지우고 처음부터 시작합니다.",
         gCampaignResetArmed ? C_RED : C_DIM, gFontSmall, DT_WORDBREAK);
-    Text(dc, 560, 468, L"배경 음악", C_YELLOW, gFontMedium);
     RECT bgm = BgmToggleRect(); int hoverBgm = Inside(bgm, gMouse.x, gMouse.y);
     Panel(dc, bgm, AudioMusicEnabled() ? RGB(28, 70, 57) : hoverBgm ? RGB(28, 39, 48) : C_PANEL_2,
         AudioMusicEnabled() ? C_GREEN : hoverBgm ? C_BLUE : C_LINE);

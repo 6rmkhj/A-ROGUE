@@ -40,45 +40,57 @@ static int TestSettingsStorage() {
     UserSettings defaults, written, loaded;
     InitSettings(&defaults);
     if (defaults.language != 0 || defaults.scalePercent != 100 || defaults.fullscreen
-        || defaults.fxLevel != 0 || !defaults.musicEnabled || defaults.volume != 100)
+        || defaults.fxLevel != 0 || !defaults.musicEnabled || defaults.volume != 100
+        || defaults.bgmVolume != 100 || defaults.sfxVolume != 100)
         return Fail("fresh settings must be the shipped defaults");
 
     written.language = 1; written.scalePercent = 150; written.fullscreen = 1;
     written.fxLevel = 2; written.musicEnabled = 0; written.volume = 35;
+    written.bgmVolume = 28; written.sfxVolume = 74;
     if (!SaveSettings(&written, file.path)) return Fail("settings save");
     if (!LoadSettings(&loaded, file.path) || memcmp(&written, &loaded, sizeof(written)))
         return Fail("settings round trip");
 
-    uint8_t bytes[17] = {};
+    uint8_t bytes[19] = {};
     HANDLE handle = CreateFileW(file.path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     DWORD read = 0;
     bool readOk = handle != INVALID_HANDLE_VALUE && ReadFile(handle, bytes, sizeof(bytes), &read, 0);
     if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-    if (!readOk || read != 16 || memcmp(bytes, "ACFG\x01\x00", 6))
-        return Fail("settings stable 16-byte format");
+    if (!readOk || read != 18 || memcmp(bytes, "ACFG\x02\x00", 6))
+        return Fail("settings stable 18-byte v2 format");
 
-    // Every byte, header through checksum, must fail closed onto the defaults.
-    for (int i = 0; i < 16; ++i) {
+    // Every v2 byte, header through checksum, must fail closed onto the defaults.
+    for (int i = 0; i < 18; ++i) {
         bytes[i] ^= 0x80;
-        if (!WriteCampaignFixture(file.path, bytes, 16)) return Fail("settings corruption fixture");
+        if (!WriteCampaignFixture(file.path, bytes, 18)) return Fail("settings corruption fixture");
         loaded = written;
         if (LoadSettings(&loaded, file.path) || memcmp(&loaded, &defaults, sizeof(defaults)))
             return Fail("corrupt settings must fall back to defaults");
         bytes[i] ^= 0x80;
     }
-    for (DWORD size = 0; size <= 17; ++size) {
-        if (size == 16) continue;
+    for (DWORD size = 0; size <= 19; ++size) {
+        if (size == 18) continue;
         if (!WriteCampaignFixture(file.path, bytes, size)) return Fail("settings size fixture");
         loaded = written;
         if (LoadSettings(&loaded, file.path) || memcmp(&loaded, &defaults, sizeof(defaults)))
-            return Fail("short or long settings must fall back to defaults");
+            return Fail("short or long v2 settings must fall back to defaults");
     }
 
+    // A valid v1 file migrates: its master value survives and new channel gains default to 100.
+    uint8_t v1[16] = {'A','C','F','G',1,0,1,125,1,2,0,35,0,0,0,0};
+    uint32_t hash = 2166136261u;
+    for (int i = 0; i < 12; ++i) hash = (hash ^ v1[i]) * 16777619u;
+    v1[12] = (uint8_t)hash; v1[13] = (uint8_t)(hash >> 8); v1[14] = (uint8_t)(hash >> 16); v1[15] = (uint8_t)(hash >> 24);
+    if (!WriteCampaignFixture(file.path, v1, 16) || !LoadSettings(&loaded, file.path)
+        || loaded.volume != 35 || loaded.bgmVolume != 100 || loaded.sfxVolume != 100)
+        return Fail("v1 settings must migrate with channel defaults");
+
     // Volume is the one field a hand-edited file can push out of range.
-    if (!WriteCampaignFixture(file.path, bytes, 16)) return Fail("settings restore fixture");
-    written.volume = 200;
-    if (!SaveSettings(&written, file.path) || !LoadSettings(&loaded, file.path) || loaded.volume != 100)
-        return Fail("out-of-range volume must clamp instead of rejecting the file");
+    if (!WriteCampaignFixture(file.path, bytes, 18)) return Fail("settings restore fixture");
+    written.volume = 200; written.bgmVolume = 200; written.sfxVolume = 200;
+    if (!SaveSettings(&written, file.path) || !LoadSettings(&loaded, file.path)
+        || loaded.volume != 100 || loaded.bgmVolume != 100 || loaded.sfxVolume != 100)
+        return Fail("out-of-range volumes must clamp instead of rejecting the file");
 
     // A campaign record must never be mistaken for a settings record. The two
     // files sit in the same folder, so the magic has to keep them apart.
