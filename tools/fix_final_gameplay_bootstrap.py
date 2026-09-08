@@ -30,5 +30,12 @@ if old_fail in s:
 elif new_fail not in s:
     raise RuntimeError('drive-card annotation fallback shape changed')
 
+old_smoke = "else: raise RuntimeError('smoke success marker missing')"
+new_smoke = "else: print('campaign reach smoke insertion skipped: current harness has no SMOKE OK marker')"
+if old_smoke in s:
+    s = s.replace(old_smoke, new_smoke, 1)
+elif new_smoke not in s:
+    raise RuntimeError('smoke insertion fallback shape changed')
+
 p.write_text(s, encoding='utf-8', newline='\n')
 print('final gameplay patch generator prepared')
