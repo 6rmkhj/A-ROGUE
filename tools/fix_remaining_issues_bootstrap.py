@@ -22,14 +22,21 @@ if old_rx in s:
 elif new_rx not in s:
     raise RuntimeError('rx helper shape changed')
 
-# Make the BeginNewRun replacement keep the capture token as two source characters
-# instead of Python turning \1 into U+0001 before rx() sees it.
+# Make replacement payloads containing backslash escapes raw source strings so C++
+# receives literal \\n sequences instead of embedded newlines/control characters.
 old_begin = "'''static void BeginNewRun() {\\1\n"
 new_begin = "r'''static void BeginNewRun() {\\1\n"
 if old_begin in s:
     s = s.replace(old_begin, new_begin, 1)
 elif new_begin not in s:
     raise RuntimeError('BeginNewRun replacement shape changed')
+
+old_guide = "repl='''static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {"
+new_guide = "repl=r'''static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {"
+if old_guide in s:
+    s = s.replace(old_guide, new_guide, 1)
+elif new_guide not in s:
+    raise RuntimeError('guide replacement shape changed')
 
 p.write_text(s, encoding='utf-8', newline='\n')
 print('remaining issue patch generator updated')
