@@ -23,5 +23,12 @@ if old_rect in s:
 elif new_rect not in s:
     raise RuntimeError('drive rect prototype patch shape changed')
 
+old_fail = "    raise RuntimeError('DrawDifficultyCard in drive select not found')"
+new_fail = "    print('best-floor card annotation skipped: current renderer has no DrawDifficultyCard helper')"
+if old_fail in s:
+    s = s.replace(old_fail, new_fail, 1)
+elif new_fail not in s:
+    raise RuntimeError('drive-card annotation fallback shape changed')
+
 p.write_text(s, encoding='utf-8', newline='\n')
 print('final gameplay patch generator prepared')
