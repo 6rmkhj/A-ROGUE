@@ -1462,9 +1462,12 @@ static void DrawDirectoryCard(HDC dc, int index) {
     const DirectoryChoice* choice = &gGame.directory.choices[index];
     const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(choice->kind);
     int hover = Inside(r, gMouse.x, gMouse.y);
+    int armed = gDirectoryArmed == index;
     COLORREF accent = info ? (COLORREF)info->color : C_LINE;
-    Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? accent : C_LINE);
-    DrawCardMotion(dc, r, accent, index, hover);
+    Panel(dc, r, armed ? MixColor(C_PANEL, accent, 26) : hover ? RGB(24, 37, 46) : C_PANEL,
+        armed || hover ? accent : C_LINE);
+    DrawCardMotion(dc, r, accent, index, armed || hover);
+    if (armed) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), accent, 2);
     if (!info) return;
 
     wchar_t b[192];
@@ -1503,8 +1506,11 @@ static void DrawDirectoryCard(HDC dc, int index) {
     TextRect(dc, MakeRect(r.left + 108, r.top + 360, r.right - 16, r.top + 382), b,
         info->rewardTier ? C_YELLOW : C_TEXT, gFontSmall, DT_RIGHT | DT_SINGLELINE);
 
+    // 진입은 되돌릴 수 없다. 세워 둔 카드만 확정 문구를 달고, 나머지는 고르는
+    // 동작이라는 것을 문구로 밝힌다.
     TextRect(dc, MakeRect(r.left + 12, r.bottom - 32, r.right - 12, r.bottom - 10),
-        hover ? L"클릭하여 진입" : L"클릭 또는 숫자 키", hover ? accent : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        armed ? L"한 번 더 누르면 진입 · [취소]로 해제" : hover ? L"클릭하여 선택" : L"클릭 또는 숫자 키",
+        armed ? accent : hover ? accent : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawDirectorySelect(HDC dc, int width, int height) {
@@ -1536,7 +1542,10 @@ static void DrawDirectorySelect(HDC dc, int width, int height) {
     Text(dc, 120, 664, destination, C_DIM, gFontMedium);
 
     TextRect(dc, MakeRect(0, height - 52, width, height - 28),
-        L"[1] / [2] 또는 디렉터리를 클릭하십시오  ·  선택지는 다시 뽑히지 않습니다", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        gDirectoryArmed >= 0
+            ? L"고른 디렉터리를 한 번 더 누르면 진입합니다  ·  [취소]로 선택을 해제할 수 있습니다"
+            : L"[1] / [2] 또는 디렉터리를 클릭해 고르십시오  ·  선택지는 다시 뽑히지 않습니다",
+        gDirectoryArmed >= 0 ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 static void DrawDirectorySelectionExit(HDC dc, int width, int height, int elapsed) {
@@ -2490,6 +2499,8 @@ RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 130, hei
 // 카드 아래에서 잘리지 않게 한다 (아래 DrawEndingChoice의 오프셋과 함께 봐야 한다).
 RECT EndingChoiceRect(int index) { int left = 32 + index * 360; return MakeRect(left, 268, left + 336, 600); }
 RECT EndingRestartRect() { return MakeRect(410, 650, 710, 700); }
+// 최종 명령의 확정 버튼. 카드가 후보를 세우고 실행은 여기서만 일어난다.
+RECT EndingConfirmRect() { return MakeRect(410, 644, 710, 694); }
 
 static void BuildRecoveredCommand(uint8_t mask, wchar_t* text, int capacity) {
     if (capacity <= 0) return;
@@ -2575,9 +2586,12 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     };
     for (int i = 0; i < ENDING_COUNT; ++i) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
+        int armed = gEndingArmed == i;
         COLORREF accent = EndingAccent(i);
-        Panel(dc, r, hover ? MixColor(C_PANEL, accent, 18) : C_PANEL, hover ? accent : C_LINE);
-        DrawCardMotion(dc, r, accent, i, hover);
+        Panel(dc, r, armed ? MixColor(C_PANEL, accent, 30) : hover ? MixColor(C_PANEL, accent, 18) : C_PANEL,
+            armed || hover ? accent : C_LINE);
+        DrawCardMotion(dc, r, accent, i, armed || hover);
+        if (armed) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), accent, 2);
         TextRect(dc, MakeRect(r.left + 16, r.top + 20, r.right - 16, r.top + 56), title[i], accent, gFontLarge, DT_CENTER | DT_SINGLELINE);
         if (gGame.seenEndingMask & (1u << i))
             TextRect(dc, MakeRect(r.left + 16, r.top + 58, r.right - 16, r.top + 78), L"기록됨", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2588,7 +2602,21 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
         Text(dc, r.left + 26, r.top + 222, L"닫힌 것", C_DIM, gFontSmall);
         TextRect(dc, MakeRect(r.left + 26, r.top + 246, r.right - 22, r.bottom - 16), lose[i], C_DIM, gFontSmall, DT_WORDBREAK);
     }
-    TextRect(dc, MakeRect(0, 612, width, 644), L"선택한 명령은 되돌릴 수 없습니다.", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 카드는 후보를 세우기만 한다. 실행은 아래 버튼 하나에서만 일어난다.
+    TextRect(dc, MakeRect(0, 610, width, 636),
+        gEndingArmed >= 0 ? L"선택한 명령은 되돌릴 수 없습니다 · [취소]로 다시 고를 수 있습니다"
+                          : L"선택한 명령은 되돌릴 수 없습니다 · 먼저 카드를 고르십시오",
+        C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    RECT confirm = EndingConfirmRect();
+    int ready = gEndingArmed >= 0 && gEndingArmed < ENDING_COUNT;
+    COLORREF accent = ready ? EndingAccent(gEndingArmed) : C_LINE;
+    int hoverConfirm = ready && Inside(confirm, gMouse.x, gMouse.y);
+    Panel(dc, confirm, ready ? MixColor(C_PANEL, accent, hoverConfirm ? 40 : 24) : C_PANEL_2, ready ? accent : C_LINE);
+    wchar_t label[96];
+    static const wchar_t* const COMMAND_NAMES[ENDING_COUNT] = {L"RESTORE HOST", L"EXEC ROGUE", L"MERGE SELF"};
+    if (ready) wsprintfW(label, L"%s 실행 [ENTER]", COMMAND_NAMES[gEndingArmed]);
+    else lstrcpyW(label, L"명령을 선택하십시오");
+    TextRect(dc, confirm, label, ready ? accent : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawFaceGrid(HDC dc, int mode) {
@@ -2597,13 +2625,19 @@ static void DrawFaceGrid(HDC dc, int mode) {
         for (int f = 0; f < 6; ++f) {
             RECT r = FaceGridRect(d, f); const Face* face = &gGame.dice[d].faces[f]; int hover = Inside(r, gMouse.x, gMouse.y);
             int undo = mode == 2 && CanUndoPrunedFace(&gGame, d, f);
-            COLORREF border = hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE; Panel(dc, r, hover ? RGB(28, 39, 48) : C_PANEL, border);
-            DrawCardMotion(dc, r, mode == 2 && !undo ? C_RED : FaceColor(face), d * 2 + f / 3, hover && mode);
+            // 보상 화면에서 덮을 자리로 세워 둔 칸. 확정 전까지는 표시만 바뀐다.
+            int armed = mode == 1 && gFaceSwapArmed == d * 6 + f;
+            COLORREF border = armed ? C_YELLOW : hover && mode ? (mode == 2 ? (undo ? C_GREEN : C_RED) : C_GREEN) : C_LINE;
+            Panel(dc, r, armed ? RGB(46, 42, 22) : hover ? RGB(28, 39, 48) : C_PANEL, border);
+            DrawCardMotion(dc, r, mode == 2 && !undo ? C_RED : FaceColor(face), d * 2 + f / 3, armed || (hover && mode));
+            if (armed) Outline(dc, MakeRect(r.left - 2, r.top - 2, r.right + 2, r.bottom + 2), C_YELLOW, 2);
             wchar_t value[24]; FormatFace(face, value); TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 37), value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
             wchar_t bytes[24];
-            if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
+            if (armed) lstrcpyW(bytes, L"다시 눌러 확정");
+            else if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
             else wsprintfW(bytes, L"%dB", FaceCost(face));
-            TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes, hover && undo ? C_GREEN : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+            TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes,
+                armed ? C_YELLOW : hover && undo ? C_GREEN : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }
     }
 }
@@ -2704,6 +2738,7 @@ static void DrawReward(HDC dc, int width, int height) {
         DrawCardMotion(dc, r, (COLORREF)info->color, i, hover);
         DrawRewardSocket(dc, r, (COLORREF)info->color, i, 1);
         wchar_t key[8]; wsprintfW(key, L"[%d]", i + 1); Text(dc, r.left + 10, r.top + 8, key, C_DIM, gFontSmall);
+        if (gTsrArmed == i) Outline(dc, MakeRect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), (COLORREF)info->color, 2);
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), info->name, (COLORREF)info->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64]; wsprintfW(b, L"상주  ·  %dB", info->cost);
         TextRect(dc, MakeRect(r.left + 8, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
@@ -2711,8 +2746,11 @@ static void DrawReward(HDC dc, int width, int height) {
         // 설치 후 사용량을 미리 보여주고, 한도를 넘게 되면 경고한다.
         int after = UsedBytes(&gGame) + info->cost;
         int over = after > EffectiveCapacity(&gGame);
-        wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
-        TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b, over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        // 세워 둔 카드는 용량 대신 확정 문구를 단다. 숫자는 바로 위 줄에 이미 있다.
+        if (gTsrArmed == i) lstrcpyW(b, L"한 번 더 누르면 설치");
+        else wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
+        TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b,
+            gTsrArmed == i ? (COLORREF)info->color : over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     for (int i = 0; i < 3 && !gGame.rewardIsTsr; ++i) {
         RECT r = RewardRect(i, width); int selected = gGame.selectedReward == i, hover = Inside(r, gMouse.x, gMouse.y), kind = gGame.rewardKinds[i];
@@ -2751,7 +2789,27 @@ static void DrawReward(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
     if (gGame.rewardIsTsr) { Text(dc, 56, 304, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
-    else { Text(dc, 56, 304, gGame.selectedReward >= 0 ? L"2/2  교체할 기존 면을 클릭하세요" : L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요", gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN, gFontSmall); DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0); }
+    else {
+        // 덮을 자리를 세워 두면 무엇이 무엇으로 바뀌고 용량이 어떻게 되는지
+        // 확정 전에 한 줄로 보여 준다.
+        wchar_t step[192];
+        COLORREF stepColor = gGame.selectedReward >= 0 ? C_YELLOW : C_GREEN;
+        if (gGame.selectedReward >= 0 && gFaceSwapArmed >= 0) {
+            int d = gFaceSwapArmed / 6, f = gFaceSwapArmed % 6;
+            const Face* old = &gGame.dice[d].faces[f];
+            int reward = gGame.selectedReward, kind = gGame.rewardKinds[reward];
+            int newCost = kind == FACE_NUMBER ? gGame.rewardValues[reward] : FACE_INFO[kind].cost;
+            int after = UsedBytes(&gGame) - FaceCost(old) + newCost;
+            wchar_t oldText[24]; FormatFace(old, oldText);
+            wsprintfW(step, L"2/2  주사위 %d-%d  %s(%dB) → %s(%dB)  ·  용량 %dB → %dB  ·  다시 누르면 확정",
+                d + 1, f + 1, oldText, FaceCost(old), FACE_INFO[kind].name, newCost, UsedBytes(&gGame), after);
+            stepColor = after > EffectiveCapacity(&gGame) ? C_RED : C_YELLOW;
+        }
+        else if (gGame.selectedReward >= 0) lstrcpyW(step, L"2/2  교체할 기존 면을 클릭하세요 (한 번 더 누르면 확정)");
+        else lstrcpyW(step, L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요");
+        Text(dc, 56, 304, step, stepColor, gFontSmall);
+        DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
+    }
     // 이 버튼은 진행이 아니라 손실이다. 문구로 결과를 밝히고, 확정은 두 번째
     // 입력에서만 받는다 (설정의 "다시 시작"과 같은 방식).
     RECT skip = ContinueRect(width, height); int hoverSkip = Inside(skip, gMouse.x, gMouse.y);

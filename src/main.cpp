@@ -35,6 +35,10 @@ int gGuidePage;
 int gRestartArmed;
 int gCampaignResetArmed;
 int gRewardSkipArmed;
+int gDirectoryArmed = -1;
+int gTsrArmed = -1;
+int gFaceSwapArmed = -1;
+int gEndingArmed = -1;
 // 마지막 세이브 시도가 실패했으면 1. 쓰기 권한이 없는 폴더에서 돌리는 동안
 // 조용히 진행하다 기록을 통째로 잃는 일을 막으려고 화면에 띄운다.
 int gSaveFailed;
@@ -742,17 +746,26 @@ static void PersistSettings() {
 }
 
 // 읽어 온 값을 검사해 적용한다. 표에 없는 배율이나 범위 밖 연출 강도는 버리고
-// 기본값을 쓴다. 창을 만들기 전에는 배율·전체화면을 적용할 수 없으므로
-// applyWindow로 나눠 부른다.
+// 기본값을 쓴다. 창과 소리는 창이 선 뒤에야 만질 수 있다 (AudioOpen이 WM_CREATE
+// 에서 잠금을 만들기 때문에, 그 전에 부르면 초기화되지 않은 잠금에 들어간다).
+// 그래서 창을 만들기 전 호출은 applyWindow = 0으로 언어와 연출 강도만 세운다.
 static void ApplySettings(int applyWindow) {
     SetUiLanguage(gSettings.language);
     if (gSettings.fxLevel < FX_LEVEL_COUNT) gFxLevel = gSettings.fxLevel;
-    AudioSetMusicEnabled(gSettings.musicEnabled ? 1 : 0);
-    SetAudioVolume(gSettings.volume);
     if (!applyWindow) return;
     for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i)
         if (SCALE_OPTIONS[i] == gSettings.scalePercent) { ApplyWindowedScale(SCALE_OPTIONS[i]); break; }
     if (gSettings.fullscreen) ApplyFullscreen(1);
+    AudioSetMusicEnabled(gSettings.musicEnabled ? 1 : 0);
+    SetAudioVolume(gSettings.volume);
+}
+
+// 화면을 벗어나면 세워 둔 후보는 남지 않는다. 다음 보상에서 첫 취소가 곧바로
+// 포기가 되어 버리면 두 단계로 나눈 뜻이 없다.
+static void ClearStaleConfirmations() {
+    if (gGame.phase != PHASE_REWARD) { gRewardSkipArmed = 0; gTsrArmed = -1; gFaceSwapArmed = -1; }
+    if (gGame.phase != PHASE_DIRECTORY) gDirectoryArmed = -1;
+    if (gGame.phase != PHASE_ENDING_CHOICE) gEndingArmed = -1;
 }
 
 static void PersistCampaignProgress() {
@@ -898,6 +911,7 @@ static void TakeTsrReward(int index) {
     if (index < 0 || index >= 3 || !gGame.rewardIsTsr) return;
     int tsr = gGame.rewardKinds[index];
     if (tsr < 0 || tsr >= TSR_COUNT || gGame.tsrInstalled[tsr]) return;
+    gTsrArmed = -1;
     int animated = BeginUiFx(UIFX_REWARD_TSR);
     if (animated) { gUiFx.rewardIndex = index; gUiFx.valueAfter = tsr; }
     InstallTsr(&gGame, index);
@@ -918,13 +932,23 @@ static void TakeRepairReward() {
 static void TakeDirectory(int index) {
     if (index < 0 || index >= DirectoryChoiceCount(&gGame)) return;
     int kind = gGame.directory.choices[index].kind;
+    gDirectoryArmed = -1;
     SelectDirectoryChoice(&gGame, index);
     if (gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_STORY) { PlaySfx(SFX_CONFIRM); BeginDirectoryEnter(kind, index); }
 }
 
+// 진입은 되돌릴 수 없고 선택지도 다시 뽑히지 않는다. 상세를 읽으려다 스친
+// 클릭이 곧바로 확정되지 않도록 첫 입력은 후보만 세운다.
+static void ArmOrTakeDirectory(int index) {
+    if (index < 0 || index >= DirectoryChoiceCount(&gGame)) return;
+    if (gDirectoryArmed != index) { gDirectoryArmed = index; PlaySfxPitched(SFX_DIE_PICK, index * 2); return; }
+    TakeDirectory(index);
+}
+
 static void ClickDirectory(int x, int y) {
     for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i)
-        if (Inside(DirectoryChoiceRect(i), x, y)) { TakeDirectory(i); return; }
+        if (Inside(DirectoryChoiceRect(i), x, y)) { ArmOrTakeDirectory(i); return; }
+    gDirectoryArmed = -1;
 }
 
 static void ClickDriveSelect(int x, int y) {
@@ -944,6 +968,37 @@ static void ArmOrConfirmRewardSkip() {
     PlaySfx(SFX_UI_CLICK);
 }
 
+// 상주 프로그램은 용량을 먹고 이번 층에서는 정리 화면까지 가야 내릴 수 있다.
+// 카드를 비교하다 스친 클릭으로 설치되지 않도록 첫 입력은 후보만 세운다.
+static void ArmOrTakeTsrReward(int index) {
+    if (index < 0 || index >= 3 || !gGame.rewardIsTsr) return;
+    int tsr = gGame.rewardKinds[index];
+    if (tsr < 0 || tsr >= TSR_COUNT || gGame.tsrInstalled[tsr]) return;
+    if (gTsrArmed != index) { gTsrArmed = index; PlaySfxPitched(SFX_REWARD_PICK, index * 2); return; }
+    TakeTsrReward(index);
+}
+
+// 면 교체는 덱을 영구히 바꾼다. 덮을 자리를 고르는 것과 실제로 덮는 것을 나눈다.
+static void InstallRewardOnFace(int d, int f) {
+    int reward = gGame.selectedReward;
+    if (reward < 0) return;
+    int animated = BeginUiFx(UIFX_REWARD_FACE);
+    if (animated) {
+        gUiFx.rewardIndex = reward; gUiFx.die = d; gUiFx.face = f;
+        gUiFx.shownFace.kind = (uint8_t)gGame.rewardKinds[reward];
+        gUiFx.shownFace.value = (uint8_t)gGame.rewardValues[reward];
+    }
+    gFaceSwapArmed = -1;
+    InstallSelectedReward(&gGame, d, f);
+    PlaySfx(SFX_REWARD_SET);
+}
+
+static void ArmOrInstallRewardOnFace(int d, int f) {
+    int cell = d * 6 + f;
+    if (gFaceSwapArmed != cell) { gFaceSwapArmed = cell; PlaySfx(SFX_DIE_PICK); return; }
+    InstallRewardOnFace(d, f);
+}
+
 static void ClickReward(int x, int y) {
     if (Inside(RewardRect(REWARD_REPAIR, BASE_WIDTH), x, y)) {
         gRewardSkipArmed = 0;
@@ -952,27 +1007,20 @@ static void ClickReward(int x, int y) {
     }
     if (gGame.rewardIsTsr) {
         // 보스 전리품: 카드 클릭 한 번으로 즉시 상주한다.
-        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; TakeTsrReward(i); return; }
+        for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; ArmOrTakeTsrReward(i); return; }
         if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ArmOrConfirmRewardSkip(); return; }
-        gRewardSkipArmed = 0;
+        gRewardSkipArmed = 0; gTsrArmed = -1;
         return;
     }
-    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
+    // 보상 카드를 바꾸면 세워 둔 교체 자리는 뜻을 잃는다.
+    for (int i = 0; i < 3; ++i) if (Inside(RewardRect(i, BASE_WIDTH), x, y)) { gRewardSkipArmed = 0; gFaceSwapArmed = -1; SelectReward(&gGame, i); PlaySfxPitched(SFX_REWARD_PICK, i * 2); return; }
     if (gGame.selectedReward >= 0) for (int d = 0; d < 3; ++d) for (int f = 0; f < 6; ++f) if (Inside(FaceGridRect(d, f), x, y)) {
-        int reward = gGame.selectedReward;
-        int animated = BeginUiFx(UIFX_REWARD_FACE);
-        if (animated) {
-            gUiFx.rewardIndex = reward; gUiFx.die = d; gUiFx.face = f;
-            gUiFx.shownFace.kind = (uint8_t)gGame.rewardKinds[reward];
-            gUiFx.shownFace.value = (uint8_t)gGame.rewardValues[reward];
-        }
         gRewardSkipArmed = 0;
-        InstallSelectedReward(&gGame, d, f);
-        PlaySfx(SFX_REWARD_SET);
+        ArmOrInstallRewardOnFace(d, f);
         return;
     }
     if (Inside(ContinueRect(BASE_WIDTH, BASE_HEIGHT), x, y)) { ArmOrConfirmRewardSkip(); return; }
-    gRewardSkipArmed = 0;
+    gRewardSkipArmed = 0; gFaceSwapArmed = -1;
 }
 
 static void ClickPrune(int x, int y) {
@@ -1036,6 +1084,7 @@ static int HoverId(int x, int y) {
     }
     if (gGame.phase == PHASE_ENDING_CHOICE) {
         for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) return 60 + i;
+        if (gEndingArmed >= 0 && Inside(EndingConfirmRect(), x, y)) return 70;
         return -1;
     }
     if (IsEndScreen()
@@ -1166,16 +1215,26 @@ static void HandleClick(int x, int y) {
     // 읽는 중 잘못 누른 클릭으로 기록이 사라진다.
     else if (gGame.phase == PHASE_STORY) { if (Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) AdvanceStoryUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
-        for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) { SelectEnding(&gGame, i); PlaySfx(SFX_CONFIRM); break; }
+        // 캠페인 전체에서 가장 되돌릴 수 없는 한 번이다. 카드는 후보만 세우고
+        // 실행은 아래 확정 버튼에서만 받는다.
+        int hitCard = 0;
+        for (int i = 0; i < ENDING_COUNT; ++i) if (Inside(EndingChoiceRect(i), x, y)) {
+            if (gEndingArmed != i) { gEndingArmed = i; PlaySfxPitched(SFX_REWARD_PICK, i * 2); }
+            hitCard = 1; break;
+        }
+        if (!hitCard && gEndingArmed >= 0 && Inside(EndingConfirmRect(), x, y)) {
+            int ending = gEndingArmed;
+            gEndingArmed = -1;
+            SelectEnding(&gGame, ending);
+            PlaySfx(SFX_CONFIRM);
+        }
     }
     else if (gGame.phase == PHASE_DRIVE_SELECT) ClickDriveSelect(x, y);
     else if (gGame.phase == PHASE_DIRECTORY) ClickDirectory(x, y);
     else if (gGame.phase == PHASE_COMBAT) ClickCombat(x, y); else if (gGame.phase == PHASE_REWARD) ClickReward(x, y);
     else if (gGame.phase == PHASE_PRUNE) ClickPrune(x, y);
     else if (IsEndScreen() && Inside(EndingRestartRect(), x, y)) ContinueFromEnd();
-    // 보상 화면을 벗어나면 무장은 남지 않는다. 다음 보상에서 첫 취소가
-    // 곧바로 포기가 되어 버리면 두 번 누르기를 넣은 뜻이 없다.
-    if (gGame.phase != PHASE_REWARD) gRewardSkipArmed = 0;
+    ClearStaleConfirmations();
     PersistCampaignProgress();
     // 층이 실제로 올라간 클릭(보상/정리 확정)이면 심층 진입 연출을 재생한다.
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
@@ -1341,7 +1400,19 @@ static void HandleKey(WPARAM key) {
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
     else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
-    else if (gGame.phase == PHASE_ENDING_CHOICE) { if (key >= '1' && key < '1' + ENDING_COUNT) { SelectEnding(&gGame, (int)(key - '1')); PlaySfx(SFX_CONFIRM); } }
+    else if (gGame.phase == PHASE_ENDING_CHOICE) {
+        if (key >= '1' && key < '1' + ENDING_COUNT) {
+            int pick = (int)(key - '1');
+            if (gEndingArmed != pick) { gEndingArmed = pick; PlaySfxPitched(SFX_REWARD_PICK, pick * 2); }
+        }
+        else if (key == VK_ESCAPE && gEndingArmed >= 0) { gEndingArmed = -1; PlaySfx(SFX_UI_CLICK); }
+        else if ((key == VK_RETURN || key == VK_SPACE) && gEndingArmed >= 0) {
+            int ending = gEndingArmed;
+            gEndingArmed = -1;
+            SelectEnding(&gGame, ending);
+            PlaySfx(SFX_CONFIRM);
+        }
+    }
     else if (gGame.phase == PHASE_DRIVE_SELECT) {
         if (key >= '1' && key <= '0' + gGame.driveChoiceCount) {
             SelectDrive(&gGame, (int)(key - '1'));
@@ -1349,8 +1420,9 @@ static void HandleKey(WPARAM key) {
         }
     }
     else if (gGame.phase == PHASE_DIRECTORY) {
-        // Esc는 선택지를 닫거나 다시 뽑지 않는다.
-        if (key >= '1' && key <= '0' + DIRECTORY_CHOICE_COUNT) TakeDirectory((int)(key - '1'));
+        // Esc는 선택지를 닫거나 다시 뽑지 않는다. 세워 둔 후보만 내린다.
+        if (key >= '1' && key <= '0' + DIRECTORY_CHOICE_COUNT) ArmOrTakeDirectory((int)(key - '1'));
+        else if (key == VK_ESCAPE && gDirectoryArmed >= 0) { gDirectoryArmed = -1; PlaySfx(SFX_UI_CLICK); }
     }
     else if (gGame.phase == PHASE_COMBAT) {
         if (key == 'R') BeginRead();
@@ -1368,22 +1440,22 @@ static void HandleKey(WPARAM key) {
     } else if (gGame.phase == PHASE_REWARD) {
         if (key >= '1' && key <= '3') {
             gRewardSkipArmed = 0;
-            if (gGame.rewardIsTsr) TakeTsrReward((int)(key - '1'));
-            else SelectReward(&gGame, (int)(key - '1'));
+            if (gGame.rewardIsTsr) ArmOrTakeTsrReward((int)(key - '1'));
+            else { gFaceSwapArmed = -1; SelectReward(&gGame, (int)(key - '1')); }
         }
         else if (key == '4') { gRewardSkipArmed = 0; TakeRepairReward(); }
         // 전투의 취소는 배치 해제다. 보상에서도 먼저 고른 카드를 놓는 데 쓰고,
         // 놓을 것이 없을 때만 포기 버튼을 무장한다. 습관적인 취소 한 번으로
         // 보상이 사라지지 않는다.
         else if (key == VK_ESCAPE) {
-            if (gGame.selectedReward >= 0) { gGame.selectedReward = -1; gRewardSkipArmed = 0; PlaySfx(SFX_UI_CLICK); }
+            if (gFaceSwapArmed >= 0) { gFaceSwapArmed = -1; gRewardSkipArmed = 0; PlaySfx(SFX_UI_CLICK); }
+            else if (gTsrArmed >= 0) { gTsrArmed = -1; gRewardSkipArmed = 0; PlaySfx(SFX_UI_CLICK); }
+            else if (gGame.selectedReward >= 0) { gGame.selectedReward = -1; gRewardSkipArmed = 0; PlaySfx(SFX_UI_CLICK); }
             else ArmOrConfirmRewardSkip();
         }
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (IsEndScreen()) { if (key == 'R' || key == VK_RETURN) ContinueFromEnd(); }
-    // 보상 화면을 벗어나면 무장은 남지 않는다. 다음 보상에서 첫 취소가
-    // 곧바로 포기가 되어 버리면 두 번 누르기를 넣은 뜻이 없다.
-    if (gGame.phase != PHASE_REWARD) gRewardSkipArmed = 0;
+    ClearStaleConfirmations();
     PersistCampaignProgress();
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
         if (UiFxSnapshotActive()) gUiFxPendingDescent = gGame.floor;

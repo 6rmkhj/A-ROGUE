@@ -119,6 +119,15 @@ extern int gRewardSkipArmed;
 // 다음 저장이 성공하면 다시 0으로 내려간다.
 extern int gSaveFailed;
 
+// 되돌릴 수 없는 선택을 고르는 단계와 확정하는 단계로 나눈다. 각 값은 아직
+// 확정하지 않은 후보의 번호이고, -1은 "고른 것 없음"이다. 첫 입력은 후보를
+// 세우고 카드에 확정 문구를 띄우기만 하며, 같은 후보에 한 번 더 와야 실제로
+// 적용된다. 다른 후보를 누르면 그쪽으로 옮겨 가고 취소 키로 풀린다.
+extern int gDirectoryArmed;   // 디렉터리 카드
+extern int gTsrArmed;         // 보스 전리품 카드
+extern int gFaceSwapArmed;    // 보상 면을 덮어쓸 기존 면 (die * 6 + face)
+extern int gEndingArmed;      // 최종 명령 카드
+
 // 주사위 판독 연출
 extern int gReadActive, gRolled;
 // 전투 종료·턴 계산·볼륨 진입 연출
@@ -262,6 +271,8 @@ RECT ContinueRect(int width, int height);
 // 이 버튼 하나로 좁힌다 (엔터·스페이스는 그대로 받는다).
 RECT StoryNextRect(int width, int height);
 RECT EndingChoiceRect(int index);
+// 최종 명령의 확정 버튼. 카드 선택과 실행을 갈라 놓는다.
+RECT EndingConfirmRect();
 RECT EndingRestartRect();
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
