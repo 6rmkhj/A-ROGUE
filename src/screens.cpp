@@ -2656,7 +2656,7 @@ static void DrawFaceGrid(HDC dc, int mode) {
             if (armed) Outline(dc, MakeRect(r.left - 2, r.top - 2, r.right + 2, r.bottom + 2), C_YELLOW, 2);
             wchar_t value[24]; FormatFace(face, value); TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 37), value, FaceColor(face), gFontMedium, DT_CENTER | DT_SINGLELINE);
             wchar_t bytes[24];
-            if (armed) lstrcpyW(bytes, L"다시 눌러 확정");
+            if (armed) lstrcpyW(bytes, L"확정");
             else if (hover && undo) lstrcpyW(bytes, L"다시 눌러 복원");
             else wsprintfW(bytes, L"%dB", FaceCost(face));
             TextRect(dc, MakeRect(r.left + 4, r.bottom - 23, r.right - 4, r.bottom - 4), bytes,
@@ -2749,7 +2749,13 @@ static void DrawReward(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_REWARD, gGame.rewardIsTsr || gGame.rewardTier ? C_YELLOW : C_GREEN, width, height);
     if (gGame.rewardIsTsr) {
         TextRect(dc, MakeRect(0, 76, width, 102), L"보스 삭제 완료  →  [현재: 전리품 선택]  →  상주 프로그램 설치  →  다음 층", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
-        TextRect(dc, MakeRect(0, 96, width, 122), L"상주 프로그램은 면과 용량을 나눠 씁니다 · 카드를 클릭하면 즉시 설치됩니다", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        wchar_t head[160];
+        const TsrInfo* armedInfo = gTsrArmed >= 0 && gTsrArmed < 3
+            && gGame.rewardKinds[gTsrArmed] >= 0 && gGame.rewardKinds[gTsrArmed] < TSR_COUNT
+            ? &TSR_INFO[gGame.rewardKinds[gTsrArmed]] : 0;
+        if (armedInfo) wsprintfW(head, L"%s · 한 번 더 누르면 설치합니다 · [취소]로 해제", armedInfo->name);
+        else lstrcpyW(head, L"상주 프로그램은 면과 용량을 나눠 씁니다 · 카드를 눌러 고르십시오");
+        TextRect(dc, MakeRect(0, 96, width, 122), head, armedInfo ? C_YELLOW : C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     } else {
         TextRect(dc, MakeRect(0, 76, width, 102), L"전투 완료  →  [현재: 보상 선택]  →  면 교체 또는 섹터 복구  →  다음 전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
         TextRect(dc, MakeRect(0, 96, width, 122), L"면을 설치하거나, 대신 섹터를 복구해 체력을 얻으십시오", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -2769,9 +2775,7 @@ static void DrawReward(HDC dc, int width, int height) {
         // 설치 후 사용량을 미리 보여주고, 한도를 넘게 되면 경고한다.
         int after = UsedBytes(&gGame) + info->cost;
         int over = after > EffectiveCapacity(&gGame);
-        // 세워 둔 카드는 용량 대신 확정 문구를 단다. 숫자는 바로 위 줄에 이미 있다.
-        if (gTsrArmed == i) lstrcpyW(b, L"한 번 더 누르면 설치");
-        else wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
+        wsprintfW(b, over ? L"설치 시 %dB / %dB · 정리 필요" : L"설치 시 %dB / %dB", after, EffectiveCapacity(&gGame));
         TextRect(dc, MakeRect(r.left + 8, r.bottom - 24, r.right - 8, r.bottom - 4), b,
             gTsrArmed == i ? (COLORREF)info->color : over ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
@@ -2841,7 +2845,7 @@ static void DrawReward(HDC dc, int width, int height) {
     TextRect(dc, skip, gRewardSkipArmed ? L"정말 포기?" : L"보상 포기 [취소]",
         gRewardSkipArmed ? C_RED : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (gRewardSkipArmed)
-        TextRect(dc, MakeRect(skip.left - 300, skip.top, skip.left - 12, skip.bottom),
+        TextRect(dc, MakeRect(skip.left - 460, skip.top, skip.left - 12, skip.bottom),
             L"한 번 더 누르면 이 보상을 버리고 진행합니다.", C_RED, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
