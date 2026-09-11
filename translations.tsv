@@ -177,8 +177,6 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 [ 삭제됨 ]	[ DELETED ]
 계속 [엔터]	CONTINUE [ENTER]
 새 런 시작  [R / ENTER]	START NEW RUN  [R / ENTER]
-시스템 정지	SYSTEM HALT
-전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB	BATTLES %d  ·  FACES %d  ·  REPAIRS %d  ·  RESIDENT %d  ·  FINAL %dB
 시스템 기록	SYSTEM RECORD
 무엇을 남길 것인가.	What will you leave behind?
 선택한 명령은 되돌릴 수 없습니다.	The selected command cannot be undone.
@@ -816,8 +814,21 @@ RISK %s · 위험 %s	RISK %s · THREAT %s
 여섯 조각이 모두 연결됐습니다.	All six fragments are now connected.
 복구 결과 [ENTER]	VIEW RECOVERY [ENTER]
 계속 [ENTER]	CONTINUE [ENTER]
-볼륨 선택 [R / ENTER]	VOLUMES [R / ENTER]
-복구된 조각 %d / 6 · 완료한 볼륨은 유지됩니다.	Recovered fragments %d / 6. Cleared volumes are retained.
+실행체 정지	UNIT HALTED
+%s · %d층 · %d턴	%s · FLOOR %d · TURN %d
+> 회수 절차 실행	> RUN RECOVERY PROCEDURE
+이름 확인 실패	NAME CHECK FAILED
+당분간 A라고 부른다	CALLING IT A FOR NOW
+통과한 전투 %d회	COMBATS CLEARED %d
+오늘도 있습니까?	STILL THERE TODAY?
+새 파일 (%d)	NEW FILES (%d)
+첫 출근치곤 덜 부쉈어	NOT BAD FOR A FIRST SHIFT
+구조 명단 %d / 6	RESCUE LIST %d / 6
+사용 공간 %d B	SPACE USED %d B
+마지막 피해 %d	LAST DAMAGE %d
+[17] 됐어. 거기까지.	[17] Enough. That's far enough.
+[17] 끝.	[17] Done.
+새 실행체 투입 · 스페이스	DEPLOY NEW UNIT · SPACE
 원본 서명	Original Signature
 표시된 슬롯은 짝수 출력 면만 통과합니다. 나머지는 출력 0.	The marked slot accepts even face power. Odd faces output 0.
 짝수 면을 배치하거나 다른 슬롯을 사용하십시오.	Use an even face or a different slot.

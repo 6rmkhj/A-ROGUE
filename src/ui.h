@@ -81,8 +81,26 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define STRIKE_POP_MS 720      // 피해 숫자가 떠오르다 사라지는 시간
 #define PLAYER_HIT_MS 420      // 피격 테두리 섬광
 #define SHAKE_MS 300           // 화면 흔들림
-#define DEATH_CREEP_MS 1400    // 체력 0에서 노이즈가 화면을 다 갉아먹기까지
-#define DEATH_STATIC_MS 2500   // 그 뒤 재시작 화면이 나오기까지
+
+// ---- 사망 연출 (DEATH-01) ---------------------------------------------------
+// 화면 전체를 잡음으로 덮지 않는다. 이번 런의 기억 열 줄이 한 줄씩 오염되어
+// 부서지고, 마지막으로 실행체의 이름이 부서지는 순간 화면이 한 번 꺼진다.
+// 어둠 속에서 십칠의 말이 찍히고 나면 그 마지막 프레임이 곧 사망 화면이다.
+// 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
+#define DEATH_LINES          10
+#define DEATH_CMD_AT         700    // 십칠이 명령을 친다 (0~1000에는 기억이 들어온다)
+#define DEATH_ROT_AT         1400   // 첫 줄의 오염이 시작된다
+#define DEATH_SPREAD_MS      360    // 한 줄에서 오염이 양끝까지 번지는 최대 시간
+#define DEATH_ROT_HOLD_MS    200    // 오염된 글자가 쪼개지기까지
+#define DEATH_FALL_MS        420    // 쪼개진 조각이 떨어져 사라지기까지
+#define DEATH_LAST_GAP_MS    350    // 마지막 줄 앞에서만 쉰다
+#define DEATH_NAME_AT        4500   // 실행체 이름 가운데부터 오염이 번진다
+#define DEATH_NAME_CRACK_AT  4640   // 이름에 금이 간다
+#define DEATH_NAME_SPLIT_AT  4800   // 이름이 위아래로 갈라진다
+#define DEATH_NAME_BREAK_AT  4960   // 오염된 글자부터 부서진다
+#define DEATH_CUT_AT         5300   // 조각이 공중에 떠 있을 때 화면이 끊긴다
+#define DEATH_DARK_AT        5800   // 어둠 속에서 대사가 찍힌다 (여기서부터 건너뛸 수 있다)
+#define DEATH_MS             7800
 
 // ---- 연출 강도 -------------------------------------------------------------
 // 줄어드는 것은 흔들림·파편·전역 글리치 같은 장식뿐이다. 슬롯 잠금과 다음 잠금
@@ -175,9 +193,12 @@ extern DWORD gBossIntroStart;
 // 동안 판은 아직 누르기 직전 그대로다 (런은 연출이 끝날 때 만들어진다).
 extern int gBootActive;
 extern DWORD gBootStart;
-// 체력 0 이후의 정지 연출 (노이즈가 화면을 삼키고 나면 재시작 화면으로 넘어간다)
+// 체력 0 이후의 사망 연출. 끝나면 그 마지막 프레임이 사망 화면으로 남는다.
 extern int gDeathActive;
 extern DWORD gDeathStart;
+int DeathElapsed();          // 사망 연출 경과 ms (연출이 끝났으면 DEATH_MS)
+int DeathLineAt(int line);   // 기억 한 줄의 오염이 시작되는 ms. 줄 간격이 가속한다
+void DrawDeathScene(HDC dc, int width, int height, int t);
 
 // ---- 연출 질의 (main.cpp가 계산하고 화면이 읽는다) ------------------------
 int DieNoise(int die);
@@ -238,10 +259,9 @@ int ScreenShakeY();
 // 화면 노이즈. 살아 있는 동안에는 항상 가장자리에만 머문다.
 //   체력 2~CRITICAL_HP : 체력이 줄수록 띠가 두꺼워지고 짙어진다
 //   체력 1             : 버티는 시간만큼 띠가 더 두꺼워지고 짙어진다 (중앙은 그대로)
-//   체력 0             : 그 노이즈가 화면 전체를 갉아먹으며 안으로 좁혀 들어온다
+//   체력 0             : 띠는 걷히고 사망 연출이 글자 단위로 이어받는다
 int AmbientNoiseLevel();   // 테두리 띠 밀도 (0 = 위독 연출 없음)
 int AmbientNoiseBand();    // 테두리 띠 두께(px)
-int DeathCreepAmount();    // 잠식 정도 0~1000 (0 = 정지 중이 아님)
 void SyncLastGasp();       // 체력 1이 된 시각을 잡아 둔다 (띠가 자라는 기준)
 int NoiseFrameStep();
 

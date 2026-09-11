@@ -318,6 +318,7 @@ int PlayerHitBlocked() { return gPlayerHitBlockedAll; }
 static int GimmickShakeAmplitude();
 static int BootShakeAmplitude();
 static int BossIntroShakeAmplitude();
+static int DeathShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
@@ -332,6 +333,8 @@ static int ShakeAmplitude() {
     }
     int boot = BootShakeAmplitude();
     if (boot > fx) fx = boot;
+    int death = DeathShakeAmplitude();
+    if (death > fx) fx = death;
     if (!gPlayerHitAt) return fx;
     int since = (int)(GetTickCount() - gPlayerHitAt);
     if (since < 0 || since >= SHAKE_MS) return fx;
@@ -353,9 +356,8 @@ int ScreenShakeY() {
     return (int)(Hash3((int)(GetTickCount() / 24), 5, 29) % (uint32_t)(amp * 2 + 1)) - amp;
 }
 
-// 정지 연출은 주사위 판독과 같은 빠른 주기로 끓고, 오래 지속되는 위독 노이즈는
-// 화면 전체가 빠르게 깜빡이지 않도록 느리게 섞인다.
-int NoiseFrameStep() { return (int)(GetTickCount() / (gDeathActive ? NOISE_CHURN_MS : 90)); }
+// 위독 노이즈는 오래 지속되므로 화면 전체가 빠르게 깜빡이지 않도록 느리게 섞인다.
+int NoiseFrameStep() { return (int)(GetTickCount() / 90); }
 
 // 위독 연출은 화면 가장자리에서 시작한다. 체력이 CRITICAL_HP 이하로 떨어지면
 // 테두리 띠에서만 신호가 무너지고, 체력이 줄수록 띠가 두꺼워지고 짙어진다.
@@ -403,15 +405,57 @@ void SyncLastGasp() {
     } else gLastGaspAt = 0;
 }
 
-// 체력이 0이 되면 가장자리에 머물던 노이즈가 풀려나 화면을 갉아먹는다.
-// 처음에는 천천히 번지다가 끝에서 단숨에 삼키도록 제곱 곡선을 쓴다.
-int DeathCreepAmount() {
-    if (!gDeathActive) return 0;
+// ---- 사망 연출 (DEATH-01) --------------------------------------------------
+// 체력이 0이 되면 전장이 걷히고 이번 런의 기억이 한 줄씩 오염되어 부서진다.
+// 그림은 screens.cpp가 DeathElapsed만 보고 그리므로 여기서는 시각·소리·흔들림만
+// 정한다. 어둠이 오기 전까지는 건너뛸 수 없다 - 그 구간이 곧 죽음이다.
+int DeathElapsed() {
+    if (!gDeathActive) return DEATH_MS;
     int elapsed = (int)(GetTickCount() - gDeathStart);
-    if (elapsed <= 0) return 0;
-    if (elapsed >= DEATH_CREEP_MS) return 1000;
-    int progress = elapsed * 1000 / DEATH_CREEP_MS;
-    return progress * progress / 1000;
+    return elapsed < 0 ? 0 : elapsed > DEATH_MS ? DEATH_MS : elapsed;
+}
+
+// 줄 간격은 330ms에서 190ms로 좁혀지고, 마지막 줄 앞에서만 350ms 쉰다.
+int DeathLineAt(int line) {
+    int at = DEATH_ROT_AT;
+    for (int i = 1; i <= line && i < DEATH_LINES; ++i)
+        at += i == DEATH_LINES - 1 ? DEATH_LAST_GAP_MS : Lerp(330, 190, (i - 1) * 1000 / (DEATH_LINES - 3));
+    return at;
+}
+
+// 박자마다 한 번씩 울린다. 줄이 부서지는 시점은 간격이 가속하므로 표로 적지 않고
+// DeathLineAt에서 계산한다 (오염이 시작된 첫 글자가 쪼개지는 순간). 모두 시간순이다.
+static int DeathCue(int index, int* sfx, int* pitch) {
+    *pitch = 0;
+    if (index == 0) { *sfx = SFX_GAMEOVER; return 0; }                      // 실행체 정지
+    if (index == 1) { *sfx = SFX_CONFIRM; return DEATH_CMD_AT; }            // 회수 절차 실행
+    index -= 2;
+    if (index < DEATH_LINES) {                                               // 한 줄이 부서진다
+        *sfx = SFX_DIE_LOCK; *pitch = index % 6;
+        return DeathLineAt(index) + DEATH_ROT_HOLD_MS;
+    }
+    index -= DEATH_LINES;
+    if (index == 0) { *sfx = SFX_FX_QUARANTINE; return DEATH_NAME_AT; }     // 이름이 오염된다
+    if (index == 1) { *sfx = SFX_HEAVY_HIT; return DEATH_NAME_BREAK_AT; }   // 이름이 부서진다
+    if (index == 2) { *sfx = SFX_CRASH; return DEATH_CUT_AT; }              // 화면이 끊긴다
+    return -1;
+}
+static int gDeathCue;
+
+// 줄이 부서질 때마다 작게, 이름이 부서지는 순간 한 번 크게 울린다. 화면 전체를
+// 움직이는 것은 이 울림과 끝의 끊김뿐이다.
+static int DeathShakeAmplitude() {
+    if (!gDeathActive) return 0;
+    int t = DeathElapsed(), amp = 0;
+    int name = t - DEATH_NAME_BREAK_AT;
+    if (name >= 0 && name < 320) amp = FxScale(9 * (320 - name) / 320);
+    for (int i = 0; i < DEATH_LINES; ++i) {
+        int since = t - DeathLineAt(i) - DEATH_ROT_HOLD_MS;
+        if (since < 0 || since >= 140) continue;
+        int kick = FxScale(3 * (140 - since) / 140);
+        if (kick > amp) amp = kick;
+    }
+    return amp;
 }
 
 static void FinishDeath() {
@@ -421,14 +465,13 @@ static void FinishDeath() {
     InvalidateRect(gWindow, 0, FALSE);
 }
 
-// 체력이 0이 된 직후. 전장이 그대로 노이즈에 잠기고, 다 덮이면 재시작 화면이 나온다.
+// 체력이 0이 된 직후. 끝나면 그 마지막 프레임이 그대로 사망 화면으로 남는다.
 static void BeginDeath() {
     // 설정 화면을 강제로 닫으므로 "정말 다시 시작?" 확인 상태도 같이 풀어 준다.
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
+    gDeathCue = 0;
     gDeathStart = GetTickCount();
     gDeathActive = 1;
-    PlaySfx(SFX_CRASH);
-    PlaySfx(SFX_GAMEOVER);
     SetTimer(gWindow, 7, FX_TIMER_MS, 0);
 }
 
@@ -1360,7 +1403,9 @@ static int ActivateKeyboardFocus() {
 }
 
 static void HandleClick(int x, int y) {
-    if (gDeathActive) return;
+    // 사망 연출은 어둠이 오기 전까지 건너뛸 수 없다. 그 뒤로는 대사를 다 채운
+    // 사망 화면으로 넘어가고, 한 번 더 눌러야 새 런이 시작된다.
+    if (gDeathActive) { if (DeathElapsed() >= DEATH_DARK_AT) FinishDeath(); return; }
     if (UiFxBlocksInput()) return;
     int skippedOne = 0;
     if (gBootActive) { FinishBootInsert(); skippedOne = 1; }
@@ -1594,7 +1639,7 @@ static void HandleKey(WPARAM key) {
         InvalidateRect(gWindow, 0, FALSE);
         return;
     }
-    if (gDeathActive) return;
+    if (gDeathActive) { if (DeathElapsed() >= DEATH_DARK_AT) FinishDeath(); return; }
     if (gBootActive) { FinishBootInsert(); return; }
     if (UiFxBlocksInput()) return;
     if (gTurnTraceActive) {
@@ -1685,7 +1730,10 @@ static void HandleKey(WPARAM key) {
             else ArmOrConfirmRewardSkip();
         }
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
-    else if (IsEndScreen()) { if (key == 'R' || key == VK_RETURN) ContinueFromEnd(); }
+    else if (IsEndScreen()) {
+        // 사망 화면은 "새 실행체 투입 · 스페이스"라고 적혀 있다.
+        if (key == 'R' || key == VK_RETURN || (key == VK_SPACE && gGame.phase == PHASE_GAMEOVER)) ContinueFromEnd();
+    }
     ClearStaleConfirmations();
     PersistCampaignProgress();
     if (gGame.floor > floorBefore && gGame.selectedDrive >= 0 && gGame.phase != PHASE_VICTORY) {
@@ -1778,7 +1826,12 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 7u) {
-            if ((int)(GetTickCount() - gDeathStart) >= DEATH_STATIC_MS) FinishDeath();
+            int deathElapsed = (int)(GetTickCount() - gDeathStart), sfx = 0, pitch = 0, at;
+            while ((at = DeathCue(gDeathCue, &sfx, &pitch)) >= 0 && deathElapsed >= at) {
+                PlaySfxPitched(sfx, pitch);
+                ++gDeathCue;
+            }
+            if (deathElapsed >= DEATH_MS) FinishDeath();
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 9u) {

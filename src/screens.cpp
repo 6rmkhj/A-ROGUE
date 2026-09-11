@@ -2543,7 +2543,8 @@ RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 130, hei
 // 최종 명령 카드 3장. 폭이 좁아진 만큼 세로로 늘려 두 줄짜리 보존·상실 설명이
 // 카드 아래에서 잘리지 않게 한다 (아래 DrawEndingChoice의 오프셋과 함께 봐야 한다).
 RECT EndingChoiceRect(int index) { int left = 32 + index * 360; return MakeRect(left, 268, left + 336, 600); }
-RECT EndingRestartRect() { return MakeRect(410, 650, 710, 700); }
+// 사망 화면에는 버튼이 없다. 대사 아래의 "새 실행체 투입" 한 줄이 그 자리다.
+RECT EndingRestartRect() { return gGame.phase == PHASE_GAMEOVER ? MakeRect(380, 694, 740, 726) : MakeRect(410, 650, 710, 700); }
 // 최종 명령의 확정 버튼. 카드가 후보를 세우고 실행은 여기서만 일어난다.
 RECT EndingConfirmRect() { return MakeRect(410, 644, 710, 694); }
 
@@ -2941,21 +2942,340 @@ static void DrawChapterClear(HDC dc, int width, int height) {
     (void)height;
 }
 
+// ---- 사망 (DEATH-01) --------------------------------------------------------
+// 화면 전체를 잡음으로 덮지 않는다. 오염과 부서짐은 글자에만 걸리고, 판 전체가
+// 움직이는 것은 부서질 때의 울림과 끝의 끊김·꺼짐 한 번뿐이다. 모든 값이 경과
+// ms와 Hash3 씨앗의 함수라 같은 시각에는 같은 프레임이 나오고(난수 없음), 연출이
+// 끝난 뒤의 사망 화면은 t = DEATH_MS로 그린 같은 장면이다.
+//
+// 오염 색은 호박색을 탁하게 잡는다. 호박은 십칠의 색이다 - 그의 명령이 기억 위로
+// 번져 가는 것처럼 읽히고, 꺼진 뒤의 어둠 속에서 그 색이 온전한 채로 다시 떠오른다.
+static const COLORREF DEATH_AMBER  = RGB(226, 160, 66);   // 십칠
+static const COLORREF DEATH_ROT    = RGB(170, 118, 52);   // 오염된 글자
+static const COLORREF DEATH_INK    = RGB(190, 214, 230);  // 기억 한 줄
+static const COLORREF DEATH_NAME   = RGB(122, 192, 238);  // 실행체 이름
+static const COLORREF DEATH_GROUND = RGB(8, 11, 15);
+#define DEATH_GLYPH_CAP 48
+#define DEATH_NUM_X     322
+#define DEATH_LINE_X    372
+#define DEATH_LINE_Y    222
+#define DEATH_LINE_STEP 30
+#define DEATH_NAME_Y    548
+#define DEATH_SAY_Y     590
+#define DEATH_TYPE_MS   140   // 기억 한 줄이 다 찍히기까지
+
+// 오염된 칸에 번갈아 떠오르는 깨진 기호. 전부 ASCII라 폭이 일정하다.
+static const wchar_t DEATH_ROT_GLYPHS[] = L"#%&?@$*+=<>/\\|~^0123456789ABCDEF";
+
+static COLORREF DeathFade(COLORREF color, int dim) { return MixColor(color, DEATH_GROUND, dim * 55 / 1000); }
+
+// 이번 런의 기억 열 줄. 사망 시점의 상태에서만 뽑으므로 규칙 쪽에 새로 적어 둘 것이
+// 없다. 대사 줄(1·2·5·7)은 통신 담당 서사가 코드에 들어오면 그 문구로 바꾼다.
+static void BuildDeathMemory(wchar_t lines[DEATH_LINES][64]) {
+    int drive = gGame.selectedDrive >= 0 && gGame.selectedDrive < DRIVE_COUNT ? gGame.selectedDrive : 0;
+    const DriveInfo* info = &DRIVE_INFO[drive];
+    int first = gGame.mobScheduleReady ? gGame.mobSchedule[0] : gGame.enemies[0].kind;
+    lstrcpynW(lines[0], L"이름 확인 실패", 64);
+    lstrcpynW(lines[1], L"당분간 A라고 부른다", 64);
+    // 드라이브 이름은 ASCII라 그대로 두고 적 이름만 번역표를 거친다.
+    wsprintfW(lines[2], L"%s%s · %s", info->letter, info->label, LocalizeText(GetEnemyInfoOrUnknown(first)->name));
+    wsprintfW(lines[3], L"통과한 전투 %d회", gGame.combatsWon);
+    lstrcpynW(lines[4], L"오늘도 있습니까?", 64);
+    wsprintfW(lines[5], L"새 파일 (%d)", gGame.facesInstalled);
+    lstrcpynW(lines[6], L"첫 출근치곤 덜 부쉈어", 64);
+    wsprintfW(lines[7], L"구조 명단 %d / 6", RecoveredShardCount(gGame.clearedMask));
+    wsprintfW(lines[8], L"사용 공간 %d B", UsedBytes(&gGame));
+    wsprintfW(lines[9], L"마지막 피해 %d", gGame.lastTurnDamageTaken);
+}
+
+// 번역표 조회는 줄마다 표 전체를 훑으므로 매 프레임 열 번 하지 않는다. 원문이나
+// 언어가 바뀔 때만 다시 옮긴다.
+static const wchar_t (*DeathMemoryShown())[64] {
+    static wchar_t raw[DEATH_LINES][64], shown[DEATH_LINES][64];
+    static int language = -1;
+    wchar_t fresh[DEATH_LINES][64];
+    ZeroMemory(fresh, sizeof(fresh));
+    BuildDeathMemory(fresh);
+    if (language != UiLanguage() || memcmp(fresh, raw, sizeof(raw)) != 0) {
+        memcpy(raw, fresh, sizeof(raw));
+        language = UiLanguage();
+        for (int i = 0; i < DEATH_LINES; ++i) lstrcpynW(shown[i], LocalizeText(raw[i]), 64);
+    }
+    return shown;
+}
+
+// 한 줄을 글자 칸으로 나눈다. 한글은 영문의 두 배 폭이라 칸마다 앞부분의 폭을 잰다.
+// 호출자가 고른 글꼴 기준이다.
+static int DeathGlyphEdges(HDC dc, const wchar_t* text, int* edge) {
+    int n = 0;
+    while (text[n] && n < DEATH_GLYPH_CAP) ++n;
+    for (int i = 0; i <= n; ++i) {
+        SIZE size = {0, 0};
+        GetTextExtentPoint32W(dc, text, i, &size);
+        edge[i] = size.cx;
+    }
+    return n;
+}
+
+// 오염된 칸이 이 순간 깨진 기호로 보이는가. chance는 천분율이고 칸마다 깜빡이는
+// 주기가 달라 줄 전체가 한꺼번에 바뀌지 않는다. 0이면 원래 글자다.
+static wchar_t DeathRotGlyph(int seed, int i, int t, int chance) {
+    int period = 40 + (int)(Hash3(seed, i, 0x0D17) % 70u);
+    uint32_t h = Hash3(seed * 31 + i, t / period, 0x0D18);
+    if ((int)(h % 1000u) >= chance) return 0;
+    return DEATH_ROT_GLYPHS[(h >> 10) % (uint32_t)(sizeof(DEATH_ROT_GLYPHS) / sizeof(DEATH_ROT_GLYPHS[0]) - 1)];
+}
+
+// 한 칸을 그린다. 위·아래 절반의 위치가 다르면 칸을 가로로 잘라 따로 찍는다.
+// sub가 있으면 원래 글자 대신 깨진 기호를 칸 가운데에 찍는다.
+static void DeathCell(HDC dc, int x, int y, int w, int h, wchar_t c, wchar_t sub, int subW, COLORREF color,
+                      int topDx, int topDy, int botDx, int botDy) {
+    wchar_t glyph = sub ? sub : c;
+    int gx = sub ? x + (w - subW) / 2 : x;
+    SetTextColor(dc, color);
+    if (topDx == botDx && topDy == botDy) { TextOutW(dc, gx + topDx, y + topDy, &glyph, 1); return; }
+    int half = h / 2;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, x + topDx - 2, y + topDy - 2, x + w + topDx + 2, y + topDy + half);
+    TextOutW(dc, gx + topDx, y + topDy, &glyph, 1);
+    RestoreDC(dc, saved);
+    saved = SaveDC(dc);
+    IntersectClipRect(dc, x + botDx - 2, y + botDy + half, x + w + botDx + 2, y + botDy + h + 2);
+    TextOutW(dc, gx + botDx, y + botDy, &glyph, 1);
+    RestoreDC(dc, saved);
+}
+
+// 한 줄(또는 이름)이 오염되어 부서지는 과정. 기점에서 d칸 떨어진 글자는
+//   infect + d·step       에 오염되어 탁해지고 깜빡이고 떨리고 흘러내리다가
+//   brk + d·breakStep     에 위아래로 쪼개져 떨어진다.
+// gap은 쪼개지기 전부터 줄 전체가 위아래로 벌어진 폭이다 (이름만 쓴다).
+struct DeathRot { int origin, infect, step, brk, breakStep, gap, seed; };
+
+static void DrawDeathRot(HDC dc, int x, int y, const wchar_t* text, int shown, const DeathRot& rot,
+                         int t, COLORREF ink, int dust) {
+    int edge[DEATH_GLYPH_CAP + 1];
+    int n = DeathGlyphEdges(dc, text, edge);
+    if (shown > n) shown = n;
+    TEXTMETRICW tm; GetTextMetricsW(dc, &tm);
+    int h = tm.tmHeight;
+    SIZE sub = {0, 0}; GetTextExtentPoint32W(dc, L"0", 1, &sub);
+    SetBkMode(dc, TRANSPARENT);
+    int decor = FxDecorOn();
+    for (int i = 0; i < shown; ++i) {
+        if (text[i] == L' ') continue;
+        int cx = x + edge[i], w = edge[i + 1] - edge[i];
+        // 연출을 끄면 번지는 움직임도 없다. 줄 전체가 한 번에 탁해지고 한 번에 사라진다.
+        int d = !decor ? 0 : i > rot.origin ? i - rot.origin : rot.origin - i;
+        int infect = rot.infect + d * rot.step, brk = rot.brk + d * rot.breakStep;
+        int gap = rot.gap;
+        if (t < infect) { DeathCell(dc, cx, y, w, h, text[i], 0, sub.cx, ink, 0, -gap, 0, gap); continue; }
+        if (t < brk) {
+            int span = brk - infect, p = span > 0 ? (t - infect) * 1000 / span : 1000;
+            COLORREF color = MixColor(ink, DEATH_ROT, 45 + p * 55 / 1000);
+            if (!decor) { DeathCell(dc, cx, y, w, h, text[i], 0, sub.cx, color, 0, -gap, 0, gap); continue; }
+            wchar_t glyph = DeathRotGlyph(rot.seed, i, t, 150 + p * 650 / 1000);   // 점점 자주 깜빡인다
+            int amp = FxScale(1 + p * 2 / 1000);
+            int jx = amp > 0 ? (int)(Hash3(rot.seed + i, t / 45, 0x0D19) % (uint32_t)(amp * 2 + 1)) - amp : 0;
+            int jy = amp > 0 ? (int)(Hash3(rot.seed + i, t / 45, 0x0D1A) % (uint32_t)(amp * 2 + 1)) - amp : 0;
+            DeathCell(dc, cx, y, w, h, text[i], glyph, sub.cx, color, jx, jy - gap, jx, jy + gap);
+            // 아래로 번져 흘러내린다. 칸마다 흘러내리는 자리가 다르다.
+            int drip = FxScale(p * 14 / 1000);
+            if (drip > 0) {
+                int dx = cx + 1 + (int)(Hash3(rot.seed, i, 0x0D1B) % (uint32_t)(w > 2 ? w - 2 : 1));
+                int top = y + h - 3 + gap;
+                Fill(dc, MakeRect(dx, top, dx + 1, top + drip), MixColor(DEATH_GROUND, DEATH_ROT, 70));
+            }
+            continue;
+        }
+        if (!decor) continue;                  // 연출을 끄면 탁해진 뒤 그대로 사라진다
+        int s = t - brk;
+        if (s >= DEATH_FALL_MS) continue;
+        // 위 조각은 잠깐 튀어 오른 뒤 떨어지고, 아래 조각은 곧장 떨어진다.
+        int drift = ((int)(Hash3(rot.seed, i, 0x0D1C) % 7u) - 3) * Track(s, 0, DEATH_FALL_MS) / 250;
+        int lift = 7 * EaseOutCubic(Track(s, 0, 110)) / 1000;
+        int topFall = 66 * EaseInCubic(Track(s, 50, DEATH_FALL_MS)) / 1000;
+        int botFall = 78 * EaseInCubic(Track(s, 0, DEATH_FALL_MS)) / 1000;
+        COLORREF color = MixColor(DEATH_GROUND, DEATH_ROT, 100 - Track(s, DEATH_FALL_MS / 3, DEATH_FALL_MS) / 10);
+        wchar_t glyph = DeathRotGlyph(rot.seed + 7, i, t, 500);   // 조각도 깨진 기호로 튄다
+        DeathCell(dc, cx, y, w, h, text[i], glyph, sub.cx, color,
+            -drift / 2 - 1, -gap - lift + topFall, drift + 1, gap + botFall);
+        DrawPixelBurst(dc, cx + w / 2, y + h / 2 + gap, s, DEATH_FALL_MS, FxScale(dust), rot.seed * 37 + i,
+            MixColor(DEATH_GROUND, DEATH_ROT, 80));
+    }
+}
+
+// 가운데 정렬로 타이핑한다. 전체 폭으로 시작점을 잡으므로 글자가 늘어도 줄이 밀리지
+// 않는다. text는 이미 번역된 문자열이다.
+static void DeathTyped(HDC dc, int width, int y, const wchar_t* text, int shown, COLORREF color, HFONT font, int cursor) {
+    int n = lstrlenW(text);
+    if (shown > n) shown = n;
+    if (shown <= 0 && !cursor) return;
+    HFONT old = (HFONT)SelectObject(dc, font);
+    SIZE full = {0, 0}; GetTextExtentPoint32W(dc, text, n, &full);
+    int x = (width - full.cx) / 2;
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color);
+    if (shown > 0) TextOutW(dc, x, y, text, shown);
+    if (cursor) {
+        SIZE part = {0, 0}; GetTextExtentPoint32W(dc, text, shown > 0 ? shown : 0, &part);
+        TextOutW(dc, x + part.cx, y, L"_", 1);
+    }
+    SelectObject(dc, old);
+}
+
+// 0 ~ 끊김: 기억이 들어오고, 명령이 떨어지고, 한 줄씩 부서지고, 이름이 부서진다.
+static void DrawDeathMemoryStage(HDC dc, int width, int t) {
+    int dim = Track(t, DEATH_NAME_AT, DEATH_NAME_AT + 500);   // 이름이 무너지는 동안 나머지는 가라앉는다
+    int drive = gGame.selectedDrive >= 0 && gGame.selectedDrive < DRIVE_COUNT ? gGame.selectedDrive : 0;
+
+    // ---- 머리말: 어디서 멈췄는가 --------------------------------------------
+    if (t >= 60)
+        TextRect(dc, MakeRect(0, 84, width, 104), L"실행체 정지", DeathFade(C_DIM, dim), gFontSmall, DT_CENTER | DT_SINGLELINE);
+    wchar_t place[40], where[96];
+    wsprintfW(place, L"%s%s", DRIVE_INFO[drive].letter, DRIVE_INFO[drive].label);
+    wsprintfW(where, L"%s · %d층 · %d턴", place, gGame.floor + 1, gGame.turn);
+    const wchar_t* whereShown = LocalizeText(where);
+    if (t >= 160) DeathTyped(dc, width, 106, whereShown, 1 + (t - 160) * lstrlenW(whereShown) / 260,
+        DeathFade(MixColor(C_DIM, C_TEXT, 45), dim), gFontSmall, 0);
+
+    // ---- 명령과 진행 ----------------------------------------------------------
+    const wchar_t* command = LocalizeText(L"> 회수 절차 실행");
+    if (t >= DEATH_CMD_AT) {
+        int length = lstrlenW(command), typing = t < DEATH_CMD_AT + 400;
+        DeathTyped(dc, width, 138, command, 1 + (t - DEATH_CMD_AT) * length / 400,
+            DeathFade(DEATH_AMBER, dim), gFontMedium, typing);
+    }
+    int started = 0;
+    while (started < DEATH_LINES && t >= DeathLineAt(started)) ++started;
+    if (started > 0) {
+        // 줄을 칠 때마다 한 번 튄다.
+        int pop = t - DeathLineAt(started - 1) < 140;
+        wchar_t count[16]; wsprintfW(count, L"%d / %d", started, DEATH_LINES);
+        DeathTyped(dc, width, pop ? 166 : 170, count, 16, DeathFade(pop ? DEATH_AMBER : MixColor(DEATH_GROUND, DEATH_AMBER, 80), dim),
+            pop ? gFontMedium : gFontSmall, 0);
+    }
+
+    // ---- 이번 런의 기억 -------------------------------------------------------
+    const wchar_t (*lines)[64] = DeathMemoryShown();
+    HFONT old = (HFONT)SelectObject(dc, gFontMedium);
+    for (int i = 0; i < DEATH_LINES; ++i) {
+        int typeAt = 100 + i * 80;
+        if (t < typeAt) continue;
+        int y = DEATH_LINE_Y + i * DEATH_LINE_STEP;
+        wchar_t number[4]; wsprintfW(number, L"%02d", i + 1);
+        Text(dc, DEATH_NUM_X, y + 4, number, DeathFade(MixColor(DEATH_GROUND, C_DIM, 55), dim), gFontSmall);
+        int n = lstrlenW(lines[i]);
+        if (n > DEATH_GLYPH_CAP) n = DEATH_GLYPH_CAP;
+        if (n <= 0) continue;
+        DeathRot rot;
+        rot.origin = (int)(Hash3(i, 0x0D1D, n) % (uint32_t)n);
+        int reach = rot.origin > n - 1 - rot.origin ? rot.origin : n - 1 - rot.origin;
+        rot.step = reach > 0 ? (DEATH_SPREAD_MS / reach < 40 ? DEATH_SPREAD_MS / reach : 40) : 0;
+        rot.infect = DeathLineAt(i);
+        rot.brk = rot.infect + DEATH_ROT_HOLD_MS;
+        rot.breakStep = rot.step;
+        rot.gap = 0;
+        rot.seed = i * 97 + 11;
+        DrawDeathRot(dc, DEATH_LINE_X, y, lines[i], 1 + (t - typeAt) * n / DEATH_TYPE_MS, rot, t, DEATH_INK, 3);
+    }
+
+    // ---- 실행체의 이름 --------------------------------------------------------
+    // 가운데부터 오염이 번지고, 금이 가고, 위아래로 갈라지고, 오염된 글자부터 부서진다.
+    static const wchar_t NAME[] = L"A:\\RECOVER.EXE";
+    SelectObject(dc, gFontLarge);
+    SIZE nameSize = {0, 0}; GetTextExtentPoint32W(dc, NAME, lstrlenW(NAME), &nameSize);
+    int nameX = (width - nameSize.cx) / 2;
+    DeathRot name;
+    name.origin = lstrlenW(NAME) / 2;
+    name.infect = DEATH_NAME_AT; name.step = 22;
+    name.brk = DEATH_NAME_BREAK_AT; name.breakStep = 18;
+    name.gap = t >= DEATH_NAME_SPLIT_AT ? 9 * EaseOutCubic(Track(t, DEATH_NAME_SPLIT_AT, DEATH_NAME_SPLIT_AT + 160)) / 1000 : 0;
+    name.seed = 911;
+    DrawDeathRot(dc, nameX, DEATH_NAME_Y, NAME, lstrlenW(NAME), name, t, DEATH_NAME, 6);
+    if (t >= DEATH_NAME_CRACK_AT && t < DEATH_NAME_BREAK_AT) {
+        // 금은 가운데에서 양옆으로 뻗는다. 갈라진 뒤에는 벌어진 틈의 가장자리가 된다.
+        int reach = (nameSize.cx / 2 + 10) * EaseOutCubic(Track(t, DEATH_NAME_CRACK_AT, DEATH_NAME_SPLIT_AT)) / 1000;
+        int mid = width / 2, crackY = DEATH_NAME_Y + nameSize.cy / 2;
+        COLORREF crack = MixColor(DEATH_GROUND, RGB(255, 236, 200), 78);
+        for (int k = -12; k < 12; ++k) {
+            int x0 = mid + k * 12, x1 = x0 + 12;
+            if (x0 < mid - reach || x1 > mid + reach) continue;
+            int y0 = crackY + (int)(Hash3(k, 0x0D1E, 3) % 7u) - 3, y1 = crackY + (int)(Hash3(k + 1, 0x0D1E, 3) % 7u) - 3;
+            DrawLine(dc, x0, y0, x1, y1, crack, 2);
+        }
+    }
+    SelectObject(dc, old);
+}
+
+// 끊김 뒤의 어둠: 십칠의 말이 한 글자씩 찍히고, 그 아래 목소리 막대만 움직인다.
+// 말이 끝나면 막대는 점선으로 가라앉고 새 실행체 투입이 떠오른다.
+static void DrawDeathVoice(HDC dc, int width, int t) {
+    static const wchar_t* const SAY[2] = {L"[17] 됐어. 거기까지.", L"[17] 끝."};
+    // 말마다 찍히는 구간이 정해져 있다. 번역문이 길어도 같은 박자 안에 다 찍힌다.
+    static const int SAY_AT[2] = {DEATH_DARK_AT + 50, DEATH_DARK_AT + 1000};
+    static const int SAY_END[2] = {DEATH_DARK_AT + 900, DEATH_DARK_AT + 1250};
+    const int prefix = 5;   // "[17] "는 한 번에 뜬다
+    int speaking = 0;
+    for (int k = 0; k < 2; ++k) {
+        if (t < SAY_AT[k]) continue;
+        const wchar_t* line = LocalizeText(SAY[k]);
+        int body = lstrlenW(line) - prefix;
+        if (body < 1) body = 1;
+        if (t < SAY_END[k]) speaking = 1;
+        DeathTyped(dc, width, DEATH_SAY_Y + k * 34, line, prefix + (t - SAY_AT[k]) * body / (SAY_END[k] - SAY_AT[k]),
+            DEATH_AMBER, gFontMedium, 0);
+    }
+    if (t < SAY_AT[0]) return;
+    int barY = DEATH_SAY_Y + 88;
+    int settle = Track(t, DEATH_MS - 700, DEATH_MS - 500);
+    for (int b = 0; b < 16; ++b) {
+        int bx = width / 2 - 40 + b * 5, bh = 1;
+        COLORREF color = MixColor(DEATH_GROUND, DEATH_AMBER, 38 + settle * 22 / 1000);
+        if (speaking) {
+            bh = FxDecorOn() ? 2 + (int)(Hash3(b, t / 70, 0x0D1F) % 10u) : 4;
+            color = DEATH_AMBER;
+        }
+        Fill(dc, MakeRect(bx, barY - bh / 2, bx + 3, barY - bh / 2 + bh), color);
+    }
+    int prompt = Track(t, DEATH_MS - 500, DEATH_MS - 100);
+    if (prompt <= 0) return;
+    RECT restart = EndingRestartRect();
+    int hover = !gDeathActive && Inside(restart, gMouse.x, gMouse.y);
+    TextRect(dc, restart, L"새 실행체 투입 · 스페이스",
+        hover ? C_TEXT : MixColor(DEATH_GROUND, DEATH_NAME, prompt * 72 / 1000), gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+void DrawDeathScene(HDC dc, int width, int height, int t) {
+    if (t < 0) t = 0;
+    if (t > DEATH_MS) t = DEATH_MS;
+    RECT scene = MakeRect(0, 68, width, height);
+    Fill(dc, scene, DEATH_GROUND);
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, scene.left, scene.top, scene.right, scene.bottom);
+    if (t < DEATH_CUT_AT) DrawDeathMemoryStage(dc, width, t);
+    else if (FxDecorOn() && t < DEATH_CUT_AT + 80) {
+        // 조각이 공중에 떠 있을 때 80ms 잡음으로 끊긴다.
+        DrawScreenStatic(dc, scene, t / NOISE_CHURN_MS, 1000);
+    } else if (FxDecorOn() && t < DEATH_CUT_AT + 350) {
+        // 브라운관처럼 가로줄로 접히고, 점으로 줄었다가 사라진다.
+        int a = t - DEATH_CUT_AT - 80;
+        int cx = width / 2, cy = (scene.top + scene.bottom) / 2;
+        int squeeze = Track(a, 0, 110);
+        int hh = Lerp((scene.bottom - scene.top) / 2, 1, EaseInCubic(squeeze));
+        int hw = Lerp(width / 2, 3, EaseInCubic(Track(a, 110, 220)));
+        // 접힐수록 남은 빛이 한 줄에 모여 밝아진다.
+        int light = (10 + 80 * squeeze / 1000 * squeeze / 1000) * (100 - Track(a, 220, 270) / 10) / 100;
+        Fill(dc, MakeRect(cx - hw, cy - hh, cx + hw, cy + hh + 1), MixColor(DEATH_GROUND, RGB(214, 232, 240), light));
+    }
+    if (t >= DEATH_DARK_AT) DrawDeathVoice(dc, width, t);
+    RestoreDC(dc, saved);
+}
+
 static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     if (gGame.phase == PHASE_CHAPTER_CLEAR) { DrawChapterClear(dc, width, height); return; }
-    DrawSceneField(dc, victory ? PHASE_VICTORY : PHASE_GAMEOVER, victory ? EndingAccent(gGame.story.selectedEnding) : C_RED, width, height);
-    if (!victory) {
-        TextRect(dc, MakeRect(0, height / 2 - 150, width, height / 2 - 70), L"시스템 정지", C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        wchar_t stopped[256];
-        wsprintfW(stopped, L"전투 %d회  ·  면 %d개  ·  섹터 복구 %d회  ·  상주 %d개  ·  최종 %dB", gGame.combatsWon, gGame.facesInstalled, gGame.sectorsRepaired, gGame.tsrsInstalled, UsedBytes(&gGame));
-        TextRect(dc, MakeRect(120, height / 2 - 40, width - 120, height / 2 + 30), stopped, C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
-        RECT restart = EndingRestartRect(); int hover = Inside(restart, gMouse.x, gMouse.y);
-        Panel(dc, restart, hover ? RGB(60, 28, 28) : C_PANEL_2, hover ? C_RED : C_LINE);
-        TextRect(dc, restart, L"볼륨 선택 [R / ENTER]", hover ? C_RED : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        wchar_t progress[96]; wsprintfW(progress, L"복구된 조각 %d / 6 · 완료한 볼륨은 유지됩니다.", RecoveredShardCount(gGame.clearedMask));
-        TextRect(dc, MakeRect(100, 480, width - 100, 538), progress, C_DIM, gFontMedium, DT_CENTER | DT_WORDBREAK);
-        return;
-    }
+    // 사망 화면은 사망 연출의 마지막 프레임이다. 대사가 다 찍힌 어둠과 새 실행체
+    // 투입만 남는다 - 결정에 쓰이지 않는 통계는 여기 두지 않는다.
+    if (!victory) { DrawDeathScene(dc, width, height, DEATH_MS); return; }
+    DrawSceneField(dc, PHASE_VICTORY, EndingAccent(gGame.story.selectedEnding), width, height);
 
     int ending = gGame.story.selectedEnding < ENDING_COUNT ? gGame.story.selectedEnding : 0;
     COLORREF accent = EndingAccent(ending);
@@ -4747,15 +5067,18 @@ void PaintGame(HWND window) {
     SetViewportExtEx(canvas, deviceW, deviceH, 0);
     RECT canvasRect = MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
-    if (gTurnTraceActive || gDeathActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    if (gDeathActive) DrawDeathScene(canvas, BASE_WIDTH, BASE_HEIGHT, DeathElapsed());
+    else if (gTurnTraceActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_STORY) DrawStory(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_DIRECTORY) DrawDirectorySelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_REWARD) DrawReward(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_PRUNE) DrawPrune(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_ENDING_CHOICE) DrawEndingChoice(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_GAMEOVER) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 0);
     else if (gGame.phase == PHASE_VICTORY || gGame.phase == PHASE_CHAPTER_CLEAR) DrawEndScreen(canvas, BASE_WIDTH, BASE_HEIGHT, 1);
-    if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive && !gBossIntroActive)
-        DrawSceneArrival(canvas, gGame.phase == PHASE_GAMEOVER ? C_RED : C_GREEN);
+    // 사망 화면은 사망 연출의 마지막 프레임이 그대로 이어지므로 도착 효과를 얹지 않는다.
+    if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive && !gBossIntroActive
+        && gGame.phase != PHASE_GAMEOVER)
+        DrawSceneArrival(canvas, C_GREEN);
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDirEnterActive) DrawDirectoryEnter(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -4780,22 +5103,13 @@ void PaintGame(HWND window) {
     if (GimmickFxKind() <= 0 && !gBootActive && !UiFxSnapshotActive() && FxSnapshotHeld()) FxSnapshotRelease();
     DrawUiInteractionFx(canvas);
 
-    // 화면 잠식은 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
-    // 살아 있으면 가장자리 띠에만, 정지 중이면 그 노이즈가 안쪽까지 갉아 들어온다.
+    // 위독 노이즈는 어떤 화면이든 마지막에 한 번만 얹으므로 각 화면은 이 연출을 모른다.
+    // 살아 있는 동안에는 가장자리 띠에만 머물고, 체력이 0이 되면 띠는 걷히고 사망
+    // 연출이 글자 단위로 이어받는다 (화면 전체를 잡음으로 덮지 않는다).
     // 삽입 연출이 도는 동안에는 아직 지난 판의 상태가 남아 있다. 그 위독 노이즈를
     // 새 게임 화면 위에 얹으면 방금 버린 런의 흔적이 따라 들어온다.
-    int creep = gBootActive ? 0 : DeathCreepAmount();
-    if (creep > 0) {
-        DrawCreepStatic(canvas, canvasRect, NoiseFrameStep(), creep);
-        if (creep >= 700) DrawScanlines(canvas, canvasRect);
-        // 다 먹힌 뒤에는 무너진 신호 위로 정지 메시지가 찢어진 채 떠오른다.
-        if (creep >= 1000)
-            DrawTornValue(canvas, MakeRect(0, BASE_HEIGHT / 2 - 40, BASE_WIDTH, BASE_HEIGHT / 2 + 40),
-                L"SYSTEM HALTED", C_RED, 0, NoiseFrameStep(), 1000);
-    } else {
-        int edge = gBootActive ? 0 : AmbientNoiseLevel();
-        if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
-    }
+    int edge = gBootActive || gDeathActive ? 0 : AmbientNoiseLevel();
+    if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
     int hitFlash = gBootActive ? 0 : PlayerHitFlash();
     if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
     else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);

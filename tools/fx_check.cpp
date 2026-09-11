@@ -725,6 +725,67 @@ int main(int argc, char** argv) {
             gFxActive = 0;
             if (memcmp(&gGame, &before, sizeof(gGame))) return 27;
         }
+        // DEATH-01: 줄 간격이 좁혀지고, 기억이 끊김 전에 다 떨어지고, 박자가 시간순이다.
+        {
+            for (int i = 1; i < DEATH_LINES; ++i) {
+                int gap = DeathLineAt(i) - DeathLineAt(i - 1);
+                if (gap <= 0) { printf("FAIL: death lines must advance\n"); return 42; }
+                if (i >= 2 && i < DEATH_LINES - 1 && gap > DeathLineAt(i - 1) - DeathLineAt(i - 2)) {
+                    printf("FAIL: death line gaps must tighten\n"); return 43;
+                }
+            }
+            if (DeathLineAt(DEATH_LINES - 1) + DEATH_SPREAD_MS + DEATH_ROT_HOLD_MS + DEATH_FALL_MS > DEATH_CUT_AT) {
+                printf("FAIL: memory lines must fall before the cut\n"); return 44;
+            }
+            int sfx = 0, pitch = 0, previous = -1, at;
+            for (int k = 0; (at = DeathCue(k, &sfx, &pitch)) >= 0; ++k) {
+                if (at < previous || at > DEATH_CUT_AT) { printf("FAIL: death cues out of order\n"); return 45; }
+                previous = at;
+            }
+        }
+        // 사망 장면: 고정 시각 픽셀 재현, 게임 상태 불변, 연출이 끝난 사망 화면 = 마지막 프레임.
+        for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
+            NewRun(&gGame, 12345u, 0x15); ResetPresentation(); gFxLevel = mode;
+            ConfigureDriveForTest(&gGame, 5, 12345, 0); gGame.floor = 1; gGame.encounter = 1;
+            StartCombat(&gGame);
+            gGame.turn = 7; gGame.playerHp = 0; gGame.phase = PHASE_GAMEOVER;
+            gGame.combatsWon = 4; gGame.facesInstalled = 8; gGame.lastTurnDamageTaken = 23;
+            gMouse = CfxPoint(4, 90);
+            GameState before = gGame;
+            static const int deathAges[] = {0, 300, 900, 1500, 1750, 2300, 3000, 3800, 4300, 4700,
+                4880, 5050, 5340, 5420, 5560, 5900, 6500, 7200, DEATH_MS};
+            for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+                SetUiLanguage(language);
+                for (int frame = 0; frame < (int)(sizeof(deathAges) / sizeof(deathAges[0])); ++frame) {
+                    gDeathActive = 1; gDeathStart = 20000; gCheckTick = 20000 + deathAges[frame];
+                    Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                    DrawHeader(dc, BASE_WIDTH); DrawDeathScene(dc, BASE_WIDTH, BASE_HEIGHT, DeathElapsed());
+                    GdiFlush(); ++frames;
+                    uint32_t expected = FrameHash(bits, w, h);
+                    Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                    DrawHeader(dc, BASE_WIDTH); DrawDeathScene(dc, BASE_WIDTH, BASE_HEIGHT, DeathElapsed());
+                    GdiFlush(); ++frames;
+                    if (FrameHash(bits, w, h) != expected) { printf("FAIL: death frame %d is not a function of time\n", deathAges[frame]); return 46; }
+                    if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: death render changed simulation\n"); return 47; }
+                    if (argc > 1 && pass == 1 && scale == 1 && mode != FX_REDUCED) {
+                        char name[80]; sprintf_s(name, "death_%s_%s_%04d", mode == FX_FULL ? "full" : "off",
+                            language == LANGUAGE_KOREAN ? "ko" : "en", deathAges[frame]);
+                        if (!SaveFrame(argv[1], name, w, h, bits)) return 48;
+                    }
+                }
+                uint32_t last = FrameHash(bits, w, h);
+                gDeathActive = 0;
+                Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
+                DrawHeader(dc, BASE_WIDTH); DrawEndScreen(dc, BASE_WIDTH, BASE_HEIGHT, 0);
+                GdiFlush(); ++frames;
+                if (FrameHash(bits, w, h) != last) { printf("FAIL: game over screen must be the last death frame\n"); return 49; }
+                if (argc > 1 && pass == 1 && scale == 1 && mode == FX_FULL) {
+                    char name[80]; sprintf_s(name, "death_end_lang_%d", language);
+                    if (!SaveFrame(argv[1], name, w, h, bits)) return 50;
+                }
+            }
+        }
+        gDeathActive = 0; gFxLevel = FX_FULL; SetUiLanguage(LANGUAGE_KOREAN);
         SelectObject(dc, old); DeleteObject(bmp); DeleteDC(dc);
     }
     if (pass == 0) beforeObjects = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);

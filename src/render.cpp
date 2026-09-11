@@ -803,37 +803,6 @@ void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness
     }
 }
 
-// 아직 멀쩡한 사각형을 시간에 따라 좁혀 가며, 그 바깥은 빈틈없이 덮고 경계
-// 안쪽은 옅게 갉아 놓는다. 네 변의 위치가 매번 조금씩 흔들려 경계가 물어뜯긴
-// 것처럼 보인다.
-void DrawCreepStatic(HDC dc, const RECT& area, int step, int eaten) {
-    if (eaten <= 0) return;
-    if (eaten > 1000) eaten = 1000;
-    int w = area.right - area.left, h = area.bottom - area.top;
-    if (w <= 4 || h <= 4) return;
-    int insetX = w * eaten / 2000, insetY = h * eaten / 2000;   // 1000이면 정확히 닫힌다
-    int wobble = 6 + eaten * 24 / 1000;
-    RECT clean = area;
-    clean.left += insetX + (int)(Hash3(step / 3, 1, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
-    clean.right -= insetX + (int)(Hash3(step / 3, 2, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
-    clean.top += insetY + (int)(Hash3(step / 3, 3, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
-    clean.bottom -= insetY + (int)(Hash3(step / 3, 4, 0) % (uint32_t)(wobble * 2 + 1)) - wobble;
-    if (clean.left < area.left) clean.left = area.left;
-    if (clean.top < area.top) clean.top = area.top;
-    if (clean.right > area.right) clean.right = area.right;
-    if (clean.bottom > area.bottom) clean.bottom = area.bottom;
-    if (clean.right - clean.left < 24 || clean.bottom - clean.top < 24) {
-        DrawScreenStatic(dc, area, step, 1000);   // 다 먹혔다
-        return;
-    }
-    int saved = SaveDC(dc);
-    ExcludeClipRect(dc, clean.left, clean.top, clean.right, clean.bottom);
-    DrawScreenStatic(dc, area, step, 1000);
-    RestoreDC(dc, saved);
-    // 아직 남은 안쪽도 경계부터 갉히기 시작한다.
-    DrawEdgeStatic(dc, clean, step + 13, 700, 26 + eaten * 70 / 1000);
-}
-
 // 바깥 테두리가 가장 진하고 안쪽으로 갈수록 배경색에 녹아든다.
 void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness) {
     if (level <= 0 || thickness <= 0) return;
