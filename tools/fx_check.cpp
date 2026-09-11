@@ -419,6 +419,152 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
     return ok;
 }
 
+// UI 2.0 전투 배치. 조작 사각형은 전부 전투판 폭 안에 있고 사이드바와 겹치지 않는다.
+// 사이드바는 판독 전용이라 어느 점도 클릭 대상을 돌려주지 않고, 각 조작의 한가운데는
+// 자기 hover id를 돌려준다 (그린 자리와 누르는 자리가 같다).
+static int CheckCombatLayout() {
+    RECT tmp, sidebar = CombatSidebarRect();
+    RECT panels[4] = {TargetInfoRect(), ForecastRect(), SystemInfoRect(), CombatHistoryRect()};
+    for (int i = 0; i < 4; ++i) {
+        if (!IntersectRect(&tmp, &panels[i], &sidebar) || !EqualRect(&tmp, &panels[i])) return 1;
+        for (int j = i + 1; j < 4; ++j) if (IntersectRect(&tmp, &panels[i], &panels[j])) return 2;
+    }
+    if (sidebar.right > BASE_WIDTH || sidebar.left <= COMBAT_MAIN_RIGHT || sidebar.bottom > BASE_HEIGHT) return 3;
+    RECT trace = TurnTracePanelRect();
+    if (!IntersectRect(&tmp, &trace, &sidebar) || !EqualRect(&tmp, &trace) || IntersectRect(&tmp, &trace, &panels[0])) return 4;
+    RECT controls[16]; int n = 0;
+    for (int i = 0; i < 3; ++i) controls[n++] = EnemyRect(i);
+    for (int i = 0; i < SLOT_COUNT; ++i) controls[n++] = SlotRect(i);
+    for (int i = 0; i < 3; ++i) controls[n++] = DieRect(i);
+    controls[n++] = ReadButtonRect(); controls[n++] = EndTurnRect(); controls[n++] = KeybButtonRect();
+    controls[n++] = TurnTraceTickerRect();
+    for (int i = 0; i < n; ++i) if (controls[i].right > COMBAT_MAIN_RIGHT || IntersectRect(&tmp, &controls[i], &sidebar)) return 5;
+    RECT ticker = TurnTraceTickerRect(), read = ReadButtonRect(), end = EndTurnRect(), keyb = KeybButtonRect();
+    for (int i = 0; i < 3; ++i) { RECT die = DieRect(i); if (IntersectRect(&tmp, &die, &ticker)) return 6; }
+    if (IntersectRect(&tmp, &read, &end) || IntersectRect(&tmp, &end, &keyb)) return 7;
+
+    if (!RuleCombat(0, 0, 0, 0)) return 8;
+    gGame.tsrInstalled[TSR_KEYB] = 1; gGame.selectedDie = 0;
+    GameState before = gGame;
+    for (int i = 0; i < gGame.enemyCount; ++i) {
+        RECT r = EnemyRect(i);
+        if (HoverId((r.left + r.right) / 2, (r.top + r.bottom) / 2) != 100 + i) return 9;
+    }
+    for (int i = 0; i < 3; ++i) { RECT r = DieRect(i); if (HoverId((r.left + r.right) / 2, (r.top + r.bottom) / 2) != 200 + i) return 10; }
+    for (int i = 0; i < SLOT_COUNT; ++i) { RECT r = SlotRect(i); if (HoverId((r.left + r.right) / 2, (r.top + r.bottom) / 2) != 300 + i) return 11; }
+    if (HoverId((end.left + end.right) / 2, (end.top + end.bottom) / 2) != 400) return 12;
+    if (HoverId((keyb.left + keyb.right) / 2, (keyb.top + keyb.bottom) / 2) != 410) return 13;
+    for (int x = SIDEBAR_LEFT; x < SIDEBAR_RIGHT; x += 6)
+        for (int y = SIDEBAR_TOP; y < SIDEBAR_BOTTOM; y += 6)
+            if (HoverId(x, y) != -1) return 14;
+    gRolled = 0;
+    if (HoverId((read.left + read.right) / 2, (read.top + read.bottom) / 2) != 420) return 15;
+    if (memcmp(&gGame, &before, sizeof(gGame))) return 16;
+    ResetPresentation();
+    return 0;
+}
+
+// UI 2.0 사이드바: 예상 결과의 네 상태(보통·처치·읽기 오류·시스템 정지)와 여섯 볼륨
+// 보스의 SYSTEM 줄을 두 언어·세 연출 강도로 그린다. 표시 전용이라 판이 바뀌면 안 되고,
+// 같은 시각이면 같은 픽셀이어야 한다.
+static int CheckSidebarFrames(HDC dc, void* bits, int w, int h, const char* folder, int* frames) {
+    static const char* const STATES[4] = {"normal", "kill", "uncertain", "halt"};
+    for (int state = 0; state < 4; ++state) for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
+        if (!RuleCombat(0, state == 1, 0, 0)) return 0;
+        if (!AssignDieToSlot(&gGame, 0, SLOT_ATTACK) || !AssignDieToSlot(&gGame, 1, SLOT_DEFEND)) return 0;
+        if (state == 2) gGame.dice[2].unstable = 1;
+        if (state == 3) {
+            gGame.playerHp = 1;
+            for (int i = 0; i < gGame.enemyCount; ++i) { gGame.enemies[i].intent = INTENT_ATTACK; gGame.enemies[i].intentValue = 60; }
+        }
+        gFxLevel = mode; gSceneKey = VisibleSceneKey(); gSceneStart = 8000;
+        GameState before = gGame;
+        for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+            SetUiLanguage(language);
+            DrawFixture(dc); uint32_t expected = FrameHash(bits, w, h); ++*frames;
+            int ok = gPreview.valid && (state != 1 || (gPreview.combatEnds && !gPreview.uncertain))
+                && (state != 2 || gPreview.uncertain) && (state != 3 || (gPreview.playerDies && !gPreview.uncertain));
+            if (!ok) { printf("FAIL: sidebar forecast fixture %s\n", STATES[state]); return 0; }
+            if (folder && mode == FX_FULL) {
+                char name[96]; sprintf_s(name, "sidebar_%s_lang_%d", STATES[state], language);
+                if (!SaveFrame(folder, name, w, h, bits)) return 0;
+            }
+            gCheckTick += 37; DrawFixture(dc); gCheckTick -= 37; DrawFixture(dc); ++*frames;
+            if (FrameHash(bits, w, h) != expected) { printf("FAIL: sidebar %s is not a fixed-time draw\n", STATES[state]); return 0; }
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: sidebar render mutated game\n"); return 0; }
+        }
+    }
+    for (int drive = 0; drive < 6; ++drive) for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
+        ResetPresentation(); NewRun(&gGame, 12345u, 0);
+        ConfigureDriveForTest(&gGame, drive, 12345u, 0); gGame.encounter = 2;
+        if (!StartCombat(&gGame)) return 0;
+        gGame.phase = PHASE_COMBAT;
+        for (int i = 0; i < gGame.enemyCount; ++i) gGame.enemies[i].hp = gGame.enemies[i].maxHp = 999;
+        gGame.playerHp = gGame.playerMaxHp = 999;
+        for (int turn = 0; turn < 2; ++turn) { AssignDieToSlot(&gGame, 0, SLOT_ATTACK); EndTurn(&gGame); }
+        if (gGame.phase != PHASE_COMBAT) return 0;
+        AssignDieToSlot(&gGame, 1, SLOT_DEFEND);
+        gRolled = 1; gFxLevel = mode; gSceneKey = VisibleSceneKey(); gSceneStart = 8000;
+        GameState before = gGame;
+        for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+            SetUiLanguage(language);
+            DrawFixture(dc); ++*frames;
+            if (folder && mode == FX_FULL) {
+                char name[96]; sprintf_s(name, "sidebar_boss_%d_lang_%d", drive, language);
+                if (!SaveFrame(folder, name, w, h, bits)) return 0;
+            }
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: boss sidebar render mutated game\n"); return 0; }
+        }
+    }
+    ResetPresentation(); SetUiLanguage(LANGUAGE_KOREAN);
+    return 1;
+}
+
+// 1120 폭으로 그려져 LEGACY_X만큼 밀린 두 무대(보스 조우·새 게임 삽입)의 고정 시각 프레임.
+// 게이트와 기계가 캔버스 한가운데 축에 오는지 눈으로 확인하고, 판을 바꾸지 않는지 본다.
+static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* folder, int* frames) {
+    ResetPresentation(); NewRun(&gGame, 12345u, 0);
+    ConfigureDriveForTest(&gGame, 1, 12345u, 0); gGame.encounter = 2;
+    if (!StartCombat(&gGame)) return 0;
+    gGame.phase = PHASE_COMBAT;
+    GameState before = gGame;
+    static const int bossAges[] = {BOSS_GATE_AT + 300, BOSS_LAND_AT + 120, BOSS_NAME_AT + 600};
+    for (int i = 0; i < 3; ++i) {
+        gBossIntroActive = 1; gBossIntroStart = 10000; gCheckTick = 10000 + bossAges[i];
+        DrawFixture(dc); DrawBossIntro(dc, BASE_WIDTH, BASE_HEIGHT);
+        uint32_t expected = FrameHash(bits, w, h); ++*frames;
+        if (folder) {
+            char name[96]; sprintf_s(name, "stage_boss_%d", i);
+            if (!SaveFrame(folder, name, w, h, bits)) return 0;
+        }
+        gCheckTick += 23; DrawFixture(dc); DrawBossIntro(dc, BASE_WIDTH, BASE_HEIGHT);
+        gCheckTick -= 23; DrawFixture(dc); DrawBossIntro(dc, BASE_WIDTH, BASE_HEIGHT); ++*frames;
+        if (FrameHash(bits, w, h) != expected) { printf("FAIL: boss intro is not a fixed-time draw\n"); return 0; }
+        if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: boss intro mutated game\n"); return 0; }
+    }
+    gBossIntroActive = 0;
+    // 삽입 연출은 타이틀 판을 붙잡아 디스크 라벨로 삼킨다. 회전용 축소본을 프레임마다
+    // 한 단계씩 만들므로 픽셀 재현은 보지 않고 판 불변만 본다.
+    ResetPresentation(); InitTitle(&gGame, 0, 0);
+    DrawFixture(dc); GdiFlush(); FxSnapshotCapture(dc, w, h);
+    if (!FxSnapshotHeld()) return 0;
+    GameState title = gGame;
+    static const int bootAges[] = {BOOT_FLIP_AT + 200, BOOT_PUSH_AT + 250, BOOT_SEEK_END - 120};
+    for (int i = 0; i < 3; ++i) {
+        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i];
+        DrawFixture(dc); DrawBootInsert(dc, BASE_WIDTH, BASE_HEIGHT, w, h); GdiFlush(); ++*frames;
+        if (folder) {
+            char name[96]; sprintf_s(name, "stage_boot_%d", i);
+            if (!SaveFrame(folder, name, w, h, bits)) return 0;
+        }
+        if (memcmp(&gGame, &title, sizeof(gGame))) { printf("FAIL: boot insert mutated game\n"); return 0; }
+    }
+    gBootActive = 0;
+    ResetPresentation();
+    FxSnapshotDestroy();
+    return 1;
+}
+
 int main(int argc, char** argv) {
     LoadTranslations();
     for (int language = 0; language < LANGUAGE_COUNT; ++language) {
@@ -441,6 +587,8 @@ int main(int argc, char** argv) {
     if (timing) { printf("FAIL: FX timeline %d\n", timing); return 1; }
     int focusTiming = CheckFocusTiming();
     if (focusTiming) { printf("FAIL: focus dwell %d\n", focusTiming); return 42; }
+    int combatLayout = CheckCombatLayout();
+    if (combatLayout) { printf("FAIL: combat layout %d\n", combatLayout); return 51; }
     Scene(0);
     gCheckTick = 10000 + FxTraceAt(gGame, 2) - 1;
     if (EnemyDisplayHp(0) != 70) return 7;
@@ -476,6 +624,8 @@ int main(int argc, char** argv) {
         if (!CheckInteractionFrames(dc, bits, w, h, reviewFolder, &frames)) { printf("FAIL: interaction fixture\n"); return 37; }
         if (!CheckRuleCombatFrames(dc, bits, w, h, reviewFolder, &frames)) return 38;
         if (!CheckTransitionFrames(dc, bits, w, h, reviewFolder, &frames)) { printf("FAIL: transition fixture\n"); return 43; }
+        if (!CheckSidebarFrames(dc, bits, w, h, reviewFolder, &frames)) { printf("FAIL: sidebar fixture\n"); return 52; }
+        if (!CheckWideStageFrames(dc, bits, w, h, reviewFolder, &frames)) { printf("FAIL: wide stage fixture\n"); return 53; }
         // All new decoration must be a true no-op in OFF, including card focus.
         gFxLevel = FX_OFF;
         GdiFlush(); memset(bits, 0, (size_t)w * h * 4);
@@ -571,6 +721,20 @@ int main(int argc, char** argv) {
             if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: title render mutated game\n"); return 32; }
         }
         gSettingsOpen = 0; gCampaignResetArmed = 0;
+        // Guide pages in both languages (the common page carries the R-key first-input rule).
+        for (int page = 0; page < 2; ++page) for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+            NewRun(&gGame, 12345u, 0); ConfigureDriveForTest(&gGame, 2, 12345u, 0); StartCombat(&gGame);
+            gGame.phase = PHASE_COMBAT; gGuideOpen = 1; gGuidePage = page;
+            SetUiLanguage(language);
+            GameState before = gGame;
+            DrawFixture(dc); DrawGuide(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush(); ++frames;
+            if (argc > 1 && pass == 1 && scale == 1) {
+                char name[80]; sprintf_s(name, "guide_%d_lang_%d", page, language);
+                if (!SaveFrame(argv[1], name, w, h, bits)) return 54;
+            }
+            if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: guide render mutated game\n"); return 55; }
+        }
+        gGuideOpen = 0; gGuidePage = 0; SetUiLanguage(LANGUAGE_KOREAN);
         // Empty, centered single/pair, late-game triple, and the fresh three-volume
         // opening. The last pair also covers the progress strip with nothing recovered.
         static const int CARD_COUNTS[5] = {0, 1, 2, 3, 3};
@@ -599,7 +763,7 @@ int main(int argc, char** argv) {
             if (count) {
                 RECT first = DriveCardRect(0), last = DriveCardRect(count - 1);
                 if (first.left != BASE_WIDTH - last.right || first.right - first.left != 320) return 16;
-                if (count == 3 && first.left != 56) return 17;
+                if (count == 3 && first.left != (BASE_WIDTH - (3 * 344 - 24)) / 2) return 17;
             }
             for (int language = 0; language < LANGUAGE_COUNT; ++language) {
                 SetUiLanguage(language);

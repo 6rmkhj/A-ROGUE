@@ -288,6 +288,16 @@ void DrawTerminal(HDC dc, int width, int height);
 void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH);
 void DrawBossIntro(HDC dc, int width, int height);
 
+// ---- 16:9 레이아웃 ---------------------------------------------------------
+// 캔버스가 1120에서 1352로 넓어졌다. 전투판(적·슬롯·주사위)은 예전 좌표를 그대로
+// 쓰고, 새로 생긴 오른쪽 폭은 전투 정보 사이드바가 쓴다. 1120 폭 기준으로 짜인
+// 비전투 화면은 LEGACY_X만큼 밀어 가운데에 둔다.
+static const int LEGACY_WIDTH = 1120;
+static const int LEGACY_X = (BASE_WIDTH - LEGACY_WIDTH) / 2;
+static const int COMBAT_MAIN_RIGHT = 930;   // 전투판과 조작 버튼이 쓰는 오른쪽 끝
+static const int SIDEBAR_LEFT = 952, SIDEBAR_RIGHT = 1330;
+static const int SIDEBAR_TOP = 94, SIDEBAR_BOTTOM = 738;
+
 // ---- 레이아웃 (그리기와 클릭 판정이 같은 사각형을 봐야 한다) --------------
 RECT GuideButtonRect(int width);
 RECT GuideCloseRect(int width);
@@ -331,6 +341,14 @@ RECT EndingRestartRect();
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
 RECT TurnTracePanelRect();
+// 전투 정보 사이드바. 위에서부터 대상 → 예상 → 시스템 → 기록이고, 계산 재생
+// 중에는 예상부터 기록까지가 TurnTracePanelRect 하나로 합쳐진다. 전부 표시
+// 전용이라 클릭을 받지 않는다.
+RECT CombatSidebarRect();
+RECT TargetInfoRect();
+RECT ForecastRect();
+RECT SystemInfoRect();
+RECT CombatHistoryRect();
 RECT PruneTsrRect(int i);
 
 int DieForSlotUI(int slot);

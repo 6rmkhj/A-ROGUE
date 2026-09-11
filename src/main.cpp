@@ -798,9 +798,7 @@ static void SyncRollAnimation() {
     gRollFloor = gGame.floor; gRollEncounter = gGame.encounter; gRollTurn = gGame.turn;
     if (gReadActive) { gReadActive = 0; KillTimer(gWindow, 1); }
     gRolled = 0;
-    // Reading is presentation, not a tax the player must pay every turn.
-    // Start it automatically; any key/click can still skip the animation.
-    BeginRead();
+    // 판독은 턴의 첫 입력이다. 새 턴은 미판독 섹터로 멈춰 R 키나 [판독] 버튼을 기다린다.
 }
 
 static void TickRollAnimation() {
@@ -808,7 +806,8 @@ static void TickRollAnimation() {
     for (int d = 0; d < 3; ++d) {
         if (!(gReadLanded & (1 << d)) && elapsed >= DieReadEnd(d)) { gReadLanded |= 1 << d; PlaySfxPitched(SFX_DIE_LOCK, d * 1); }
     }
-    if (elapsed >= DieReadEnd(2)) StopRead();
+    // 마지막 주사위의 안착 섬광까지 보여 준 뒤 판독을 끝낸다.
+    if (elapsed >= DieReadEnd(2) + NOISE_SETTLE_MS) StopRead();
     InvalidateRect(gWindow, 0, FALSE);
 }
 
@@ -1927,7 +1926,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     InitTitle(&gGame, CampaignClearedMask(&gCampaign), CampaignSeenEndingMask(&gCampaign)); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
-    RECT desired = {0, 0, 1120, 760}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;
+    RECT desired = {0, 0, BASE_WIDTH, BASE_HEIGHT}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;
     int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
     gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE · 1.44MB", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
     if (!gWindow) return 2; ShowWindow(gWindow, showCommand); UpdateWindow(gWindow);

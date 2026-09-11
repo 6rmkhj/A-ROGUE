@@ -887,3 +887,30 @@ LOCKED DESTINATION  ·  잠긴 목적지	LOCKED DESTINATION
 키보드만으로 플레이	Keyboard-only play
 나머지는 필요할 때	Learn the rest when it appears
 상세 정보 위치	Where to find details
+# UI 2.0 combat sidebar
+대상 없음	NO TARGET
+특성: %s	TRAIT: %s
+또는 %s %d (홀수 눈)	OR %s %d (ODD ROLL)
+적 체력	ENEMY HP
+내 체력	PLAYER HP
+방어도	ARMOR
+적 삭제 확정	ENEMY DELETED
+시스템 정지 확정	SYSTEM HALT
+! 읽기 오류 · 결과 확정 아님	! READ ERROR · RESULT NOT FINAL
+! 읽기 오류 · 시스템 정지 가능	! READ ERROR · SYSTEM HALT POSSIBLE
+! 읽기 오류 · 적 삭제 가능	! READ ERROR · ENEMY DELETE POSSIBLE
+판독 후 예상 결과가 표시됩니다	Forecast appears after the scan
+주사위를 슬롯에 배치하면 결과를 미리 봅니다	Place dice in slots to preview the result
+실행 전 예상 · 스페이스로 확정	Preview only · SPACE to execute
+역전 턴 · 연쇄부터 해결됩니다	REVERSED TURN · CHAIN resolves first
+잠김 · %s	LOCKED · %s
+다음 턴 잠김 · %s	LOCKS NEXT TURN · %s
+오프라인 · 주사위 %d	OFFLINE · DIE %d
+다음 턴 오프라인 · 주사위 %d	OFFLINE NEXT TURN · DIE %d
+격리 중 · 면 %d개	QUARANTINED · %d FACES
+격리 예고 · 주사위 %d %d면	QUARANTINE NEXT · DIE %d FACE %d
+삭제 예고 · 주사위 %d %d면	DELETE NEXT · DIE %d FACE %d
+1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행	1. R key or [SCAN] button — the first input of every turn\n2. Click a die or press 1/2/3 to select it\n3. Click different slots to place dice\n4. Click an enemy to choose the target\n5. Press Space to execute the turn
+몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200	Mob traits: always-true rules per enemy, always shown on the card\n  Most read the rolled value (odd/even · size · same as last turn)\n  Traits with a number trigger when that counter reaches 0\nBurn: 3 damage right before the enemy acts\nOffline · Quarantine: boss mechanics, output 0 that turn\nCorruption (pierce): armor absorbs only half\nDifficulty: BEGINNER 25 INTERMEDIATE 50 EXPERT 75 NIGHTMARE 100 MADNESS 200
+R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면	R  scan sector · Click / 1·2·3  select\n4  sector repair · K  KEYB reroll\nSpace  execute turn · Enter  confirm cleanup\nCancel  unplace · deselect · close\n←·→  change guide page\nF1 guide · F2 settings · F3 faces
+Tab / Shift+Tab  전투·정리 항목 이동 · 엔터  선택	Tab / Shift+Tab  move between combat/cleanup items · Enter  select

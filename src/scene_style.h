@@ -91,7 +91,7 @@ inline void DrawSceneField(HDC dc, int phase, COLORREF color, int width, int hei
         int filled = capacity > 0 ? (used * 64 + capacity - 1) / capacity : 64;
         if (filled > 64) filled = 64;
         for (int i = 0; i < 64; ++i) {
-            int x = 152 + i * 10;
+            int x = LEGACY_X + 152 + i * 10;
             Fill(dc, MakeRect(x, 226, x + 6, 237), MixColor(C_BG, color, FxScale(i < filled ? 45 : 10)));
         }
     } else if (phase == PHASE_STORY) {
@@ -133,7 +133,7 @@ inline void DrawSceneField(HDC dc, int phase, COLORREF color, int width, int hei
     } else if (phase == PHASE_GAMEOVER) {
         int fade = 1000 - Track(age, 150, 1700);
         for (int i = 0; i < 18; ++i) {
-            int x = 180 + i * 42, y = 526;
+            int x = LEGACY_X + 180 + i * 42, y = 526;
             int lift = SinMille(i * 410 + age % 60000 * 2) * fade / 70000;
             DrawLine(dc, x, y + lift, x + 34, y + lift,
                 MixColor(C_BG, C_RED, FxScale(14 + fade * 28 / 1000)), 1);
