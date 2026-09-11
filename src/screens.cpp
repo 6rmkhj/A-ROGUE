@@ -1124,13 +1124,25 @@ static void DrawDie(HDC dc, int index) {
         TextRect(dc, statusRect, b, C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
+// 지금 판에 걸린 디스크 손상. 마운트 전(-1)처럼 손상이 없는 판도 그려질 수 있으므로
+// 표 밖을 읽지 않고 null을 돌려준다 (그 칸은 비워 둔다).
+static const ModifierInfo* ActiveModifierInfo(int modifier) {
+    return modifier >= 0 && modifier < MODIFIER_COUNT ? &MODIFIER_INFO[modifier] : 0;
+}
+
 static void DrawSidebar(HDC dc, int width, int height) {
     RECT side = MakeRect(width - 212, 94, width - 22, height - 22); Panel(dc, side, C_PANEL, C_LINE);
     Text(dc, side.left + 12, side.top + 12, L"디스크 손상", C_RED, gFontSmall);
-    Text(dc, side.left + 12, side.top + 42, MODIFIER_INFO[gGame.modifierA].name, C_YELLOW, gFontSmall);
-    TextRect(dc, MakeRect(side.left + 12, side.top + 65, side.right - 10, side.top + 124), MODIFIER_INFO[gGame.modifierA].description, C_DIM, gFontSmall, DT_WORDBREAK);
-    Text(dc, side.left + 12, side.top + 136, MODIFIER_INFO[gGame.modifierB].name, C_YELLOW, gFontSmall);
-    TextRect(dc, MakeRect(side.left + 12, side.top + 159, side.right - 10, side.top + 222), MODIFIER_INFO[gGame.modifierB].description, C_DIM, gFontSmall, DT_WORDBREAK);
+    const ModifierInfo* modA = ActiveModifierInfo(gGame.modifierA);
+    const ModifierInfo* modB = ActiveModifierInfo(gGame.modifierB);
+    if (modA) {
+        Text(dc, side.left + 12, side.top + 42, modA->name, C_YELLOW, gFontSmall);
+        TextRect(dc, MakeRect(side.left + 12, side.top + 65, side.right - 10, side.top + 124), modA->description, C_DIM, gFontSmall, DT_WORDBREAK);
+    }
+    if (modB) {
+        Text(dc, side.left + 12, side.top + 136, modB->name, C_YELLOW, gFontSmall);
+        TextRect(dc, MakeRect(side.left + 12, side.top + 159, side.right - 10, side.top + 222), modB->description, C_DIM, gFontSmall, DT_WORDBREAK);
+    }
     Text(dc, side.left + 12, side.top + 242, L"실행 순서", ResolveOrderReversed(&gGame) ? C_RED : C_GREEN, gFontSmall);
     if (ResolveOrderReversed(&gGame))
         TextRect(dc, MakeRect(side.left + 12, side.top + 268, side.right - 10, side.top + 320), L"연쇄 > 방어 > 공격 > 증폭 (역전!)", C_RED, gFontSmall, DT_WORDBREAK);
@@ -1785,8 +1797,11 @@ static void DrawDescent(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(panel.right - 106, panel.top + 310, panel.right - 26, panel.top + 332), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
 
     int capacity = EffectiveCapacity(&gGame);
-    if (mount) wsprintfW(b, L"층 한도 %dB  ·  디스크 손상: %s + %s", capacity, MODIFIER_INFO[gGame.modifierA].name, MODIFIER_INFO[gGame.modifierB].name);
-    else {
+    if (mount) {
+        const ModifierInfo* modA = ActiveModifierInfo(gGame.modifierA);
+        const ModifierInfo* modB = ActiveModifierInfo(gGame.modifierB);
+        wsprintfW(b, L"층 한도 %dB  ·  디스크 손상: %s + %s", capacity, modA ? modA->name : L"-", modB ? modB->name : L"-");
+    } else {
         int bonus = capacity - FLOOR_CAPACITY[gGame.floor > 2 ? 2 : gGame.floor];
         wsprintfW(b, L"용량 한도 %dB → %dB  ·  적이 더 강해집니다", FLOOR_CAPACITY[gDescentToFloor - 1] + bonus, capacity);
     }

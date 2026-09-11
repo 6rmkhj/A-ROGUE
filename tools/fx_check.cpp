@@ -581,6 +581,12 @@ int main(int argc, char** argv) {
             AdvanceStory(&gGame);
             gGame.phase = PHASE_DRIVE_SELECT; // Empty-card safety remains covered.
             gGame.driveChoiceCount = count;
+            // PickDriveChoices shows only the volumes that remain, so the slots this
+            // layout fixture forces open are still -1. Fill them with real volumes.
+            for (int i = 0; i < count; ++i) if (gGame.driveChoices[i] < 0) {
+                gGame.driveChoices[i] = i;
+                gGame.driveDifficulty[i] = DIFF_INTERMEDIATE;
+            }
             GameState before = gGame;
             for (int x = 0; x < BASE_WIDTH; x += 8) {
                 int expected = -1;
