@@ -177,6 +177,57 @@ inline void DrawSceneArrival(HDC dc, COLORREF tone) {
     DrawLine(dc, head - 18, 71, head, 71, MixColor(C_BG, tone, FxScale(50 * fade / 1000)), 1);
 }
 
+// Procedural reward emblems read as objects before the description is read.
+// kind -1 is a resident chip; -2 is sector repair. No asset files or RNG.
+inline void DrawRewardEmblem(HDC dc, const RECT& card, int kind, COLORREF tone) {
+    int saved = SaveDC(dc);
+    int x = card.left + 36, y = card.top + 70;
+    RECT socket = MakeRect(x - 22, y - 22, x + 23, y + 23);
+    Fill(dc, socket, MixColor(C_INK, tone, 12));
+    Outline(dc, socket, MixColor(C_INK, tone, 34), 1);
+    Fill(dc, MakeRect(card.left + 1, card.top + 1, card.right - 1, card.top + 4), MixColor(C_PANEL, tone, 65));
+    if (kind == -2) {
+        Fill(dc, MakeRect(x - 4, y - 14, x + 5, y + 15), tone);
+        Fill(dc, MakeRect(x - 14, y - 4, x + 15, y + 5), tone);
+    } else if (kind == -1) {
+        Outline(dc, MakeRect(x - 10, y - 10, x + 11, y + 11), tone, 2);
+        Fill(dc, MakeRect(x - 4, y - 4, x + 5, y + 5), tone);
+        for (int i = -1; i <= 1; ++i) {
+            DrawLine(dc, x - 16, y + i * 7, x - 11, y + i * 7, tone, 2);
+            DrawLine(dc, x + 11, y + i * 7, x + 16, y + i * 7, tone, 2);
+            DrawLine(dc, x + i * 7, y - 16, x + i * 7, y - 11, tone, 2);
+            DrawLine(dc, x + i * 7, y + 11, x + i * 7, y + 16, tone, 2);
+        }
+    } else if (kind == FACE_SHIELD) {
+        POINT p[] = {{x-14,y-12},{x+14,y-12},{x+11,y+6},{x,y+16},{x-11,y+6},{x-14,y-12}};
+        for (int i = 0; i < 5; ++i) DrawLine(dc,p[i].x,p[i].y,p[i+1].x,p[i+1].y,tone,2);
+        DrawLine(dc,x,y-8,x,y+10,tone,2);
+    } else if (kind == FACE_FIRE) {
+        POINT p[] = {{x+4,y-18},{x-11,y+1},{x-6,y+1},{x-9,y+16},{x+13,y-5},{x+4,y-5},{x+4,y-18}};
+        for (int i = 0; i < 6; ++i) DrawLine(dc,p[i].x,p[i].y,p[i+1].x,p[i+1].y,tone,2);
+    } else if (kind == FACE_BOOST) {
+        for (int i = 0; i < 3; ++i) {
+            int yy = y - 12 + i * 10;
+            DrawLine(dc,x-12,yy+7,x,yy,tone,2); DrawLine(dc,x,yy,x+12,yy+7,tone,2);
+        }
+    } else if (kind == FACE_ECHO) {
+        Outline(dc,MakeRect(x-15,y-13,x+7,y+9),MixColor(C_BG,tone,48),2);
+        Outline(dc,MakeRect(x-6,y-4,x+16,y+18),tone,2);
+    } else if (kind == FACE_LEECH) {
+        DrawLine(dc,x,y-17,x-12,y+4,tone,2); DrawLine(dc,x,y-17,x+12,y+4,tone,2);
+        DrawLine(dc,x-12,y+4,x-7,y+14,tone,2); DrawLine(dc,x+12,y+4,x+7,y+14,tone,2);
+        DrawLine(dc,x-7,y+14,x+7,y+14,tone,2); DrawLine(dc,x,y-1,x,y+9,tone,2);
+    } else if (kind == FACE_WILD) {
+        DrawLine(dc,x,y-17,x+17,y,tone,2); DrawLine(dc,x+17,y,x,y+17,tone,2);
+        DrawLine(dc,x,y+17,x-17,y,tone,2); DrawLine(dc,x-17,y,x,y-17,tone,2);
+        Fill(dc,MakeRect(x-4,y-4,x+5,y+5),tone);
+    } else {
+        Outline(dc,MakeRect(x-14,y-14,x+15,y+15),tone,2);
+        for (int i = -1; i <= 1; ++i) Fill(dc,MakeRect(x+i*8-2,y+i*8-2,x+i*8+3,y+i*8+3),tone);
+    }
+    RestoreDC(dc,saved);
+}
+
 inline void DrawRewardSocket(HDC dc, const RECT& r, COLORREF tone, int index, int tuned) {
     if (!FxDecorOn()) return;
     int age = SceneElapsed() - index * 75, cx = (r.left + r.right) / 2;

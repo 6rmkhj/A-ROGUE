@@ -72,6 +72,7 @@ static void Scene(int drive) {
         gGame.enemies[i].alive = 1;
         gGame.dice[i].assignedSlot = (int8_t)i;
         gTraceDice[i] = gGame.dice[i];
+        gTraceEnemies[i] = gGame.enemies[i];
     }
     gGame.enemies[0].hp = 0; gGame.enemies[0].alive = 0;
     gGame.enemies[1].hp = 57;
@@ -92,6 +93,7 @@ static void Scene(int drive) {
     };
     memcpy(gGame.combatFx, events, sizeof(events));
     gTurnTraceActive = 1; gTurnTraceStart = 10000;
+    gTraceTurn = gGame.turn;
     gRolled = 0; gReadActive = 0;
 }
 
@@ -186,6 +188,7 @@ static void DrawCheckDecoration(HDC dc, int which) {
     case 6: DrawRewardSocket(dc, sample, C_YELLOW, 0, 1); break;
     case 7: DrawTitleDisk(dc, 700, 300, 0, C_GREEN); break;
     case 8: DrawInstallFilament(dc, CfxPoint(100, 430), CfxPoint(120, 160), 150, 230, C_GREEN, 0); break;
+    case 9: DrawImpactCut(dc, sample, 110, C_RED, 1); break;
     }
 }
 
@@ -216,7 +219,7 @@ static int CheckDecorationState(HDC dc) {
     SetTextColor(dc, RGB(93, 17, 51)); SetBkColor(dc, RGB(9, 5, 3)); SetBkMode(dc, OPAQUE);
     for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
         gFxLevel = mode; gSceneKey = PHASE_TITLE; gSceneStart = 10000; gCheckTick = 10260;
-        for (int which = 0; which < 9; ++which) {
+        for (int which = 0; which < 10; ++which) {
             CheckDcState before = ReadCheckDcState(dc);
             DrawCheckDecoration(dc, which);
             CheckDcState after = ReadCheckDcState(dc);
@@ -311,6 +314,8 @@ static int CheckRuleCombatFrames(HDC dc, void* bits, int w, int h, const char* f
         if (!RuleCombat(0, 0, 0, 0) || !AssignDieToSlot(&gGame, 0, SLOT_ATTACK)
             || !AssignDieToSlot(&gGame, 1, SLOT_CHAIN)) return 0;
         for (int d = 0; d < 3; ++d) gTraceDice[d] = gGame.dice[d];
+        for (int e = 0; e < 3; ++e) gTraceEnemies[e] = gGame.enemies[e];
+        gTraceTurn = gGame.turn;
         EndTurn(&gGame);
         int launch = -1, chain = -1;
         for (int i = 0; i < gGame.combatFxCount; ++i) {
@@ -599,9 +604,15 @@ int main(int argc, char** argv) {
     ++gCheckTick;
     if (EnemyDisplayHp(0) != 0) return 10;
     int submittedSlot = gTraceDice[0].assignedSlot;
+    int submittedIntent = gTraceEnemies[0].intent;
+    int submittedTurn = gTraceTurn;
+    gGame.enemies[0].intent = (uint8_t)((submittedIntent + 1) % 3);
+    gGame.turn = submittedTurn + 1;
+    if (DisplayEnemyAction(0)->intent != submittedIntent || DisplayTurn() != submittedTurn) return 56;
     gGame.dice[0].assignedSlot = -1;
     if (DisplayDie(0)->assignedSlot != submittedSlot || DieForSlotUI(submittedSlot) != 0) return 11;
     gTurnTraceActive = 0;
+    if (DisplayEnemyAction(0)->intent != gGame.enemies[0].intent || DisplayTurn() != gGame.turn) return 57;
     if (DisplayDie(0)->assignedSlot != -1) return 12;
     CreateRenderFonts();
     int frames = 0; DWORD beforeObjects = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
@@ -629,7 +640,7 @@ int main(int argc, char** argv) {
         // All new decoration must be a true no-op in OFF, including card focus.
         gFxLevel = FX_OFF;
         GdiFlush(); memset(bits, 0, (size_t)w * h * 4);
-        for (int which = 0; which < 9; ++which) DrawCheckDecoration(dc, which);
+        for (int which = 0; which < 10; ++which) DrawCheckDecoration(dc, which);
         GdiFlush();
         for (size_t p = 0; p < (size_t)w * h * 4; ++p)
             if (((unsigned char*)bits)[p]) { printf("FAIL: OFF drew new decoration\n"); return 33; }

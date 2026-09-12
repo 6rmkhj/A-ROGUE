@@ -19,7 +19,7 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define REWARD_CARD_COUNT 4
 #define REWARD_REPAIR 3
 
-#define COMBAT_CLEAR_MS 1500
+#define COMBAT_CLEAR_MS 1900
 #define DESCENT_LOCK_MS 520    // 고른 드라이브 카드가 잠기고 나머지가 밀려나는 구간
 #define DESCENT_MS 2920        // 카드 잠금 + 실제 마운트/심층 스캔 전체 길이
 #define DIR_SELECT_LOCK_MS 360 // 고른 디렉터리 카드가 경로로 수렴하는 구간
@@ -219,6 +219,8 @@ int GuideNoiseActive();
 // 계산 재생에서 지금까지 드러난 줄 수 (0 = 아직 없음)
 int TurnTraceShown();
 const DieState* DisplayDie(int index); // 재생 중에는 실행 직전의 주사위·배치를 보존
+const EnemyState* DisplayEnemyAction(int index); // 실행한 의도와 카운터를 재생 끝까지 보존
+int DisplayTurn();
 
 // ---- 기믹 발동 연출 --------------------------------------------------------
 // 계산 재생이 끝나 새 턴 화면이 드러나는 순간 시작된다. 규칙은 이미 game.cpp에서

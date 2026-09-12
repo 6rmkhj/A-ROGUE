@@ -19,7 +19,7 @@ static const COLORREF C_LINE = RGB(50, 71, 87), C_TEXT = RGB(218, 232, 238), C_D
 static const COLORREF C_GREEN = RGB(82, 231, 174), C_RED = RGB(255, 92, 82), C_YELLOW = RGB(255, 204, 75), C_BLUE = RGB(83, 170, 255);
 static const COLORREF C_INK = RGB(6, 10, 15);
 
-extern HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
+extern HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge, gFontTitle;
 void CreateRenderFonts();
 void DestroyRenderFonts();
 

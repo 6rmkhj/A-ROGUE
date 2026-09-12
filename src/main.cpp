@@ -173,6 +173,7 @@ int gReadActive, gReadLanded, gRolled;
 static int gRollFloor = -1, gRollEncounter = -1, gRollTurn = -1;
 
 int gCombatClearActive;
+static int gClearCuePlayed;
 DWORD gCombatClearStart;
 int gClearedFloor, gClearedEncounter;
 int gTurnTraceActive, gTurnTracePendingClear;
@@ -180,10 +181,16 @@ static int gTurnTracePendingDeath;
 DWORD gTurnTraceStart;
 static int gTraceFloor, gTraceEncounter;
 static DieState gTraceDice[3];
+static EnemyState gTraceEnemies[3];
+static int gTraceTurn;
 
 const DieState* DisplayDie(int index) {
     return gTurnTraceActive ? &gTraceDice[index] : &gGame.dice[index];
 }
+const EnemyState* DisplayEnemyAction(int index) {
+    return gTurnTraceActive ? &gTraceEnemies[index] : &gGame.enemies[index];
+}
+int DisplayTurn() { return gTurnTraceActive ? gTraceTurn : gGame.turn; }
 
 // ---- 피격·위독·정지 연출 ---------------------------------------------------
 // 전투는 game.cpp 안에서 한 번에 끝난다. 그래서 "누가 언제 무엇을 했는지"는
@@ -487,6 +494,7 @@ static void BeginCombatClear(int floor, int encounter) {
     gClearedEncounter = encounter;
     gCombatClearStart = GetTickCount();
     gCombatClearActive = 1;
+    gClearCuePlayed = 0;
     SetTimer(gWindow, 3, FX_TIMER_MS, 0);
 }
 
@@ -1026,6 +1034,8 @@ static void ExecuteCombatTurn() {
     int turn = gGame.turn;
     GamePhase before = gGame.phase;
     for (int i = 0; i < 3; ++i) gTraceDice[i] = gGame.dice[i];
+    for (int i = 0; i < 3; ++i) gTraceEnemies[i] = gGame.enemies[i];
+    gTraceTurn = gGame.turn;
     EndTurn(&gGame);
     PersistCampaignProgress();
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
@@ -1797,6 +1807,10 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         if (wParam == 1u) TickRollAnimation();
         else if (wParam == 2u) InvalidateRect(window, 0, FALSE);
         else if (wParam == 3u) {
+            if (gCombatClearActive && !gClearCuePlayed && (int)(GetTickCount() - gCombatClearStart) >= 480) {
+                gClearCuePlayed = 1;
+                PlaySfx(gClearedEncounter == 2 ? SFX_VICTORY : SFX_CONFIRM);
+            }
             if ((int)(GetTickCount() - gCombatClearStart) >= COMBAT_CLEAR_MS) FinishCombatClear();
             else InvalidateRect(window, 0, FALSE);
         }
@@ -1805,8 +1819,8 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             // 죽은 판은 클릭을 기다리지 않는다. 마지막 줄을 읽을 틈만 주고 화면이 무너진다.
             if (gTurnTracePendingDeath) { if (traceElapsed >= reveal + TRACE_DEATH_HOLD_MS) { FinishTurnTrace(); return 0; } }
             // 마지막 줄의 피해 숫자와 파편이 끝나기 전에 타이머를 끄면 연출이
-            // 그 프레임에서 얼어붙는다. 꼬리만큼 더 돌리고 나서 멈춘다.
-            else if (traceElapsed >= reveal + TRACE_FX_TAIL_MS) KillTimer(window, 4);
+            // 그 프레임에서 얼어붙는다. 여운 뒤 다음 턴/완료 장면으로 자동 인계한다.
+            else if (traceElapsed >= reveal + TRACE_FX_TAIL_MS) { FinishTurnTrace(); return 0; }
             InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 6u) {

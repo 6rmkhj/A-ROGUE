@@ -3,18 +3,21 @@
 #include "sprites.h"
 #include "localization.h"
 
-HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge;
+HFONT gFontSmall, gFontMedium, gFontLarge, gFontHuge, gFontTitle;
 
 static HFONT MakeFont(int height, int weight) {
-    return CreateFontW(height, 0, 0, 0, weight, FALSE, FALSE, FALSE, HANGEUL_CHARSET, OUT_DEFAULT_PRECIS,
+    return CreateFontW(height, 0, 0, 0, weight, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS,
         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
 }
 
 void CreateRenderFonts() {
-    gFontSmall = MakeFont(16, FW_NORMAL);
-    gFontMedium = MakeFont(21, FW_BOLD);
-    gFontLarge = MakeFont(32, FW_BOLD);
+    // ANSI selects the actual Consolas face; Korean uses Windows font linking.
+    // Compensate for Consolas' internal leading without changing row geometry.
+    gFontSmall = MakeFont(18, FW_NORMAL);
+    gFontMedium = MakeFont(24, FW_BOLD);
+    gFontLarge = MakeFont(36, FW_BOLD);
     gFontHuge = MakeFont(62, FW_BOLD);
+    gFontTitle = MakeFont(104, FW_BOLD);
 }
 
 void DestroyRenderFonts() {
@@ -23,6 +26,7 @@ void DestroyRenderFonts() {
     if (gFontMedium) DeleteObject(gFontMedium);
     if (gFontLarge) DeleteObject(gFontLarge);
     if (gFontHuge) DeleteObject(gFontHuge);
+    if (gFontTitle) DeleteObject(gFontTitle);
 }
 
 RECT MakeRect(int l, int t, int r, int b) { RECT value = {l, t, r, b}; return value; }

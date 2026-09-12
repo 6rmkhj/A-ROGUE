@@ -1000,3 +1000,7 @@ KEYB 재굴림 (상주 프로그램 설치 시)	KEYB reroll (when installed)
 볼륨 법칙 — 매 전투에 적용	Volume law — applies to every battle
 
 보상 종류	Rewards
+
+이번 실행 · 가한 피해	DAMAGE DEALT THIS TURN
+이번 실행 · 받은 피해	DAMAGE TAKEN THIS TURN
+남은 체력	HP REMAINING

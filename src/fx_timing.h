@@ -16,11 +16,11 @@ inline int FxImpactHold(const CombatFxEvent& fx) {
 }
 
 inline int FxTraceSpan(const GameState& game, int line) {
-    int span = 230;
+    int span = 110; // bookkeeping should not hold the stage as long as a hit
     for (int i = 0; i < game.combatFxCount; ++i) {
         const CombatFxEvent& fx = game.combatFx[i];
         if (FxTraceLine(game, fx.traceLine) != line) continue;
-        int beat = fx.type == CFX_AMPLIFY ? 300 : fx.type == CFX_ATTACK_LAUNCH ? 220
+        int beat = fx.type == CFX_AMPLIFY ? 300 : fx.type == CFX_ATTACK_LAUNCH ? 230
             : fx.type == CFX_CHAIN ? 260 : fx.type == CFX_ENEMY_STRIKE ? 410
             : fx.type == CFX_DEFEND ? 310 : 320;
         if (fx.flags & CFXF_KILL) beat = 500;

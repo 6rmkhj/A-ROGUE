@@ -2,8 +2,57 @@
 #include "ui.h"
 #include "fx_draw.h"
 
+// Containment light originates under the process. Motion is clock-derived;
+// the silhouette and stage remain readable with effects disabled.
+inline void DrawProcessStage(HDC dc, const RECT& box, int kind, int alive,
+    int flash, int bob, int shift, int sx, int sy) {
+    COLORREF tone = (COLORREF)GetEnemyInfoOrUnknown(kind)->color;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, box.left, box.top, box.right, box.bottom);
+    Fill(dc, box, RGB(9, 15, 23));
+    int cx = (box.left + box.right) / 2;
+    for (int j = 0; j < 20; ++j) {
+        int half = 36 + j * 5, y = box.bottom - 30 - j * 10;
+        Fill(dc, MakeRect(cx - half, y - 9, cx + half, y + 1),
+            MixColor(RGB(9, 15, 23), tone, alive ? 15 - j / 2 : 3));
+    }
+    COLORREF rail = MixColor(C_BG, tone, alive ? 48 : 12);
+    for (int side = 0; side < 2; ++side) {
+        int x = side ? box.right - 8 : box.left + 8;
+        DrawLine(dc, x, box.top + 28, x, box.bottom - 26, MixColor(C_BG, tone, 20), 1);
+        for (int j = 0; j < 9; ++j) {
+            int y = box.top + 36 + j * 22;
+            Fill(dc, MakeRect(x - 2, y, x + 3, y + 3), rail);
+        }
+    }
+    DrawLine(dc, box.left + 24, box.bottom - 18, box.right - 24, box.bottom - 18, rail, 2);
+    DrawLine(dc, box.left + 44, box.bottom - 13, box.right - 44, box.bottom - 13,
+        MixColor(C_BG, tone, 22), 1);
+    RECT art = box; InflateRect(&art, -20, -20);
+    int reveal = FxDecorOn() ? EaseOutCubic(Track(SceneElapsed(), 60, 480)) : 1000;
+    int clip = SaveDC(dc);
+    IntersectClipRect(dc, art.left - 10, art.top - 10, art.right + 10,
+        art.top - 10 + (art.bottom - art.top + 20) * reveal / 1000);
+    DrawSpriteArt(dc, art, kind, alive, flash, bob, shift, sx, sy);
+    RestoreDC(dc, clip);
+    if (reveal > 0 && reveal < 1000) {
+        int y = art.top - 10 + (art.bottom - art.top + 20) * reveal / 1000;
+        DrawLine(dc, art.left, y, art.right, y, MixColor(C_BG, tone, FxScale(80)), 2);
+    }
+    RestoreDC(dc, saved);
+}
+
 // Shared, fixed knots keep the electric path connected. The transverse offsets
 // vanish at both anchors; no frame or particle ever consumes gameplay RNG.
+inline void DrawDiePips(HDC dc, int x, int y, int value, COLORREF tone) {
+    if (value < 1 || value > 6) return;
+    static const unsigned masks[] = {0, 16, 257, 273, 325, 341, 365};
+    for (int i = 0; i < 9; ++i) if (masks[value] & (1u << i)) {
+        int px = x + i % 3 * 10, py = y + i / 3 * 10;
+        Fill(dc, MakeRect(px, py, px + 5, py + 5), tone);
+    }
+}
+
 inline POINT CombatLancePoint(POINT from, POINT to, int p, int chain, int seed) {
     if (p <= 0) return from;
     if (p >= 1000) return to;
@@ -65,6 +114,25 @@ inline void DrawEnergyLance(HDC dc, POINT from, POINT to, int t, int life, COLOR
         DrawCraftArc(dc, from.x, from.y, recoil, recoil / 2, 2100, 1200,
             MixColor(C_BG, color, FxScale(55 * (80 - t) / 80)), 1);
     }
+    RestoreDC(dc, saved);
+}
+
+inline void DrawImpactCut(HDC dc, const RECT& portrait, int t, COLORREF tone, int kill) {
+    if (!FxDecorOn() || t < 0 || t >= 380) return;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, portrait.left, portrait.top, portrait.right, portrait.bottom);
+    int cx = (portrait.left + portrait.right) / 2, cy = (portrait.top + portrait.bottom) / 2;
+    int reach = (portrait.right - portrait.left) * EaseOutCubic(Track(t, 0, 100)) / 2;
+    int fade = 1000 - Track(t, 70, 380);
+    int light = FxScale(90 * fade / 1000);
+    DrawLine(dc, cx - reach, cy + reach / 2, cx + reach, cy - reach / 2,
+        MixColor(C_BG, tone, light / 3), kill ? 13 : 9);
+    DrawLine(dc, cx - reach, cy + reach / 2, cx + reach, cy - reach / 2,
+        MixColor(C_BG, tone, light), kill ? 5 : 3);
+    DrawLine(dc, cx - reach, cy + reach / 2, cx + reach, cy - reach / 2,
+        MixColor(C_BG, C_TEXT, light), 1);
+    if (kill) DrawLine(dc, cx - reach, cy - reach / 3, cx + reach, cy + reach / 3,
+        MixColor(C_BG, C_YELLOW, light), 2);
     RestoreDC(dc, saved);
 }
 
