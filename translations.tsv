@@ -27,29 +27,16 @@
 가이드 [F1]	Guide [F1]
 설정 [F2]	Settings [F2]
 덱 [F3]	Deck [F3]
-덱·보상·상주 프로그램	Deck, rewards, and resident programs
 보유 중인 디스크 면	Owned disk faces
 닫힌 것	Closed
 [ 새 게임 ]	[ New Game ]
 18개의 주사위 면이 당신의 덱이자 디스크입니다.\n강한 면은 더 많은 바이트를 차지합니다.\n층이 내려갈수록 줄어드는 용량 안에서 시스템을 복구하십시오.	Your 18 die faces are both your deck and disk.\nStronger faces consume more bytes.\nRestore the system within a capacity that shrinks each floor.
 1·2·3 주사위 선택 / 슬롯 클릭 배치 / Space 실행 / 보상 Esc: 선택 취소 · 선택 없음에서 두 번 눌러 포기	1/2/3 select a die / click a slot / Space executes / reward Esc cancels selection; press twice with none selected to skip
-시스템 가이드 1/2	System Guide 1/2
-드라이브 정보 2/2	Drive Information 2/2
 ◀ 이전 페이지	◀ Previous
 다음 페이지 ▶	Next ▶
-←·→ 키 또는 버튼으로 페이지 이동	Use arrow keys or buttons to change pages
 조작	Controls
 1. 주사위를 클릭하거나 1·2·3으로 선택\n2. 서로 다른 슬롯을 클릭해 배치\n3. 적을 클릭해 공격 대상 선택\n4. 스페이스 키로 턴 실행	1. Click a die or press 1/2/3 to select it\n2. Click different slots to place dice\n3. Click an enemy to choose the target\n4. Press Space to execute the turn
-슬롯 실행 순서	Slot execution order
-증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다	AMPLIFY  Boost attack and defense first\nATTACK   Damage the selected enemy\nDEFEND   Absorb enemy damage this turn\nCHAIN    Repeat the previous attack or defense\nSome bosses warn you, then reverse this order
-상태와 적 의도	Status and enemy intent
 화상: 적 행동 직전에 3 피해\n읽기 오류: 실행 순간 해당 주사위를 다시 굴림\n조각화: 중복 결과, 이번 턴 출력 0\n오프라인·격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200\n숫자는 받는 오염 피해 %, 카드마다 다른 등급	Burn: 3 damage just before the enemy acts\nRead error: reroll the affected die on execution\nFragmented: duplicate result, output 0 this turn\nOffline/quarantined: boss effect, output 0 that turn\nCorruption: armor absorbs only half\nDifficulty: Beginner 25, Intermediate 50, Expert 75, Nightmare 100, Madness 200\nThe number is corruption damage %, and each card has its own rank
-빠른 시작	Quick start
-클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제·보상 건너뛰기·닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면	Click / 1/2/3  Select\n4  Repair sector · K  KEYB reroll\nSpace  Execute · Enter  Confirm cleanup\nEsc  Unplace, skip reward, or close\n←/→  Guide page\nF1 Guide · F2 Settings · F3 Owned faces
-볼륨과 디스크 손상	Volumes and disk damage
-볼륨 선택  손상 2종 + 특성 1개 + 전용 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2	VOLUME  Two damage types, one perk, unique roster\nBAD SECTOR  Permanently damage a random face on descent\nREAD ERROR  Reroll the warned die on execution\nFRAGMENTED  Disable later duplicate results\nOVERALLOCATED  +60B capacity, +30% enemy HP\nCHECKSUM  +2 attack when total output is even
-드라이브별 적·보스	Enemies and bosses by drive
-볼륨을 마운트하면 이 페이지에 해당 드라이브의 일반 몹 3종과 층별 보스 3종, 그리고 보스 기믹의 예고·대응법이 표시됩니다.\n\n	Mount a volume to show its three normal enemies, three floor bosses, and warnings and counters for boss mechanics.\n\n
 일반 몹 (모든 층, 층마다 강해짐)	Normal enemies (all floors; stronger each floor)
 층별 보스와 기믹	Bosses and mechanics by floor
 보스 기믹: %s	Boss mechanic: %s
@@ -718,7 +705,6 @@ HOST> 무엇을 복구할까. _	HOST> What should I recover. _
 기록에 없는 프로세스입니다	Process not found in records
 난이도	DIFFICULTY
 메모리 %dK  %c	MEMORY %dK  %c
-면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.	If face and resident-program costs exceed the floor limit, remove some on the cleanup screen. Normal rewards replace a face or repair a sector; boss loot is a resident program. KEYB rerolls one die per turn after scanning.
 명령 없이 계속되는 첫 번째 부팅	The first boot that continues without a command
 모든 슬롯에서 추가 출력: 공격 +2 · 방어 +3 · 증폭 +2 · 연쇄(공격) +2.	Additional output in every slot: Attack +2 · Defend +3 · Amplify +2 · Chain (attack) +2.
 백업 소진됨	BACKUP SPENT
@@ -910,7 +896,107 @@ LOCKED DESTINATION  ·  잠긴 목적지	LOCKED DESTINATION
 격리 중 · 면 %d개	QUARANTINED · %d FACES
 격리 예고 · 주사위 %d %d면	QUARANTINE NEXT · DIE %d FACE %d
 삭제 예고 · 주사위 %d %d면	DELETE NEXT · DIE %d FACE %d
-1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행	1. R key or [SCAN] button — the first input of every turn\n2. Click a die or press 1/2/3 to select it\n3. Click different slots to place dice\n4. Click an enemy to choose the target\n5. Press Space to execute the turn
-몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200	Mob traits: always-true rules per enemy, always shown on the card\n  Most read the rolled value (odd/even · size · same as last turn)\n  Traits with a number trigger when that counter reaches 0\nBurn: 3 damage right before the enemy acts\nOffline · Quarantine: boss mechanics, output 0 that turn\nCorruption (pierce): armor absorbs only half\nDifficulty: BEGINNER 25 INTERMEDIATE 50 EXPERT 75 NIGHTMARE 100 MADNESS 200
-R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면	R  scan sector · Click / 1·2·3  select\n4  sector repair · K  KEYB reroll\nSpace  execute turn · Enter  confirm cleanup\nCancel  unplace · deselect · close\n←·→  change guide page\nF1 guide · F2 settings · F3 faces
-Tab / Shift+Tab  전투·정리 항목 이동 · 엔터  선택	Tab / Shift+Tab  move between combat/cleanup items · Enter  select
+1  시작하기	1  Basics
+2  슬롯과 면	2  Slots & faces
+3  적과 위험	3  Enemies & hazards
+4  덱·보상·조작	4  Deck & controls
+5  드라이브 정보	5  Drive info
+시스템 가이드	System Guide
+←·→ 또는 1~5 키로 페이지 이동  ·  F1 / Esc 로 닫기	←/→ or 1–5 to change page  ·  F1 / Esc to close
+목표	Goal
+볼륨(드라이브) 하나를 골라 3개 층을 내려가며 최종 보스를 삭제합니다. 체력이 0이 되면 이번 런은 끝납니다.	Pick one volume (drive), descend three floors, and delete the final boss. The run ends when your HP reaches 0.
+한 층의 흐름	One floor
+디렉터리	DIRECTORY
+일반전	BATTLE
+보상	REWARD
+보스전	BOSS
+전리품	LOOT
+× 3층	× 3 floors
+한 턴 진행	One turn
+판독	Scan
+주사위 고르기	Pick a die
+클릭	Click
+슬롯에 놓기	Place it
+대상 고르기	Pick target
+실행	Execute
+섹터를 읽어 주사위 3개를 굴립니다. 매 턴 가장 먼저 누릅니다.	Read the sector to roll your three dice. Always the first input.
+놓을 주사위를 고릅니다. 노란 테두리가 선택 표시입니다.	Choose a die to place. A yellow border marks it.
+주사위마다 다른 슬롯에 놓습니다. 4칸 중 1칸은 비게 됩니다.	Put each die in a different slot. One of four stays empty.
+공격할 적 카드를 누릅니다. 카드에 ▶ 공격 대상이 붙습니다.	Click the enemy to attack. Its card shows ▶ TARGET.
+슬롯 위의 예상 결과를 확인하고 턴을 실행합니다.	Check the forecast above the slots, then run the turn.
+알아 두면 좋은 것	Good to know
+주사위를 놓으면 슬롯 위에 예상 결과가 먼저 뜹니다. 실행하기 전까지는 얼마든지 옮겨 볼 수 있습니다.	Placing dice shows the expected result above the slots. Move them freely until you execute.
+보스 기믹은 발동하기 전에 적 카드 · 슬롯 · 주사위에 먼저 예고됩니다.	Boss mechanics are always announced on the enemy card, slots, or dice before they fire.
+전투에서 이겨도 체력은 저절로 회복되지 않습니다. 보상 화면의 섹터 복구를 챙기세요.	Winning a battle does not restore HP. Use SECTOR REPAIR on the reward screen.
+슬롯 — 이 순서로 실행됩니다	Slots — resolved in this order
+뒤에 오는 공격 · 방어에 출력의 절반을 더합니다. 증폭 면이면 전부 더합니다.	Adds half its output to the later attack and defense. An AMPLIFY face adds all of it.
+선택한 적에게 출력만큼 피해를 줍니다.	Deals its output as damage to the selected enemy.
+이번 턴 적 공격을 막는 방어도를 얻습니다. 다음 턴이 시작되면 사라집니다.	Gains armor against this turn's enemy attack. It fades when the next turn starts.
+직전 공격을 일부 반복합니다. 공격이 없었다면 방어를 반복합니다.	Repeats part of the attack. With no attack, it repeats the defense instead.
+배치 규칙	Placement rules
+주사위 3개, 슬롯 4칸 — 한 칸은 항상 비어 있습니다.	Three dice, four slots — one slot is always empty.
+이미 찬 슬롯에 놓으면 먼저 있던 주사위가 빠집니다.	Placing on a filled slot pushes the old die out.
+슬롯 위의 → N 은 예상 산출량입니다. → 0 이면 효과가 없습니다.	→ N above a slot is its expected output. → 0 means it does nothing.
+일부 보스는 예고한 턴에 이 순서를 거꾸로 뒤집습니다.	Some bosses reverse this order on an announced turn.
+면 8종 — 주사위 한 면에 하나씩	8 face types — one per die face
+면	FACE
+값만큼 출력하고 값만큼 차지합니다	Output and cost both equal its value
+공격 +4, 대상에게 화상 2회	Attack +4 and 2 burns on the target
+방어 슬롯에서 출력 2배	Double output in the DEFEND slot
+공격 피해 일부를 체력으로 회복	Heals part of the attack damage
+연쇄 슬롯에서 직전 효과 100% 반복	Repeats the last effect 100% in CHAIN
+효과 없음	No effect
+= 값	= value
+강화 보상으로 받은 특수 면은 비용은 같고 출력만 +2 높습니다.	Special faces from enhanced rewards cost the same but output +2.
+손상된 면은 효과를 잃지만 비용은 그대로 차지합니다.	Damaged faces lose their effect but keep their cost.
+보유한 면은 F3 에서 언제든 볼 수 있습니다.	Press F3 at any time to see your faces.
+적 카드 읽기	Reading enemy cards
+의도	Intent
+적이 이번 턴에 할 행동입니다. 수치까지 카드에 미리 적혀 있습니다.	What the enemy will do this turn, with exact numbers, shown in advance.
+방어도가 절반만 막습니다. 아래 난이도 배율이 붙습니다.	Armor blocks only half. Scaled by the difficulty below.
+화상	Burn
+적이 행동하기 직전에 3 피해를 받습니다.	The enemy takes 3 damage right before it acts.
+몹 특성	Mob trait
+전투 내내 적용되는 성질로 카드에 늘 적혀 있습니다. 굴린 눈의 홀짝 · 크기를 보는 것이 많습니다.	An always-on rule printed on the card. Many check whether your rolls are odd, even, high, or low.
+보스 기믹	Boss gimmick
+발동하기 전에 먼저 예고됩니다. 오프라인 · 격리된 대상은 그 턴 출력이 0입니다.	Announced before it fires. Anything offline or quarantined outputs 0 that turn.
+난이도 — 오염(관통) 피해 배율	Difficulty — corruption damage multiplier
+테두리가 이번 런의 난이도입니다. 예고 수치에 이미 반영되어 있습니다.	The outlined cell is this run's difficulty. Enemy forecasts already include it.
+적 카드의 예고 수치에 이미 반영되어 있습니다.	Enemy card forecasts already include this multiplier.
+디스크 손상 — 볼륨마다 2종	Disk damage — two per volume
+이번 런에 적용: %s + %s	Active this run: %s + %s
+체력과 회복	HP and healing
+체력이 0이 되면 런이 끝납니다. 전투 승리만으로는 회복되지 않습니다.	The run ends at 0 HP. Winning a battle does not heal you.
+회복 수단: 섹터 복구 보상 · 흡수 면 · E:\ 볼륨 특성 · UNDELETE	Healing: SECTOR REPAIR reward · DRAIN faces · E:\ volume perk · UNDELETE
+용량 — 넘치면 진행할 수 없습니다	Capacity — you cannot continue while over
+면과 상주 프로그램(TSR) 비용의 합이 층 한도를 넘으면, 정리 화면에서 면을 지우거나 TSR을 종료해야 다음으로 넘어갑니다.	If faces plus resident programs (TSR) cost more than the floor limit, erase faces or end a TSR on the cleanup screen before moving on.
+%d층 한도	FLOOR %d LIMIT
+층을 내려갈수록 한도가 줄어듭니다.	The limit shrinks as you descend.
+지금 %dB / %dB 사용 중	Using %dB / %dB now
+일반전 승리	Battle won
+면 후보 3개 중 하나로 기존 면을 교체하거나, 섹터 복구로 체력을 회복합니다.	Swap one of your faces for one of three offers, or take SECTOR REPAIR to heal.
+보스 처치	Boss killed
+상주 프로그램(TSR) 3개 중 하나를 설치합니다. 면을 바꾸지 않고 용량만 차지합니다.	Install one of three resident programs (TSR). It uses capacity without replacing a face.
+건너뛰기	Skip
+고른 카드가 없을 때 Esc 를 두 번 누르면 보상을 포기합니다.	With no card picked, press Esc twice to give up the reward.
+섹터 판독 — 매 턴 첫 입력	Scan sector — first input each turn
+주사위 선택 · 보상 카드 선택	Select a die · pick a reward card
+보상 화면에서 섹터 복구	SECTOR REPAIR on the reward screen
+KEYB 재굴림 (상주 프로그램 설치 시)	KEYB reroll (when installed)
+턴 실행	Execute the turn
+배치 해제 · 선택 취소 · 창 닫기	Unplace · deselect · close a window
+정리 확정 · 포커스된 항목 선택	Confirm cleanup · activate focused item
+전투 · 정리 화면에서 항목 이동 (Shift+Tab 은 반대로)	Move focus in battle or cleanup (Shift+Tab goes back)
+가이드 · 설정 · 보유 면	Guide · settings · owned faces
+가이드 안에서 페이지 이동	Change guide page
+드라이브별 적 · 보스	Enemies and bosses by drive
+볼륨을 마운트하면 이 쪽에 그 드라이브의 일반 몹 3종과 층별 보스 3종이 나옵니다. 처치한 개체부터 정보가 열립니다.	Mount a volume to list its three normal enemies and three floor bosses here. Details unlock as you defeat them.
+슬롯 권한 잠금과 시스템 정지	Slot permission locks and system halts
+피해 목표 미달 시 복원 · 되감기	Restores and rewinds if you miss damage targets
+예고된 주사위 연결 끊김	Announced dice disconnect
+슬롯 해결 순서 역전	Slot resolution order reverses
+메모리 압력 게이지와 강화 공격	Memory pressure gauge and empowered attacks
+면 격리, 최종 보스는 영구 삭제	Face quarantine; the final boss deletes permanently
+볼륨 법칙 — 매 전투에 적용	Volume law — applies to every battle
+
+보상 종류	Rewards

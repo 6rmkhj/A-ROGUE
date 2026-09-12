@@ -150,7 +150,10 @@ extern HWND gWindow;
 extern POINT gMouse;
 extern int gGuideOpen, gSettingsOpen, gDeckOpen, gFullscreen;
 extern uint8_t gPruneTsrPending[TSR_COUNT];
-extern int gGuidePage;   // 0 = 공통 규칙, 1 = 현재 드라이브·보스 기믹
+// 가이드는 주제별 다섯 쪽이다. 앞의 넷은 공통 규칙, 마지막 쪽은 마운트한 드라이브의 로스터.
+#define GUIDE_PAGE_COUNT 5
+#define GUIDE_PAGE_DRIVE (GUIDE_PAGE_COUNT - 1)
+extern int gGuidePage;   // 0 시작하기 · 1 슬롯과 면 · 2 적과 위험 · 3 덱·보상·조작 · 4 드라이브 정보
 extern int gRestartArmed; // 설정 화면의 "다시 시작" 버튼: 0=대기, 1=한 번 더 누르면 확정
 extern int gCampaignResetArmed; // "진행도 초기화" 버튼. 런이 아니라 세이브를 지우므로 확정을 따로 받는다
 // 보상 포기 버튼. 되돌릴 수 없는 손실이라 "다시 시작"과 같은 두 번 누르기를 쓴다.
@@ -303,6 +306,7 @@ RECT GuideButtonRect(int width);
 RECT GuideCloseRect(int width);
 RECT GuidePrevRect(int width, int height);
 RECT GuideNextRect(int width, int height);
+RECT GuideTabRect(int page);
 RECT SettingsButtonRect(int width);
 RECT SettingsCloseRect(int width);
 RECT DeckButtonRect(int width);

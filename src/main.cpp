@@ -1274,7 +1274,9 @@ static int HoverId(int x, int y) {
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y)) return 801;
         if (gGuidePage > 0 && Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 802;
-        if (gGuidePage < 1 && Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 803;
+        if (gGuidePage < GUIDE_PAGE_COUNT - 1 && Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) return 803;
+        for (int i = 0; i < GUIDE_PAGE_COUNT; ++i)
+            if (i != gGuidePage && Inside(GuideTabRect(i), x, y)) return 804 + i;
         return -1;
     }
     if (RollBlocking()) return -1;
@@ -1342,10 +1344,10 @@ static int HoverId(int x, int y) {
 
 static void SyncUiFocus() {
     int scope = gDeckOpen | (gSettingsOpen << 1) | (gGuideOpen << 2) | (gTermOpen << 3)
-        | (gGuidePage << 4) | (gDeathActive << 6) | (gBootActive << 7)
+        | (gDeathActive << 6) | (gBootActive << 7)
         | (UiFxSnapshotActive() << 8) | (gTurnTraceActive << 9) | (gDescentActive << 10)
         | (gDirEnterActive << 11) | (gCombatClearActive << 12) | (gReadActive << 13)
-        | (gBossIntroActive << 14);
+        | (gBossIntroActive << 14) | (gGuidePage << 15);
     int hover = gMouseInClient && gVolumeDragging < 0 ? HoverId(gMouse.x, gMouse.y) : -1;
     if (UpdateUiFocusState(&gUiFocus, hover, VisibleSceneKey(), scope,
             gGame.phase == PHASE_COMBAT ? gGame.turn : -1, GetTickCount())) {
@@ -1463,7 +1465,9 @@ static void HandleClick(int x, int y) {
     if (gGuideOpen) {
         if (Inside(GuideCloseRect(BASE_WIDTH), x, y) || Inside(GuideButtonRect(BASE_WIDTH), x, y)) gGuideOpen = 0;
         else if (Inside(GuidePrevRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage > 0) { --gGuidePage; PlaySfx(SFX_UI_CLICK); }
-        else if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage < 1) { ++gGuidePage; PlaySfx(SFX_UI_CLICK); }
+        else if (Inside(GuideNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) && gGuidePage < GUIDE_PAGE_COUNT - 1) { ++gGuidePage; PlaySfx(SFX_UI_CLICK); }
+        else for (int i = 0; i < GUIDE_PAGE_COUNT; ++i)
+            if (i != gGuidePage && Inside(GuideTabRect(i), x, y)) { gGuidePage = i; PlaySfx(SFX_UI_CLICK); break; }
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) { gGuideOpen = 1; gSettingsOpen = 0; gGuidePage = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1663,7 +1667,9 @@ static void HandleKey(WPARAM key) {
     if (gGuideOpen) {
         if (key == VK_ESCAPE) gGuideOpen = 0;
         else if (key == VK_LEFT && gGuidePage > 0) --gGuidePage;
-        else if (key == VK_RIGHT && gGuidePage < 1) ++gGuidePage;
+        else if (key == VK_RIGHT && gGuidePage < GUIDE_PAGE_COUNT - 1) ++gGuidePage;
+        // 가이드가 열려 있는 동안 숫자 키는 전투가 아니라 탭 번호로 간다.
+        else if (key >= '1' && key < '1' + GUIDE_PAGE_COUNT) gGuidePage = (int)(key - '1');
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }

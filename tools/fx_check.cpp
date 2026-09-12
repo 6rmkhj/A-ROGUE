@@ -722,7 +722,7 @@ int main(int argc, char** argv) {
         }
         gSettingsOpen = 0; gCampaignResetArmed = 0;
         // Guide pages in both languages (the common page carries the R-key first-input rule).
-        for (int page = 0; page < 2; ++page) for (int language = 0; language < LANGUAGE_COUNT; ++language) {
+        for (int page = 0; page < GUIDE_PAGE_COUNT; ++page) for (int language = 0; language < LANGUAGE_COUNT; ++language) {
             NewRun(&gGame, 12345u, 0); ConfigureDriveForTest(&gGame, 2, 12345u, 0); StartCombat(&gGame);
             gGame.phase = PHASE_COMBAT; gGuideOpen = 1; gGuidePage = page;
             SetUiLanguage(language);

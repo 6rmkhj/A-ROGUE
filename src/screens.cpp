@@ -14,6 +14,10 @@ RECT GuideButtonRect(int width) { return MakeRect(width - 148, 4, width - 18, 23
 RECT GuideCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT GuidePrevRect(int width, int height) { (void)width; return MakeRect(84, height - 74, 234, height - 40); }
 RECT GuideNextRect(int width, int height) { return MakeRect(width - 234, height - 74, width - 84, height - 40); }
+RECT GuideTabRect(int page) {
+    int w = (BASE_WIDTH - 168 - 8 * (GUIDE_PAGE_COUNT - 1)) / GUIDE_PAGE_COUNT, left = 84 + page * (w + 8);
+    return MakeRect(left, 146, left + w, 180);
+}
 RECT SettingsButtonRect(int width) { return MakeRect(width - 148, 25, width - 18, 44); }
 RECT SettingsCloseRect(int width) { return MakeRect(width - 154, 91, width - 82, 129); }
 RECT DeckButtonRect(int width) { return MakeRect(width - 148, 46, width - 18, 65); }
@@ -3782,51 +3786,310 @@ static const wchar_t* PatternRoleLabel(int pattern) {
     }
 }
 
-static void DrawGuideCommonPage(HDC dc, int width, const RECT& panel) {
-    int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
-    Text(dc, left, top, L"빠른 시작", C_YELLOW, gFontMedium);
-    // 판독이 전투 턴의 첫 입력이다. 이것이 빠지면 나머지 안내대로 눌러도
-    // 아무 일도 일어나지 않으므로 1번 자리에 둔다.
-    TextRect(dc, MakeRect(left, top + 32, middle - 28, top + 148),
-        L"1. R 키 또는 [판독] 버튼 — 턴의 첫 입력\n2. 주사위를 클릭하거나 1·2·3으로 선택\n3. 서로 다른 슬롯을 클릭해 배치\n4. 적을 클릭해 공격 대상 선택\n5. 스페이스 키로 턴 실행", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 162, L"슬롯 실행 순서", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 194, middle - 28, top + 308),
-        L"증폭  공격·방어 출력을 먼저 강화\n공격  선택한 적에게 피해\n방어  이번 턴 적 공격을 흡수\n연쇄  직전 공격 또는 방어를 반복\n일부 보스는 이 순서를 예고 후 역전시킵니다", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, left, top + 322, L"상태와 적 의도", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(left, top + 354, middle - 28, panel.bottom - 52),
-        L"몹 특성: 적마다 항상 참인 성질. 카드에 상시 표기됩니다\n  대부분 굴린 눈의 값을 봅니다 (홀짝 · 크기 · 직전 턴과 같은 눈)\n  숫자가 붙은 특성은 그 카운터가 0이 될 때 사건이 납니다\n화상: 적 행동 직전에 3 피해\n오프라인 · 격리: 보스 기믹, 해당 턴 출력 0\n오염(관통): 방어도가 절반만 흡수\n난이도: 초급자 25 중급자 50 전문가 75 악몽 100 광기 200", C_TEXT, gFontSmall, DT_WORDBREAK);
+// ---- 가이드 ------------------------------------------------------------------
+// 예전 가이드는 두 쪽에 일곱 섹션을 몰아 16px 글자를 16px 간격으로 쌓은 글 뭉치였고,
+// 용어와 설명이 같은 색이라 훑어 읽을 수 없었다. 지금은 주제별 다섯 쪽으로 나누고
+// 모든 쪽을 같은 어휘(섹션 머리 · 용어 줄 · 키 칩 · 문단)로 그린다.
+// 본문은 탭 아래 y200부터 페이지 이동 버튼 위 y672까지 쓴다.
+#define GUIDE_LEFT  84
+#define GUIDE_RIGHT (BASE_WIDTH - 84)
+#define GUIDE_TOP   200
+#define GUIDE_COL_A (BASE_WIDTH / 2 - 22)   // 왼쪽 단의 오른쪽 끝
+#define GUIDE_COL_B (BASE_WIDTH / 2 + 22)   // 오른쪽 단의 왼쪽 끝
+#define GUIDE_LINE  24                       // 16px 글자에 8px 행간
 
-    Text(dc, middle, top, L"볼륨과 디스크 손상", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 32, panel.right - 28, top + 190),
-        L"볼륨 선택  손상 2종 + 특성 1개 + 전용 로스터\n배드 섹터  층 이동 시 무작위 면 영구 손상\n읽기 오류  경고 주사위가 실행 순간 재굴림\n조각화  같은 결과 중 뒤쪽 주사위 비활성화\n과잉 할당  용량 +60B, 적 체력 +30%\n체크섬  굴림 합이 짝수면 공격 +2", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 204, L"덱·보상·상주 프로그램", C_YELLOW, gFontMedium);
-    TextRect(dc, MakeRect(middle, top + 236, panel.right - 28, top + 350),
-        L"면과 상주 프로그램(TSR)의 비용 합이 층 한도를 넘으면 정리 화면에서 지워야 합니다. 일반 보상은 면 교체 또는 섹터 복구, 보스 전리품은 상주 프로그램입니다. KEYB는 판독 후 턴마다 한 번 주사위를 재굴림합니다.", C_TEXT, gFontSmall, DT_WORDBREAK);
-    Text(dc, middle, top + 364, L"조작", C_YELLOW, gFontMedium);
-    // 여섯 줄 뒤에 키보드 포커스 이동 한 줄을 더 둔다. 페이지 이동 버튼이
-    // y686부터라 680까지 쓸 수 있다.
-    TextRect(dc, MakeRect(middle, top + 396, panel.right - 28, top + 492),
-        L"R  섹터 판독 · 클릭 / 1·2·3  선택\n4  섹터 복구 · K  KEYB 재굴림\n스페이스  턴 실행 · 엔터  정리 확정\n취소  배치 해제 · 선택 해제 · 닫기\n←·→  가이드 페이지 이동\nF1 가이드 · F2 설정 · F3 보유 면", C_TEXT, gFontSmall, DT_WORDBREAK);
-    TextRect(dc, MakeRect(middle, top + 492, panel.right - 28, panel.bottom - 52),
-        L"Tab / Shift+Tab  전투·정리 항목 이동 · 엔터  선택", C_TEXT, gFontSmall, DT_WORDBREAK);
+static const wchar_t* const GUIDE_TAB_LABELS[GUIDE_PAGE_COUNT] = {
+    L"1  시작하기", L"2  슬롯과 면", L"3  적과 위험", L"4  덱·보상·조작", L"5  드라이브 정보"
+};
+
+// 단어 단위로 직접 접는 문단. DrawText의 줄바꿈은 글꼴 높이 그대로 줄을 붙이므로
+// 여기서 줄마다 lineHeight를 준다. 번역문이 들어오므로 폭은 그릴 때 잰다.
+// 다 쓴 다음 줄의 y를 돌려준다.
+static int GuideParagraph(HDC dc, int x, int y, int right, const wchar_t* text, COLORREF color, HFONT font, int lineHeight) {
+    const wchar_t* p = LocalizeText(text);
+    HFONT old = (HFONT)SelectObject(dc, font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color);
+    while (*p) {
+        const wchar_t* end = p;
+        const wchar_t* scan = p;
+        while (*scan && *scan != L'\n') {
+            const wchar_t* word = scan;
+            while (*word == L' ') ++word;
+            while (*word && *word != L' ' && *word != L'\n') ++word;
+            SIZE size; GetTextExtentPoint32W(dc, p, (int)(word - p), &size);
+            if (size.cx > right - x && end > p) break;
+            end = scan = word;
+        }
+        TextOutW(dc, x, y, p, (int)(end - p));
+        y += lineHeight;
+        p = end;
+        while (*p == L' ') ++p;
+        if (*p == L'\n') ++p;
+    }
+    SelectObject(dc, old);
+    return y;
+}
+
+static int GuideSection(HDC dc, int x, int y, int right, const wchar_t* title) {
+    Fill(dc, MakeRect(x, y + 3, x + 4, y + 23), C_YELLOW);
+    Text(dc, x + 14, y, title, C_YELLOW, gFontMedium);
+    Fill(dc, MakeRect(x, y + 32, right, y + 33), C_LINE);
+    return y + 44;
+}
+
+// 용어 칸과 설명 칸으로 나눈 한 항목.
+static int GuideRow(HDC dc, int x, int y, int termWidth, int right, const wchar_t* term, COLORREF termColor,
+                    const wchar_t* desc, COLORREF descColor = C_TEXT) {
+    Text(dc, x, y, term, termColor, gFontSmall);
+    return GuideParagraph(dc, x + termWidth, y, right, desc, descColor, gFontSmall, GUIDE_LINE) + 4;
+}
+
+static int GuideBullet(HDC dc, int x, int y, int right, const wchar_t* text) {
+    Fill(dc, MakeRect(x + 2, y + 7, x + 8, y + 13), C_GREEN);
+    return GuideParagraph(dc, x + 20, y, right, text, C_TEXT, gFontSmall, GUIDE_LINE) + 4;
+}
+
+// 자판 한 칸. 오른쪽 끝 다음 x를 돌려주므로 여러 개를 이어 그릴 수 있다.
+static int GuideKey(HDC dc, int x, int y, const wchar_t* key) {
+    RECT r = MakeRect(x, y - 2, x + TextWidth(dc, key, gFontSmall) + 16, y + 21);
+    Panel(dc, r, C_PANEL_2, C_LINE);
+    Fill(dc, MakeRect(r.left + 1, r.bottom - 3, r.right - 1, r.bottom - 1), C_LINE);
+    TextRect(dc, MakeRect(r.left, r.top, r.right, r.bottom - 2), key, C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    return r.right + 6;
+}
+
+// 번호 배지. 순서가 곧 의미인 목록(턴 진행 · 슬롯 해결 순서)에 쓴다.
+static void GuideBadge(HDC dc, int x, int y, int number, COLORREF color) {
+    RECT r = MakeRect(x, y, x + 26, y + 26);
+    Fill(dc, r, color);
+    wchar_t b[8]; wsprintfW(b, L"%d", number);
+    TextRect(dc, r, b, C_INK, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void DrawGuideBasicsPage(HDC dc) {
+    int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_RIGHT, L"목표");
+    y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_RIGHT,
+        L"볼륨(드라이브) 하나를 골라 3개 층을 내려가며 최종 보스를 삭제합니다. 체력이 0이 되면 이번 런은 끝납니다.",
+        C_TEXT, gFontSmall, GUIDE_LINE) + 8;
+
+    // 한 층의 흐름. 보스 앞에는 디렉터리 선택이 없다.
+    static const wchar_t* const flow[8] = {L"디렉터리", L"일반전", L"보상", L"디렉터리", L"일반전", L"보상", L"보스전", L"전리품"};
+    static const COLORREF flowColor[8] = {C_BLUE, C_TEXT, C_GREEN, C_BLUE, C_TEXT, C_GREEN, C_RED, C_YELLOW};
+    int x = GUIDE_LEFT;
+    Text(dc, x, y + 4, L"한 층의 흐름", C_DIM, gFontSmall);
+    x += TextWidth(dc, L"한 층의 흐름", gFontSmall) + 16;
+    for (int i = 0; i < 8; ++i) {
+        if (i) { Text(dc, x, y + 4, L"→", C_DIM, gFontSmall); x += TextWidth(dc, L"→", gFontSmall) + 8; }
+        RECT chip = MakeRect(x, y, x + TextWidth(dc, flow[i], gFontSmall) + 24, y + 26);
+        Panel(dc, chip, MixColor(C_PANEL, flowColor[i], 14), MixColor(C_LINE, flowColor[i], 50));
+        TextRect(dc, chip, flow[i], flowColor[i], gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        x = chip.right + 8;
+    }
+    Text(dc, x + 8, y + 4, L"× 3층", C_DIM, gFontSmall);
+
+    y = GuideSection(dc, GUIDE_LEFT, y + 44, GUIDE_RIGHT, L"한 턴 진행");
+    struct GuideStep { const wchar_t* title; const wchar_t* keys[4]; const wchar_t* body; };
+    static const GuideStep steps[5] = {
+        {L"판독", {L"R"}, L"섹터를 읽어 주사위 3개를 굴립니다. 매 턴 가장 먼저 누릅니다."},
+        {L"주사위 고르기", {L"클릭", L"1", L"2", L"3"}, L"놓을 주사위를 고릅니다. 노란 테두리가 선택 표시입니다."},
+        {L"슬롯에 놓기", {L"클릭"}, L"주사위마다 다른 슬롯에 놓습니다. 4칸 중 1칸은 비게 됩니다."},
+        {L"대상 고르기", {L"클릭"}, L"공격할 적 카드를 누릅니다. 카드에 ▶ 공격 대상이 붙습니다."},
+        {L"실행", {L"Space"}, L"슬롯 위의 예상 결과를 확인하고 턴을 실행합니다."}
+    };
+    int cardW = (GUIDE_RIGHT - GUIDE_LEFT - 4 * 12) / 5;
+    for (int i = 0; i < 5; ++i) {
+        int left = GUIDE_LEFT + i * (cardW + 12);
+        RECT card = MakeRect(left, y, left + cardW, y + 150);
+        Panel(dc, card, C_PANEL_2, C_LINE);
+        GuideBadge(dc, card.left + 12, card.top + 12, i + 1, C_GREEN);
+        Text(dc, card.left + 48, card.top + 14, steps[i].title, C_TEXT, gFontMedium);
+        int kx = card.left + 12;
+        for (int k = 0; k < 4 && steps[i].keys[k]; ++k) kx = GuideKey(dc, kx, card.top + 50, steps[i].keys[k]);
+        GuideParagraph(dc, card.left + 12, card.top + 82, card.right - 12, steps[i].body, C_TEXT, gFontSmall, 22);
+    }
+
+    y = GuideSection(dc, GUIDE_LEFT, y + 168, GUIDE_RIGHT, L"알아 두면 좋은 것");
+    y = GuideBullet(dc, GUIDE_LEFT, y, GUIDE_RIGHT, L"주사위를 놓으면 슬롯 위에 예상 결과가 먼저 뜹니다. 실행하기 전까지는 얼마든지 옮겨 볼 수 있습니다.");
+    y = GuideBullet(dc, GUIDE_LEFT, y, GUIDE_RIGHT, L"보스 기믹은 발동하기 전에 적 카드 · 슬롯 · 주사위에 먼저 예고됩니다.");
+    GuideBullet(dc, GUIDE_LEFT, y, GUIDE_RIGHT, L"전투에서 이겨도 체력은 저절로 회복되지 않습니다. 보상 화면의 섹터 복구를 챙기세요.");
+}
+
+static void DrawGuideSlotsPage(HDC dc) {
+    int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_COL_A, L"슬롯 — 이 순서로 실행됩니다");
+    static const int order[SLOT_COUNT] = {SLOT_AMPLIFY, SLOT_ATTACK, SLOT_DEFEND, SLOT_CHAIN};
+    static const wchar_t* const body[SLOT_COUNT] = {
+        L"뒤에 오는 공격 · 방어에 출력의 절반을 더합니다. 증폭 면이면 전부 더합니다.",
+        L"선택한 적에게 출력만큼 피해를 줍니다.",
+        L"이번 턴 적 공격을 막는 방어도를 얻습니다. 다음 턴이 시작되면 사라집니다.",
+        L"직전 공격을 일부 반복합니다. 공격이 없었다면 방어를 반복합니다."
+    };
+    for (int i = 0; i < SLOT_COUNT; ++i) {
+        int slot = order[i], rowTop = y;
+        GuideBadge(dc, GUIDE_LEFT, rowTop - 2, i + 1, SlotAccent(slot));
+        Text(dc, GUIDE_LEFT + 38, rowTop - 1, SLOT_NAMES[slot], SlotAccent(slot), gFontMedium);
+        int next = GuideParagraph(dc, GUIDE_LEFT + 138, rowTop, GUIDE_COL_A, body[i], C_TEXT, gFontSmall, GUIDE_LINE);
+        y = (next > rowTop + 28 ? next : rowTop + 28) + 8;
+    }
+    y = GuideSection(dc, GUIDE_LEFT, y + 8, GUIDE_COL_A, L"배치 규칙");
+    y = GuideBullet(dc, GUIDE_LEFT, y, GUIDE_COL_A, L"주사위 3개, 슬롯 4칸 — 한 칸은 항상 비어 있습니다.");
+    y = GuideBullet(dc, GUIDE_LEFT, y, GUIDE_COL_A, L"이미 찬 슬롯에 놓으면 먼저 있던 주사위가 빠집니다.");
+    y = GuideBullet(dc, GUIDE_LEFT, y, GUIDE_COL_A, L"슬롯 위의 → N 은 예상 산출량입니다. → 0 이면 효과가 없습니다.");
+    GuideBullet(dc, GUIDE_LEFT, y, GUIDE_COL_A, L"일부 보스는 예고한 턴에 이 순서를 거꾸로 뒤집습니다.");
+
+    int x = GUIDE_COL_B;
+    y = GuideSection(dc, x, GUIDE_TOP, GUIDE_RIGHT, L"면 8종 — 주사위 한 면에 하나씩");
+    Text(dc, x, y, L"면", C_DIM, gFontSmall);
+    Text(dc, x + 110, y, L"비용", C_DIM, gFontSmall);
+    Text(dc, x + 190, y, L"효과", C_DIM, gFontSmall);
+    y += 28;
+    static const wchar_t* const faceBody[FACE_KIND_COUNT] = {
+        L"값만큼 출력하고 값만큼 차지합니다",
+        L"공격 +4, 대상에게 화상 2회",
+        L"방어 슬롯에서 출력 2배",
+        L"공격 피해 일부를 체력으로 회복",
+        L"어느 슬롯에서도 높은 출력",
+        L"증폭 슬롯에서 보너스 2배",
+        L"연쇄 슬롯에서 직전 효과 100% 반복",
+        L"효과 없음"
+    };
+    for (int i = 0; i < FACE_KIND_COUNT; ++i) {
+        if (i & 1) Fill(dc, MakeRect(x - 8, y - 3, GUIDE_RIGHT + 8, y + 23), MixColor(C_PANEL, C_PANEL_2, 60));
+        Text(dc, x, y, FACE_INFO[i].name, i == FACE_EMPTY ? C_DIM : (COLORREF)FACE_INFO[i].color, gFontSmall);
+        wchar_t cost[16];
+        if (i == FACE_NUMBER) lstrcpyW(cost, L"= 값"); else wsprintfW(cost, L"%dB", FACE_INFO[i].cost);
+        Text(dc, x + 110, y, cost, C_TEXT, gFontSmall);
+        Text(dc, x + 190, y, faceBody[i], C_TEXT, gFontSmall);
+        y += 26;
+    }
+    y += 12;
+    y = GuideBullet(dc, x, y, GUIDE_RIGHT, L"강화 보상으로 받은 특수 면은 비용은 같고 출력만 +2 높습니다.");
+    y = GuideBullet(dc, x, y, GUIDE_RIGHT, L"손상된 면은 효과를 잃지만 비용은 그대로 차지합니다.");
+    GuideBullet(dc, x, y, GUIDE_RIGHT, L"보유한 면은 F3 에서 언제든 볼 수 있습니다.");
+}
+
+static void DrawGuideThreatsPage(HDC dc) {
+    int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_COL_A, L"적 카드 읽기");
+    y = GuideRow(dc, GUIDE_LEFT, y, 130, GUIDE_COL_A, L"의도", C_GREEN, L"적이 이번 턴에 할 행동입니다. 수치까지 카드에 미리 적혀 있습니다.");
+    y = GuideRow(dc, GUIDE_LEFT, y, 130, GUIDE_COL_A, L"오염(관통)", C_RED, L"방어도가 절반만 막습니다. 아래 난이도 배율이 붙습니다.");
+    y = GuideRow(dc, GUIDE_LEFT, y, 130, GUIDE_COL_A, L"화상", RGB(255, 139, 92), L"적이 행동하기 직전에 3 피해를 받습니다.");
+    y = GuideRow(dc, GUIDE_LEFT, y, 130, GUIDE_COL_A, L"몹 특성", C_YELLOW, L"전투 내내 적용되는 성질로 카드에 늘 적혀 있습니다. 굴린 눈의 홀짝 · 크기를 보는 것이 많습니다.");
+    y = GuideRow(dc, GUIDE_LEFT, y, 130, GUIDE_COL_A, L"보스 기믹", C_BLUE, L"발동하기 전에 먼저 예고됩니다. 오프라인 · 격리된 대상은 그 턴 출력이 0입니다.");
+
+    y = GuideSection(dc, GUIDE_LEFT, y + 8, GUIDE_COL_A, L"난이도 — 오염(관통) 피해 배율");
+    const DifficultyInfo* current = gGame.selectedDrive >= 0 ? DifficultyInfoOrNull(gGame.difficulty) : 0;
+    int cellW = (GUIDE_COL_A - GUIDE_LEFT - (DIFFICULTY_COUNT - 1) * 8) / DIFFICULTY_COUNT;
+    for (int i = 0; i < DIFFICULTY_COUNT; ++i) {
+        const DifficultyInfo* d = &DIFFICULTY_INFO[i];
+        COLORREF color = (COLORREF)d->color;
+        int left = GUIDE_LEFT + i * (cellW + 8), on = current == d;
+        RECT cell = MakeRect(left, y, left + cellW, y + 56);
+        Panel(dc, cell, on ? MixColor(C_PANEL_2, color, 20) : C_PANEL_2, on ? color : C_LINE);
+        TextRect(dc, MakeRect(cell.left, cell.top + 6, cell.right, cell.top + 26), d->name, color, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        wchar_t pct[16]; wsprintfW(pct, L"%d%%", d->corruptPercent);
+        TextRect(dc, MakeRect(cell.left, cell.top + 27, cell.right, cell.top + 47), pct, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        // 가장 높은 200%를 칸 폭으로 잰 막대.
+        Fill(dc, MakeRect(cell.left + 8, cell.bottom - 7, cell.left + 8 + (cellW - 16) * d->corruptPercent / 200, cell.bottom - 4), color);
+    }
+    GuideParagraph(dc, GUIDE_LEFT, y + 64, GUIDE_COL_A,
+        current ? L"테두리가 이번 런의 난이도입니다. 예고 수치에 이미 반영되어 있습니다." : L"적 카드의 예고 수치에 이미 반영되어 있습니다.",
+        C_DIM, gFontSmall, GUIDE_LINE);
+
+    int x = GUIDE_COL_B;
+    y = GuideSection(dc, x, GUIDE_TOP, GUIDE_RIGHT, L"디스크 손상 — 볼륨마다 2종");
+    const DriveInfo* drive = gGame.selectedDrive >= 0 && gGame.selectedDrive < DRIVE_COUNT ? &DRIVE_INFO[gGame.selectedDrive] : 0;
+    if (drive) {
+        wchar_t b[96]; wsprintfW(b, L"이번 런에 적용: %s + %s", MODIFIER_INFO[drive->modifierA].name, MODIFIER_INFO[drive->modifierB].name);
+        Text(dc, x, y, b, C_YELLOW, gFontSmall);
+        y += 30;
+    }
+    for (int i = 0; i < MODIFIER_COUNT; ++i) {
+        int lit = !drive || drive->modifierA == i || drive->modifierB == i;
+        y = GuideRow(dc, x, y, 130, GUIDE_RIGHT, MODIFIER_INFO[i].name, lit ? C_YELLOW : C_DIM,
+            MODIFIER_INFO[i].description, lit ? C_TEXT : C_DIM);
+    }
+    y = GuideSection(dc, x, y + 8, GUIDE_RIGHT, L"체력과 회복");
+    y = GuideBullet(dc, x, y, GUIDE_RIGHT, L"체력이 0이 되면 런이 끝납니다. 전투 승리만으로는 회복되지 않습니다.");
+    GuideBullet(dc, x, y, GUIDE_RIGHT, L"회복 수단: 섹터 복구 보상 · 흡수 면 · E:\\ 볼륨 특성 · UNDELETE");
+}
+
+static void DrawGuideDeckPage(HDC dc) {
+    int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_COL_A, L"용량 — 넘치면 진행할 수 없습니다");
+    y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_COL_A,
+        L"면과 상주 프로그램(TSR) 비용의 합이 층 한도를 넘으면, 정리 화면에서 면을 지우거나 TSR을 종료해야 다음으로 넘어갑니다.",
+        C_TEXT, gFontSmall, GUIDE_LINE) + 8;
+    int mounted = gGame.selectedDrive >= 0 && gGame.phase != PHASE_TITLE;
+    int cellW = (GUIDE_COL_A - GUIDE_LEFT - 2 * 8) / 3;
+    wchar_t b[96];
+    for (int f = 0; f < 3; ++f) {
+        int left = GUIDE_LEFT + f * (cellW + 8), on = mounted && gGame.floor == f;
+        RECT cell = MakeRect(left, y, left + cellW, y + 52);
+        Panel(dc, cell, on ? MixColor(C_PANEL_2, C_GREEN, 16) : C_PANEL_2, on ? C_GREEN : C_LINE);
+        wsprintfW(b, L"%d층 한도", f + 1);
+        Text(dc, cell.left + 12, cell.top + 8, b, on ? C_GREEN : C_DIM, gFontSmall);
+        wsprintfW(b, L"%dB", FLOOR_CAPACITY[f]);
+        TextRect(dc, MakeRect(cell.left, cell.top + 5, cell.right - 12, cell.top + 30), b, C_TEXT, gFontMedium, DT_RIGHT | DT_SINGLELINE);
+        Fill(dc, MakeRect(cell.left + 12, cell.bottom - 12, cell.left + 12 + (cellW - 24) * FLOOR_CAPACITY[f] / FLOOR_CAPACITY[0], cell.bottom - 8),
+            on ? C_GREEN : C_LINE);
+    }
+    y += 60;
+    y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_COL_A, L"층을 내려갈수록 한도가 줄어듭니다.", C_DIM, gFontSmall, GUIDE_LINE);
+    if (mounted) {
+        int over = UsedBytes(&gGame) > EffectiveCapacity(&gGame);
+        wsprintfW(b, L"지금 %dB / %dB 사용 중", UsedBytes(&gGame), EffectiveCapacity(&gGame));
+        y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_COL_A, b, over ? C_RED : C_GREEN, gFontSmall, GUIDE_LINE);
+    }
+
+    y = GuideSection(dc, GUIDE_LEFT, y + 12, GUIDE_COL_A, L"보상 종류");
+    y = GuideRow(dc, GUIDE_LEFT, y, 120, GUIDE_COL_A, L"일반전 승리", C_GREEN, L"면 후보 3개 중 하나로 기존 면을 교체하거나, 섹터 복구로 체력을 회복합니다.");
+    y = GuideRow(dc, GUIDE_LEFT, y, 120, GUIDE_COL_A, L"보스 처치", C_RED, L"상주 프로그램(TSR) 3개 중 하나를 설치합니다. 면을 바꾸지 않고 용량만 차지합니다.");
+    GuideRow(dc, GUIDE_LEFT, y, 120, GUIDE_COL_A, L"건너뛰기", C_DIM, L"고른 카드가 없을 때 Esc 를 두 번 누르면 보상을 포기합니다.");
+
+    int x = GUIDE_COL_B;
+    y = GuideSection(dc, x, GUIDE_TOP, GUIDE_RIGHT, L"조작");
+    struct GuideBinding { const wchar_t* keys[4]; const wchar_t* what; };
+    static const GuideBinding bindings[] = {
+        {{L"R"}, L"섹터 판독 — 매 턴 첫 입력"},
+        {{L"클릭", L"1", L"2", L"3"}, L"주사위 선택 · 보상 카드 선택"},
+        {{L"4"}, L"보상 화면에서 섹터 복구"},
+        {{L"K"}, L"KEYB 재굴림 (상주 프로그램 설치 시)"},
+        {{L"Space"}, L"턴 실행"},
+        {{L"Esc"}, L"배치 해제 · 선택 취소 · 창 닫기"},
+        {{L"Enter"}, L"정리 확정 · 포커스된 항목 선택"},
+        {{L"Tab"}, L"전투 · 정리 화면에서 항목 이동 (Shift+Tab 은 반대로)"},
+        {{L"F1", L"F2", L"F3"}, L"가이드 · 설정 · 보유 면"},
+        {{L"←", L"→", L"1~5"}, L"가이드 안에서 페이지 이동"}
+    };
+    for (int i = 0; i < (int)(sizeof(bindings) / sizeof(bindings[0])); ++i) {
+        int kx = x;
+        for (int k = 0; k < 4 && bindings[i].keys[k]; ++k) kx = GuideKey(dc, kx, y + 2, bindings[i].keys[k]);
+        int next = GuideParagraph(dc, x + 170, y + 2, GUIDE_RIGHT, bindings[i].what, C_TEXT, gFontSmall, GUIDE_LINE);
+        y = (next > y + 32 ? next : y + 32) + 2;
+    }
 }
 
 int GuideNoiseActive() {
-    if (!gGuideOpen || gGuidePage != 1) return 0;
+    if (!gGuideOpen || gGuidePage != GUIDE_PAGE_DRIVE) return 0;
     if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) return 0;
     for (int i = 0; i < DRIVE_MOB_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_MOBS[gGame.selectedDrive][i])) return 1;
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) if (!IsEnemyScanned(&gGame, DRIVE_BOSSES[gGame.selectedDrive][i])) return 1;
     return 0;
 }
 
-static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
-    int left = panel.left + 30, middle = width / 2 + 12, top = panel.top + 76;
+static void DrawGuideDrivePage(HDC dc, const RECT& panel) {
+    int left = GUIDE_LEFT, middle = GUIDE_COL_B, top = GUIDE_TOP - 4;
     if (gGame.selectedDrive < 0 || gGame.selectedDrive >= DRIVE_COUNT) {
-        Text(dc, left, top, L"드라이브별 적·보스", C_YELLOW, gFontMedium);
-        TextRect(dc, MakeRect(left, top + 32, panel.right - 28, panel.bottom - 88),
-            L"볼륨을 마운트하면 이 페이지에 해당 드라이브의 일반 몹 3종과 층별 보스 3종, 그리고 보스 기믹의 예고·대응법이 표시됩니다.\n\n"
-            L"C:\\ SYSTEM  슬롯 권한 잠금과 시스템 정지\nD:\\ ARCHIVE  피해 목표 미달 시 복원·되감기\nE:\\ REMOVABLE  예고된 주사위 연결 끊김\nN:\\ NETWORK  슬롯 해결 순서 역전\nR:\\ RAMDISK  메모리 압력 게이지와 강화 공격\nX:\\ QUARANTINE  면 격리, 최종 보스는 영구 삭제",
-            C_TEXT, gFontSmall, DT_WORDBREAK);
+        int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_RIGHT, L"드라이브별 적 · 보스");
+        y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_RIGHT,
+            L"볼륨을 마운트하면 이 쪽에 그 드라이브의 일반 몹 3종과 층별 보스 3종이 나옵니다. 처치한 개체부터 정보가 열립니다.",
+            C_TEXT, gFontSmall, GUIDE_LINE) + 12;
+        // A:\는 여섯 조각을 모두 모아야 열리는 최종 볼륨이라 여기 싣지 않는다.
+        static const wchar_t* const family[6] = {
+            L"슬롯 권한 잠금과 시스템 정지", L"피해 목표 미달 시 복원 · 되감기", L"예고된 주사위 연결 끊김",
+            L"슬롯 해결 순서 역전", L"메모리 압력 게이지와 강화 공격", L"면 격리, 최종 보스는 영구 삭제"
+        };
+        for (int i = 0; i < 6; ++i) {
+            wchar_t name[48]; wsprintfW(name, L"%s %s", DRIVE_INFO[i].letter, DRIVE_INFO[i].label);
+            y = GuideRow(dc, GUIDE_LEFT, y, 190, GUIDE_RIGHT, name, (COLORREF)DRIVE_INFO[i].color, family[i]) + 4;
+        }
         return;
     }
     const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive];
@@ -3860,8 +4123,10 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
             DrawHexBlock(dc, MakeRect(left, y + 26, middle - 28, y + 64), C_LINE, mobs[i], tick, 2);
         }
     }
-    TextRect(dc, MakeRect(left, top + 276, middle - 28, panel.bottom - 88),
-        DRIVE_LAW_INFO[gGame.selectedDrive].description, C_GREEN, gFontSmall, DT_WORDBREAK);
+    // 볼륨 법칙은 판독과 무관하게 늘 보인다. 매 전투에 걸리는 규칙이기 때문이다.
+    int lawY = GuideSection(dc, left, top + 272, middle - 28, L"볼륨 법칙 — 매 전투에 적용");
+    Text(dc, left, lawY, DRIVE_LAW_INFO[gGame.selectedDrive].name, C_GREEN, gFontMedium);
+    GuideParagraph(dc, left, lawY + 30, middle - 28, DRIVE_LAW_INFO[gGame.selectedDrive].description, C_TEXT, gFontSmall, GUIDE_LINE);
 
     Text(dc, middle, top + 40, L"층별 보스와 기믹", C_YELLOW, gFontSmall);
     for (int i = 0; i < DRIVE_BOSS_COUNT; ++i) {
@@ -3891,20 +4156,37 @@ static void DrawGuideDrivePage(HDC dc, int width, const RECT& panel) {
 static void DrawGuide(HDC dc, int width, int height) {
     RECT shade = MakeRect(0, 68, width, height); Fill(dc, shade, RGB(6, 9, 13));
     RECT panel = MakeRect(54, 82, width - 54, height - 28); Panel(dc, panel, C_PANEL, C_GREEN);
-    Text(dc, panel.left + 28, panel.top + 18, gGuidePage == 0 ? L"시스템 가이드 1/2" : L"드라이브 정보 2/2", C_GREEN, gFontLarge);
-    Text(dc, panel.left + 330, panel.top + 28, L"←·→ 키 또는 버튼으로 페이지 이동", C_DIM, gFontSmall);
-    RECT close = GuideCloseRect(width); Panel(dc, close, C_PANEL_2, C_LINE);
+    Text(dc, panel.left + 28, panel.top + 18, L"시스템 가이드", C_GREEN, gFontLarge);
+    RECT close = GuideCloseRect(width); int hoverClose = Inside(close, gMouse.x, gMouse.y);
+    Panel(dc, close, hoverClose ? RGB(28, 39, 48) : C_PANEL_2, hoverClose ? C_BLUE : C_LINE);
     TextRect(dc, close, L"닫기", C_TEXT, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    if (gGuidePage == 0) DrawGuideCommonPage(dc, width, panel);
-    else DrawGuideDrivePage(dc, width, panel);
+    // 쪽 번호 대신 탭. 무엇이 어느 쪽에 있는지 열자마자 보이고 바로 건너갈 수 있다.
+    for (int i = 0; i < GUIDE_PAGE_COUNT; ++i) {
+        RECT tab = GuideTabRect(i);
+        int on = i == gGuidePage, hover = !on && Inside(tab, gMouse.x, gMouse.y);
+        Panel(dc, tab, on ? MixColor(C_PANEL_2, C_GREEN, 18) : hover ? RGB(28, 39, 48) : C_PANEL_2, on ? C_GREEN : hover ? C_BLUE : C_LINE);
+        // 영어 탭 이름에 &가 들어간다. DrawText가 이를 밑줄 접두사로 먹지 않게 한다.
+        TextRect(dc, tab, GUIDE_TAB_LABELS[i], on ? C_GREEN : hover ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
 
-    RECT prev = GuidePrevRect(width, height); int hoverPrev = Inside(prev, gMouse.x, gMouse.y);
+    switch (gGuidePage) {
+    case 0: DrawGuideBasicsPage(dc); break;
+    case 1: DrawGuideSlotsPage(dc); break;
+    case 2: DrawGuideThreatsPage(dc); break;
+    case 3: DrawGuideDeckPage(dc); break;
+    default: DrawGuideDrivePage(dc, panel); break;
+    }
+
+    int canPrev = gGuidePage > 0, canNext = gGuidePage < GUIDE_PAGE_COUNT - 1;
+    RECT prev = GuidePrevRect(width, height); int hoverPrev = canPrev && Inside(prev, gMouse.x, gMouse.y);
     Panel(dc, prev, hoverPrev ? RGB(28, 39, 48) : C_PANEL_2, hoverPrev ? C_BLUE : C_LINE);
-    TextRect(dc, prev, L"◀ 이전 페이지", gGuidePage > 0 ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    RECT next = GuideNextRect(width, height); int hoverNext = Inside(next, gMouse.x, gMouse.y);
+    TextRect(dc, prev, L"◀ 이전 페이지", canPrev ? C_TEXT : C_LINE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT next = GuideNextRect(width, height); int hoverNext = canNext && Inside(next, gMouse.x, gMouse.y);
     Panel(dc, next, hoverNext ? RGB(28, 39, 48) : C_PANEL_2, hoverNext ? C_BLUE : C_LINE);
-    TextRect(dc, next, L"다음 페이지 ▶", gGuidePage < 1 ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, next, L"다음 페이지 ▶", canNext ? C_TEXT : C_LINE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(prev.right + 16, prev.top, next.left - 16, prev.bottom), L"←·→ 또는 1~5 키로 페이지 이동  ·  F1 / Esc 로 닫기",
+        C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 // ---------------------------------------------------------------------------
