@@ -833,6 +833,24 @@ static int gIdleActive;
 static int gBossIntroFloor = -1, gBossIntroDrive = -1;
 static int gSceneKey = -1;
 static DWORD gSceneStart;
+// 이번 도착이 화면 자체가 바뀐 것인지(1), 같은 화면에서 쪽만 넘긴 것인지(0).
+// 장면이 바뀌는 프레임에 한 번 정해 두고 도착 연출이 읽기만 한다 - 프레임마다
+// 다시 재면 기록 한 쪽을 넘길 때와 화면이 바뀔 때를 구분할 수 없다.
+static int gSceneMajor = 1;
+static int gScenePhase = -1;
+int SceneArrivalMajor() { return gSceneMajor; }
+
+// 타이틀이 서는 동안의 소리. 화면은 이제 전원이 들어와 섹터가 타 들어가고 제목이
+// 앉는 순서로 조립되는데, 소리가 없으면 그 순서가 "느리게 그려지는 중"으로만
+// 읽힌다. 삽입·보스 연출과 같은 표를 쓰되 전용 타이머는 두지 않는다 - 타이틀에는
+// 이미 33ms 유휴 타이머가 돌고 있어서, 매 프레임 지나간 구간을 확인하면 된다.
+static const struct TitleCue { int at; int sfx; int pitch; } TITLE_CUES[] = {
+    // 내림 피치는 없다 (RenderSfx가 0~7로 물린다). 전원 소리는 원음 그대로 쓴다.
+    { 0,                    SFX_READ_START, 0 },   // 전원이 들어오고 헤드가 돈다
+    { TITLE_LOGO_AT + 330,  SFX_DIE_LOCK,   0 },   // 제목이 판에 앉는다
+    { TITLE_START_AT + 260, SFX_UI_FOCUS,   2 },   // 버튼이 열린다
+};
+static int gTitleCue;
 static int VisibleSceneKey() {
     int phase = (gTurnTraceActive || gDeathActive || gCombatClearActive) ? PHASE_COMBAT : gGame.phase;
     return phase + 16 * (gGame.floor + 4 * gGame.encounter)
@@ -850,7 +868,14 @@ void SyncIdleAnimation() {
     // Count from the first visible frame, not while descent/install covers it.
     if (gDescentActive || gDirEnterActive || gBootActive || gBossIntroActive || UiFxSnapshotActive()) gSceneKey = -1;
     else if (key != gSceneKey) {
+        gSceneMajor = gGame.phase != gScenePhase;
+        gScenePhase = gGame.phase;
         gSceneKey = key; gSceneStart = GetTickCount();
+        // 장식을 끄면 화면이 첫 프레임에 다 서 있다. 그때 구간 소리를 차례로
+        // 내면 아무것도 움직이지 않는 화면에서 소리만 세 번 나므로, 마지막
+        // 하나로 대신한다.
+        gTitleCue = gGame.phase == PHASE_TITLE && FxDecorOn()
+            ? 0 : (int)(sizeof(TITLE_CUES) / sizeof(TITLE_CUES[0])) - 1;
         if (gWindow && !gTurnTraceActive && !gCombatClearActive && !gDeathActive) {
             if (gGame.phase == PHASE_COMBAT && gGame.encounter == 2
                 && !(gBossIntroFloor == gGame.floor && gBossIntroDrive == gGame.selectedDrive)) {
@@ -858,6 +883,15 @@ void SyncIdleAnimation() {
                 BeginBossIntro();
             }
             else if (gGame.phase == PHASE_REWARD) PlaySfx(SFX_LOOT_REVEAL);
+        }
+    }
+    // 타이틀 진입 소리. 판을 바꾸지 않으므로 어느 프레임에서 확인해도 안전하다.
+    if (gWindow && gGame.phase == PHASE_TITLE && gSceneKey >= 0) {
+        int cueCount = (int)(sizeof(TITLE_CUES) / sizeof(TITLE_CUES[0]));
+        int elapsed = SceneElapsed();
+        while (gTitleCue < cueCount && elapsed >= TITLE_CUES[gTitleCue].at) {
+            PlaySfxPitched(TITLE_CUES[gTitleCue].sfx, TITLE_CUES[gTitleCue].pitch);
+            ++gTitleCue;
         }
     }
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는

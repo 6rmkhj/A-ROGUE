@@ -169,10 +169,46 @@ inline void DrawTitleDisk(HDC dc, int x, int y, int back, COLORREF tone) {
     RestoreDC(dc, saved);
 }
 
-inline void DrawSceneArrival(HDC dc, COLORREF tone) {
+// 장면 도착. 화면 하나가 다음 화면으로 바뀌는 자리를 여기 한 곳에서 잇는다.
+// PaintGame이 모든 화면 위에 같은 값으로 얹으므로 각 화면은 이 연출을 모른다 -
+// 삽입 연출처럼 앞 연출이 밝게 끝나는 자리도 여기가 받아 내려놓는다.
+//
+// major는 화면 자체가 바뀐 도착이고(타이틀 → 기록 → 볼륨 → 전투), minor는 같은
+// 화면 안에서 쪽만 넘긴 도착이다. 기록 한 쪽을 넘길 때마다 브라운관이 다시
+// 열리면 읽는 흐름이 끊기므로, 여는 동작은 major에서만 한다.
+#define SCENE_ARRIVE_OPEN_MS 200
+#define SCENE_ARRIVE_MS      520
+
+inline void DrawSceneArrival(HDC dc, COLORREF tone, int major = 1) {
     int t = SceneElapsed();
-    if (!FxDecorOn() || t < 0 || t >= 520) return;
-    int p = EaseOutCubic(Track(t, 0, 420)), fade = 1000 - Track(t, 160, 520);
+    if (!FxDecorOn() || t < 0 || t >= SCENE_ARRIVE_MS) return;
+    int stageTop = 68, cy = (stageTop + BASE_HEIGHT) / 2, half = (BASE_HEIGHT - stageTop) / 2;
+    // 브라운관이 켜진다. 가운데 한 줄에서 위아래로 벌어지고 바깥은 잉크로 덮여
+    // 있다. 뒤의 판은 그동안에도 계속 그려져 있으므로 다 열린 순간 이어 붙는
+    // 자리가 없다 - 열리는 것은 덮개뿐이다.
+    int open = major ? EaseOutCubic(Track(t, 0, SCENE_ARRIVE_OPEN_MS)) : 1000;
+    if (open < 1000) {
+        int gap = half * open / 1000;
+        // 덮개는 처음 한순간 아직 달아올라 있다. 삽입 연출이 캔버스를 하얗게
+        // 삼키며 끝나는데 다음 판이 곧장 잉크로 시작하면 그 사이가 흰색에서
+        // 검은색으로 한 프레임에 튀어, 가장 큰 사건 바로 뒤에 깜빡임이 남는다.
+        COLORREF veil = MixColor(C_INK, C_TEXT, FxScale(26 * (1000 - Track(t, 0, 140)) / 1000));
+        Fill(dc, MakeRect(0, stageTop, BASE_WIDTH, cy - gap), veil);
+        Fill(dc, MakeRect(0, cy + gap, BASE_WIDTH, BASE_HEIGHT), veil);
+        COLORREF lip = MixColor(C_INK, tone, FxScale(42 + 58 * (1000 - open) / 1000));
+        Fill(dc, MakeRect(0, cy - gap - 2, BASE_WIDTH, cy - gap), lip);
+        Fill(dc, MakeRect(0, cy + gap, BASE_WIDTH, cy + gap + 2), lip);
+    }
+    // 켜지는 순간의 번짐. 주사선 사이로만 밝히므로 판이 계속 보인다 - 통째로
+    // 덮으면 이 채우기에는 알파가 없어 아무리 옅게 섞어도 판이 사라진다.
+    int bloom = 1000 - Track(t, 0, major ? 300 : 150);
+    if (bloom > 0) {
+        COLORREF surge = MixColor(C_BG, C_TEXT, FxScale((major ? 44 : 18) * bloom / 1000));
+        for (int y = stageTop + ((t / 40) & 1); y < BASE_HEIGHT; y += 3)
+            Fill(dc, MakeRect(0, y, BASE_WIDTH, y + 1), surge);
+    }
+    // 머리띠를 훑고 지나가는 판독 헤드.
+    int p = EaseOutCubic(Track(t, 0, 420)), fade = 1000 - Track(t, 160, SCENE_ARRIVE_MS);
     int head = Lerp(24, BASE_WIDTH - 24, p);
     DrawLine(dc, head - 18, 71, head, 71, MixColor(C_BG, tone, FxScale(50 * fade / 1000)), 1);
 }

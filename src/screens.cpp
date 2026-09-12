@@ -342,25 +342,142 @@ static void DrawHeader(HDC dc, int width) {
 }
 
 RECT StartButtonRect(int width, int height) { return MakeRect(width / 2 - 150, height / 2 + 92, width / 2 + 150, height / 2 + 154); }
+
+// ---------------------------------------------------------------------------
+// 타이틀 — 차가운 부팅
+//
+// 사람이 이 게임에서 가장 먼저 보는 판이다. 예전에는 모든 글자가 첫 프레임에
+// 제 색으로 서 있었고 0.7초 뒤에는 완전히 멈춘 그림이 됐다. 이제는 전원이
+// 들어와 18개 섹터가 차례로 타 들어가고, 그 불이 지나간 자리에서 서명 → 제목
+// → 안내 → 버튼 → 진행도가 차례로 드러난다. 다 선 뒤에도 헤드는 판을 계속 읽는다.
+//
+// 드러나는 방식은 전부 "덮개를 걷는 것"이다. 글자는 처음부터 제자리에 제 색으로
+// 그려져 있고 그 위의 잉크만 물러난다. 글자 색을 시간에 따라 옅게 섞는 방법도
+// 있지만, 그러면 진입 코드가 그리기 코드 전체에 스며들고 FX_OFF에서 갈라진다.
+// 덮개는 FxDecorOn()이 아니면 아예 그리지 않으므로 OFF가 곧 완성된 화면이 된다 —
+// 이 화면에서 진입을 아는 코드는 맨 아래 마스크 호출 몇 줄뿐이다.
+// ---------------------------------------------------------------------------
+// 덮개 한 장. 가운데에서 위아래로 걷힌다. at 이전에는 완전히 덮고, at+span
+// 이후에는 아무것도 그리지 않는다 (다 걷힌 뒤에는 비용도 0이다).
+static void DrawRevealMask(HDC dc, const RECT& r, int at, int span, COLORREF tone) {
+    if (!FxDecorOn()) return;
+    int t = SceneElapsed();
+    if (t >= at + span) return;
+    int open = t <= at ? 0 : EaseOutCubic(Track(t, at, at + span));
+    int half = (r.bottom - r.top + 1) / 2, cover = half - half * open / 1000;
+    if (cover <= 0) return;
+    Fill(dc, MakeRect(r.left, r.top, r.right, r.top + cover), C_BG);
+    Fill(dc, MakeRect(r.left, r.bottom - cover, r.right, r.bottom), C_BG);
+    // 문틀은 실제로 걷히기 시작한 뒤에만 그린다. 다 닫혀 있는 동안에는 두 문틀이
+    // 한가운데서 겹쳐 배경 위에 가로줄 하나로 남는데, 덮을 몸통이 아직 안 보이는
+    // 자리에서는 그것이 셔터가 아니라 떠 있는 선으로 읽힌다.
+    if (open <= 0) return;
+    COLORREF lip = MixColor(C_BG, tone, FxScale(55));
+    Fill(dc, MakeRect(r.left, r.top + cover - 2, r.right, r.top + cover), lip);
+    Fill(dc, MakeRect(r.left, r.bottom - cover, r.right, r.bottom - cover + 2), lip);
+}
+
+// 글자 한 줄이 찍히는 동작. 남은 덮개가 왼쪽에서 오른쪽으로 물러나고 그 경계에
+// 헤드가 선다. 빈 배경이 넓은 줄에는 위아래 셔터가 맞지 않는다 — 셔터는 가릴
+// 몸통이 있어야 셔터로 보이고, 없으면 가로줄 두 개가 떠 있는 것으로 읽힌다.
+static void DrawWipeMask(HDC dc, const RECT& r, int at, int span, COLORREF tone) {
+    if (!FxDecorOn()) return;
+    int t = SceneElapsed();
+    if (t >= at + span) return;
+    int open = t <= at ? 0 : EaseOutCubic(Track(t, at, at + span));
+    int head = Lerp(r.left, r.right, open);
+    Fill(dc, MakeRect(head, r.top, r.right, r.bottom), C_BG);
+    if (open > 0)
+        Fill(dc, MakeRect(head, r.top + 2, head + 3, r.bottom - 2), MixColor(C_BG, tone, FxScale(72)));
+}
+
 static void DrawTitle(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_TITLE, C_GREEN, width, height);
-    int cx = width / 2;
+    int cx = width / 2, scene = SceneElapsed();
     // The title is a boot signature burning into an eighteen-sector disk.
+    // 윗줄은 왼쪽부터, 아랫줄은 오른쪽부터 켜진다 — 판의 양면을 함께 훑는다.
     for (int i = 0; i < 18; ++i) {
         int x = cx - 315 + i * 35;
-        int age = SceneElapsed() - i * 28;
+        int age = scene - i * 28;
         int power = !FxDecorOn() ? 40 : age < 0 ? 8 : age < 180 ? 88 : 40;
-        Fill(dc, MakeRect(x, 164, x + 27, 168), MixColor(C_BG, i < 6 ? C_GREEN : i < 12 ? C_BLUE : C_YELLOW, power));
-        Fill(dc, MakeRect(x, 426, x + 27, 428), MixColor(C_BG, C_GREEN, 18));
+        COLORREF band = i < 6 ? C_GREEN : i < 12 ? C_BLUE : C_YELLOW;
+        Fill(dc, MakeRect(x, 164, x + 27, 168), MixColor(C_BG, band, power));
+        int backAge = scene - (17 - i) * 28;
+        int back = !FxDecorOn() ? 18 : backAge < 0 ? 5 : backAge < 200 ? 52 : 18;
+        Fill(dc, MakeRect(x, 426, x + 27, 428), MixColor(C_BG, C_GREEN, back));
+        // 불이 막 닿은 칸에서만 위로 한 번 튄다.
+        if (FxDecorOn() && age >= 0 && age < 130)
+            Fill(dc, MakeRect(x + 12, 164 - 9 * (130 - age) / 130, x + 16, 168),
+                MixColor(C_BG, band, FxScale(72 * (130 - age) / 130)));
     }
-    TextRect(dc, MakeRect(0, 187, width, 212), L"RECOVERY SYSTEM  /  1.44 MB  /  BUILD 17",
-        C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 다 선 뒤에는 헤드가 아래 열을 천천히 오간다. 타이틀이 멈춘 그림이 되지 않는다.
+    if (FxDecorOn() && scene >= TITLE_SETTLE_AT) {
+        int tick = (int)(GetTickCount() % 6200u);
+        int sweep = tick < 3100 ? EaseOutCubic(Track(tick, 0, 2600))
+                                : 1000 - EaseOutCubic(Track(tick, 3100, 5700));
+        int hx = Lerp(cx - 315, cx + 312, sweep);
+        Fill(dc, MakeRect(hx - 2, 422, hx + 3, 432), MixColor(C_BG, C_GREEN, FxScale(62)));
+        Fill(dc, MakeRect(hx - 1, 432, hx + 2, 440), MixColor(C_BG, C_GREEN, FxScale(20)));
+    }
+
+    const wchar_t* sign = L"RECOVERY SYSTEM  /  1.44 MB  /  BUILD 17";
+    TextRect(dc, MakeRect(0, 187, width, 212), sign, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 커서는 서명 오른쪽에 따로 찍는다. 문자열에 붙이면 가운데 정렬이라 깜빡일
+    // 때마다 줄 전체가 좌우로 흔들린다.
+    if (FxDecorOn() && scene >= TITLE_SIGN_AT + 220 && ((GetTickCount() / 520) & 1)) {
+        int signW = TextWidth(dc, sign, gFontSmall);
+        Fill(dc, MakeRect(cx + signW / 2 + 8, 192, cx + signW / 2 + 16, 206),
+            MixColor(C_BG, C_GREEN, FxScale(58)));
+    }
+
     RECT logo = MakeRect(0, 215, width, 327);
-    int fall = FxDecorOn() ? (1000 - EaseOutCubic(Track(SceneElapsed(), 80, 600))) * 18 / 1000 : 0;
-    OffsetRect(&logo, 0, -fall);
+    // 제목은 떨어지지 않는다. 판에서 밀려 올라와 제자리를 한 번 지나쳤다 앉는다.
+    int land = FxDecorOn() ? EaseOutBack(Track(scene, TITLE_LOGO_AT, TITLE_LOGO_AT + 470)) : 1000;
+    OffsetRect(&logo, 0, (1000 - land) * 30 / 1000);
     RECT extrusion = logo; OffsetRect(&extrusion, 3, 5);
     TextRect(dc, extrusion, L"A:\\ROGUE", RGB(17, 73, 65), gFontTitle, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     TextRect(dc, logo, L"A:\\ROGUE", C_GREEN, gFontTitle, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    int logoW = TextWidth(dc, L"A:\\ROGUE", gFontTitle);
+    RECT glyphs = MakeRect(cx - logoW / 2 - 10, logo.top, cx + logoW / 2 + 10, logo.bottom);
+    // 올라오는 동안에는 판독이 아직 끝나지 않아 가로 띠로 어긋난다.
+    int tear = scene < TITLE_LOGO_AT ? 0 : 1000 - Track(scene, TITLE_LOGO_AT, TITLE_LOGO_AT + 260);
+    if (FxDecorOn() && tear > 0) {
+        int amp = FxScale(1 + 22 * tear / 1000);
+        for (int i = 0; i < 5; ++i) {
+            int top = logo.top + (logo.bottom - logo.top) * i / 5;
+            int bottom = logo.top + (logo.bottom - logo.top) * (i + 1) / 5;
+            int dx = (int)(Hash3(i, scene / 45, 17) % (uint32_t)(amp * 2 + 1)) - amp;
+            int saved = SaveDC(dc);
+            IntersectClipRect(dc, glyphs.left - 80, top, glyphs.right + 80, bottom);
+            Fill(dc, MakeRect(glyphs.left - 80, top, glyphs.right + 80, bottom), C_BG);
+            RECT slid = logo; OffsetRect(&slid, dx, 0);
+            TextRect(dc, slid, L"A:\\ROGUE", MixColor(C_BG, C_GREEN, 100 - 28 * tear / 1000),
+                gFontTitle, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            RestoreDC(dc, saved);
+        }
+    }
+    // 앉는 순간의 충격. 고리가 한 번 퍼지고 테두리가 짧게 겹친다.
+    int seat = scene - (TITLE_LOGO_AT + 330);
+    if (FxDecorOn() && seat >= 0 && seat < 300) {
+        int p = seat * 1000 / 300;
+        DrawPulseFrame(dc, glyphs, FxScale(3 + seat / 16), 3,
+            MixColor(C_BG, C_GREEN, FxScale(52 * (1000 - p) / 1000)));
+        DrawPixelBurst(dc, glyphs.left + 6, (logo.top + logo.bottom) / 2, seat, 300, FxScale(9), 41, C_GREEN);
+        DrawPixelBurst(dc, glyphs.right - 6, (logo.top + logo.bottom) / 2, seat, 300, FxScale(9), 77, C_GREEN);
+    }
+    // 다 선 뒤에도 5.4초마다 제목 위를 빛이 한 번 지나간다.
+    if (FxDecorOn() && scene >= TITLE_SETTLE_AT) {
+        int tick = (int)(GetTickCount() % 5400u);
+        if (tick < 820) {
+            int x = Lerp(glyphs.left - 60, glyphs.right + 60, EaseOutCubic(tick * 1000 / 820));
+            int saved = SaveDC(dc);
+            IntersectClipRect(dc, x - 26, glyphs.top, x + 26, glyphs.bottom);
+            TextRect(dc, logo, L"A:\\ROGUE", MixColor(C_GREEN, RGB(228, 255, 245), FxScale(78)),
+                gFontTitle, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            RestoreDC(dc, saved);
+        }
+    }
+
     TextRect(dc, MakeRect(120, 342, width - 120, 416),
         L"18개의 주사위 면이 당신의 덱이자 디스크입니다.\n강한 면은 더 많은 바이트를 차지합니다.\n층이 내려갈수록 줄어드는 용량 안에서 시스템을 복구하십시오.",
         C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
@@ -370,6 +487,14 @@ static void DrawTitle(HDC dc, int width, int height) {
     // 진행도가 있으면 "새 게임"이 아니라 남은 볼륨을 이어서 고르는 것이다.
     int resuming = gGame.clearedMask != 0;
     TextRect(dc, start, resuming ? L"[ 이어하기 ]" : L"[ 새 게임 ]", C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // 버튼이 다 열린 뒤에는 테두리가 천천히 숨을 쉰다. 가만히 있는 화면에서도
+    // 누를 곳이 어디인지가 계속 눈에 들어온다.
+    if (FxDecorOn() && scene >= TITLE_START_AT + 260 && !hover) {
+        int pulse = (int)(GetTickCount() % 2600u);
+        int glow = pulse < 1300 ? pulse * 1000 / 1300 : (2600 - pulse) * 1000 / 1300;
+        Outline(dc, MakeRect(start.left - 4, start.top - 4, start.right + 4, start.bottom + 4),
+            MixColor(C_BG, C_GREEN, FxScale(10 + glow * 26 / 1000)), 1);
+    }
 
     int stripW = ShardStripWidth(0);
     wchar_t progress[96];
@@ -388,6 +513,27 @@ static void DrawTitle(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(150, height - 105, width - 150, height - 25),
         L"1·2·3 주사위 선택 / 슬롯 클릭 배치 / Space 실행 / 보상 Esc: 선택 취소 · 선택 없음에서 두 번 눌러 포기",
         C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+
+    // 여기까지가 완성된 화면이다. 아래 덮개가 그 위를 걷어 내며 순서를 만든다.
+    // 덮개는 화면 가장자리의 섹터 눈금(x=42, width-42)에 닿지 않는 폭으로 둔다.
+    DrawWipeMask(dc, MakeRect(cx - 380, 184, cx + 380, 213), TITLE_SIGN_AT, 260, C_GREEN);
+    DrawRevealMask(dc, MakeRect(cx - 430, 210, cx + 430, 362), TITLE_LOGO_AT, 300, C_GREEN);
+    for (int i = 0; i < 3; ++i)
+        DrawWipeMask(dc, MakeRect(140, 341 + i * 25, width - 140, 366 + i * 25),
+            TITLE_BLURB_AT + i * 95, 300, C_BLUE);
+    DrawRevealMask(dc, MakeRect(start.left - 5, start.top - 5, start.right + 5, start.bottom + 5),
+        TITLE_START_AT, 280, C_GREEN);
+    DrawWipeMask(dc, MakeRect(cx - 300, height / 2 + 166, cx + 300, height / 2 + 196),
+        TITLE_SHARD_AT, 240, C_GREEN);
+    // 조각 칸은 DrawShardStrip과 같은 식으로 자리를 낸다. 띠 전체 폭을 6으로
+    // 나누면 칸 사이 간격이 칸마다 조금씩 밀려, 여섯 번째에서 덮개가 칸을 벗어난다.
+    int chip = ShardChipWidth(0), chipGap = 8, chipLeft = (width - stripW) / 2;
+    for (int i = 0; i < 6; ++i) {
+        int left = chipLeft + i * (chip + chipGap);
+        DrawRevealMask(dc, MakeRect(left - 2, height / 2 + 198, left + chip + 2, height / 2 + 230),
+            TITLE_SHARD_AT + 90 + i * 55, 200, (COLORREF)DRIVE_INFO[i].color);
+    }
+    DrawWipeMask(dc, MakeRect(150, height - 107, width - 150, height - 23), TITLE_HINT_AT, 300, C_DIM);
 }
 
 // 기믹 상태줄은 두 줄까지 접힌다("발동: 강화 공격! (피해 N+로 예방했어야)"). 게이지는 체력 바 밑의
@@ -1808,6 +1954,12 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         RECT r = DriveCardRect(i);
         const DriveInfo* drive = &DRIVE_INFO[gGame.driveChoices[i]];
         int hover = Inside(r, gMouse.x, gMouse.y);
+        // 카드가 왼쪽부터 한 장씩 들어온다. 쓰는 셔터는 DrawSelectionCardExit가 카드를
+        // 삼킬 때 쓰는 것과 같고, 시간만 뒤집었다 (닫힘의 EaseInCubic → 열림의 EaseOutCubic).
+        // 열고 닫는 것이 같은 기계의 두 방향으로 읽혀야 이 화면의 앞뒤가 이어진다.
+        // 카드 내용마다 등장 오프셋을 먹이는 방법도 해 봤지만 본문 그리기 코드를 전부
+        // 손대야 했고 글줄이 따로 놀았다. 다 그린 뒤 물러나는 덮개를 얹는 쪽이 깔끔하다.
+        int opened = FxDecorOn() ? EaseOutCubic(Track(SceneElapsed(), i * 100, i * 100 + 300)) : 1000;
         Panel(dc, r, hover ? RGB(24, 37, 46) : C_PANEL, hover ? (COLORREF)drive->color : C_LINE);
         DrawCardMotion(dc, r, (COLORREF)drive->color, i, hover);
         wchar_t b[16]; wsprintfW(b, L"[%d]", i + 1);
@@ -1819,7 +1971,9 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
             TextRect(dc, MakeRect(r.left + 56, r.top + 10, r.right - 12, r.top + 30), badge, (COLORREF)difficulty->color, gFontSmall, DT_RIGHT | DT_SINGLELINE);
         }
         RECT letterRect = MakeRect(r.left + 8, r.top + 20, r.right - 8, r.top + 86);
-        DrawSectorStatic(dc, letterRect, gGame.driveChoices[i], (int)(GetTickCount() / 260u), 60);
+        // 셔터가 열리는 동안에만 문자가 노이즈에서 풀려 나온다. 다 열리면 예전과 같은 60이다.
+        DrawSectorStatic(dc, letterRect, gGame.driveChoices[i], (int)(GetTickCount() / 260u),
+                         60 + FxScale(460) * (1000 - opened) / 1000);
         TextRect(dc, letterRect, drive->letter, (COLORREF)drive->color, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         DrawScanlines(dc, letterRect);
         TextRect(dc, MakeRect(r.left + 8, r.top + 92, r.right - 8, r.top + 118), drive->label, (COLORREF)drive->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -1839,6 +1993,17 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         Text(dc, r.left + 16, r.top + 420, L"VOLUME LAW", C_BLUE, gFontSmall);
         TextRect(dc, MakeRect(r.left + 16, r.top + 442, r.right - 14, r.top + 482), law->brief, C_TEXT, gFontSmall, DT_WORDBREAK);
         TextRect(dc, MakeRect(r.left + 8, r.bottom - 34, r.right - 8, r.bottom - 10), hover ? L"클릭하여 마운트" : L"클릭 또는 숫자 키", hover ? (COLORREF)drive->color : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        if (opened < 1000) {
+            int half = (r.bottom - r.top) / 2, cover = half * (1000 - opened) / 1000;
+            Fill(dc, MakeRect(r.left, r.top, r.right, r.top + cover), C_BG);
+            Fill(dc, MakeRect(r.left, r.bottom - cover, r.right, r.bottom), C_BG);
+            // 입술은 셔터가 실제로 벌어진 뒤에만 긋는다. 아직 다 닫혀 있을 때 그리면
+            // 위아래 입술이 한 줄로 겹쳐, 빈 배경 한가운데 정체불명의 선 하나만 남는다.
+            if (cover > 5 && cover < half - 2) {
+                Fill(dc, MakeRect(r.left, r.top + cover - 2, r.right, r.top + cover), C_LINE);
+                Fill(dc, MakeRect(r.left, r.bottom - cover, r.right, r.bottom - cover + 2), C_LINE);
+            }
+        }
     }
 
     // 카드 아래 진행도 띠. 이번에 제시된 볼륨은 테두리로, 이미 복구한 볼륨은 채움으로
@@ -2231,6 +2396,13 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
         L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
+// 사각형 보간. 원래는 아래 플로피 삽입 연출 옆에 있었지만, 마운트 패널이 고른
+// 카드에서 열려 나오게 되면서 그보다 먼저 필요해져 여기로 올렸다 (사본은 두지 않는다).
+static RECT LerpRect(const RECT& a, const RECT& b, int p) {
+    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
+                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
+}
+
 // 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
 static void DrawDescent(HDC dc, int width, int height) {
     const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
@@ -2245,6 +2417,19 @@ static void DrawDescent(HDC dc, int width, int height) {
     int scanMs = DESCENT_MS - (mount && gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
     Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
     RECT panel = MakeRect(170, 150, width - 170, height - 150);
+    // 잠금이 끝나는 순간 전혀 다른 판이 통째로 튀어나오던 자리. 이제 패널은 방금 잠근
+    // 카드 자리에서 열려 나온다. 패널 안의 모든 배치가 panel 하나만 보고 정해지므로
+    // 사각형만 키우면 내용이 따라 펼쳐지고, 아직 좁은 동안 밖으로 삐져나오는 부분은
+    // 클립으로 잘라 낸다 (좌표를 따로 접는 것보다 손댈 곳이 없다).
+    // 층 하강은 열려 나올 카드가 없으니 예전대로 곧장 제 크기로 선다.
+    int cardOpen = (mount && gDescentChoiceIndex >= 0 && gDescentChoiceIndex < gGame.driveChoiceCount
+                    && FxDecorOn()) ? Track(elapsed, 0, 260) : 1000;
+    int panelClip = 0;
+    if (cardOpen < 1000) {
+        panel = LerpRect(DriveCardRect(gDescentChoiceIndex), panel, EaseOutCubic(cardOpen));
+        panelClip = SaveDC(dc);
+        if (panelClip) IntersectClipRect(dc, panel.left, panel.top, panel.right, panel.bottom);
+    }
     Panel(dc, panel, C_PANEL, (COLORREF)drive->color);
     Text(dc, panel.left + 26, panel.top + 20, mount ? L"볼륨 마운트" : L"심층 탐색", C_GREEN, gFontLarge);
     wchar_t b[160];
@@ -2327,6 +2512,7 @@ static void DrawDescent(HDC dc, int width, int height) {
         ? L"진입 후 용량 정리가 필요합니다 · 클릭이나 키로 바로 넘기기"
         : L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기";
     TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    if (panelClip) RestoreDC(dc, panelClip);
 }
 
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
@@ -2369,11 +2555,6 @@ static RECT BootScreenRect(int dy)  { return MakeRect(LEGACY_X + 392, 120 + dy, 
 static RECT BootCaseRect(int dy)    { return MakeRect(LEGACY_X + 356, 424 + dy, LEGACY_X + 764, 604 + dy); }
 static RECT BootDriveRect(int dy)   { return MakeRect(LEGACY_X + 396, 448 + dy, LEGACY_X + 724, 540 + dy); }
 static RECT BootSlotRect(int dy)    { return MakeRect(LEGACY_X + 412, 466 + dy, LEGACY_X + 700, 506 + dy); }
-
-static RECT LerpRect(const RECT& a, const RECT& b, int p) {
-    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
-                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
-}
 
 // 플로피 한 장의 자리. 배율(천분율)이 몸통·라벨·셔터에 같은 비율로 걸리므로
 // 그리기와 라벨 클립이 언제나 같은 사각형을 본다. squeeze는 가로만 누른다 -
@@ -2772,6 +2953,16 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
         RestoreDC(dc, -1);
     }
 
+    // 붕괴 구간의 잡음은 빨려 들기 시작하는 순간 사라지지 않는다. 380ms 동안
+    // 화면을 덮고 있던 정적이 한 프레임에 걷히면 그 자리가 잘린 것으로 읽혔다 -
+    // 실제로 이 연출에서 유일하게 눈에 걸리는 이음매가 여기였다. 판을 따라
+    // 240ms 동안 옅어지며 같이 빨려 나간다.
+    int residue = t < BOOT_SUCK_AT ? 0 : 1000 - Track(t, BOOT_SUCK_AT, BOOT_SUCK_AT + 240);
+    if (residue > 0) {
+        DrawScreenStatic(dc, full, step, FxScale(235 * residue / 1000));
+        DrawEdgeStatic(dc, full, step + 3, 620 * residue / 1000, 110 * residue / 1000);
+    }
+
     // 빨려 들어가는 소용돌이. 화면 밖에서 라벨 쪽으로 감기며 사라진다.
     if (FxDecorOn() && suck > 0 && suck < 1000) DrawBootVortex(dc, labelCx, labelCy, suck);
 
@@ -3076,11 +3267,6 @@ static void DrawStory(HDC dc, int width, int height) {
     Text(dc, panel.left + 28, panel.top + 24, story->title, C_GREEN, gFontLarge);
     TextRect(dc, MakeRect(panel.left + 28, panel.top + 72, panel.right - 28, panel.top + 100), story->path, C_BLUE, gFontSmall, DT_SINGLELINE);
     TextRect(dc, MakeRect(panel.right - 470, panel.top + 28, panel.right - 28, panel.top + 52), story->stamp, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
-    // 파일 복구 진행 바
-    Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
-    int restore = FxDecorOn() ? EaseOutCubic(Track(SceneElapsed(), 0, 900)) : 1000;
-    Fill(dc, MakeRect(panel.left + 30, panel.top + 118,
-        Lerp(panel.left + 30, panel.right - 30, restore), panel.top + 130), C_GREEN);
     const wchar_t* lines[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
     wchar_t progress[80], command[512];
     if (gGame.story.kind == STORY_INTRO) {
@@ -3089,6 +3275,31 @@ static void DrawStory(HDC dc, int width, int height) {
         if (gGame.clearedMask) lines[1] = progress;
         lines[3] = command;
     }
+
+    // 복구된 로그는 떠 있는 것이 아니라 찍히는 것이다. 줄 간격을 아래 밑줄 쓸림과
+    // 같은 140ms로 두어 쓸림이 늘 지금 찍히는 줄을 따라간다. 글자당 18ms는 짧은
+    // 줄의 속도만 정하고, 긴 줄은 PRINT_LINE_MS에서 잘려 그만큼 빨리 찍힌다.
+    // 마지막 줄까지 1초 안에 끝나야 한다 — 읽으려는 사람을 연출이 붙들면 안 된다.
+    // 길이는 번역본 기준이다. 원문을 잘라 놓고 영어로 그리면 다 찍힌 순간에 글이
+    // 통째로 바뀌어 버린다.
+    const int PRINT_GAP_MS = 140, PRINT_CHAR_MS = 18, PRINT_LINE_MS = 430;
+    int elapsed = SceneElapsed();
+    int lineLen[5] = {0, 0, 0, 0, 0}, typed[5] = {0, 0, 0, 0, 0}, printedChars = 0, totalChars = 0;
+    for (int i = 0; i < 5; ++i) if (lines[i]) {
+        lineLen[i] = lstrlenW(LocalizeText(lines[i]));
+        int span = lineLen[i] * PRINT_CHAR_MS;
+        if (span > PRINT_LINE_MS) span = PRINT_LINE_MS;
+        typed[i] = FxDecorOn() ? lineLen[i] * Track(elapsed - i * PRINT_GAP_MS, 0, span) / 1000 : lineLen[i];
+        printedChars += typed[i]; totalChars += lineLen[i];
+    }
+    // 파일 복구 진행 바. 찍힌 글자 수를 그대로 따라간다. 900ms 이징으로 혼자 차던
+    // 예전 바는 복구했다는 글이 화면에 나오기도 전에 가득 차서, 아래 로그의 원인이
+    // 아니라 무관한 장식으로 보였다.
+    Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
+    int restore = totalChars ? printedChars * 1000 / totalChars : 1000;
+    Fill(dc, MakeRect(panel.left + 30, panel.top + 118,
+        Lerp(panel.left + 30, panel.right - 30, restore), panel.top + 130), C_GREEN);
+    int cell = TextWidth(dc, L"0", gFontMedium);
     int y = panel.top + 164;
     for (int i = 0; i < 5; ++i) if (lines[i]) {
         wchar_t lineNo[8]; wsprintfW(lineNo, L"%02d", i + 1);
@@ -3102,7 +3313,26 @@ static void DrawStory(HDC dc, int width, int height) {
                 Fill(dc, MakeRect(panel.left + 88, y + 43, x, y + 45), MixColor(C_PANEL, lineColor, FxScale(55 * (750 - age) / 750)));
             }
         }
-        TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), lines[i], lineColor, gFontMedium, DT_WORDBREAK);
+        // 다 찍힌 줄은 원본 포인터를 그대로 넘긴다. 잘라 만든 사본을 계속 쓰면
+        // 장식이 꺼진 화면까지 이 경로를 타게 되고, 그러면 "OFF는 지금과 똑같이"가
+        // 사본의 정확성에 기대는 약속이 된다.
+        wchar_t shown[640];
+        const wchar_t* body = lines[i];
+        if (typed[i] < lineLen[i]) {
+            lstrcpynW(shown, LocalizeText(lines[i]), (typed[i] < 639 ? typed[i] : 639) + 1);
+            body = shown;
+        }
+        TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), body, lineColor, gFontMedium, DT_WORDBREAK);
+        // 프린트 헤드. 문자열에 캐럿 글자를 덧붙이면 DT_WORDBREAK가 줄을 접는 자리가
+        // 글자마다 흔들리므로, 찍은 너비만큼 사각형을 옮겨 그린다. 줄 상자가 42px라
+        // 접힌 둘째 줄은 어차피 보이지 않으니 헤드도 첫 줄 오른쪽 끝에서 멈춘다.
+        // 간격이 줄 길이보다 짧아 헤드는 여러 줄에 동시에 서 있다. 한 줄씩 순서대로
+        // 찍으면 다섯 줄에 2초가 넘게 걸려, 복구가 아니라 대기처럼 보였다.
+        if (body == shown && elapsed >= i * PRINT_GAP_MS) {
+            int head = panel.left + 88 + TextWidth(dc, shown, gFontMedium);
+            if (head > panel.right - 36 - cell) head = panel.right - 36 - cell;
+            Fill(dc, MakeRect(head, y + 4, head + cell, y + 25), MixColor(C_PANEL, lineColor, FxScale(100)));
+        }
         y += 54;
     }
     // 진행은 이 버튼과 엔터·스페이스뿐이다. 읽는 중에 패널을 잘못 눌러도
@@ -6061,7 +6291,7 @@ void PaintGame(HWND window) {
     // 사망 화면은 사망 연출의 마지막 프레임이 그대로 이어지므로 도착 효과를 얹지 않는다.
     if (!gTurnTraceActive && !gDeathActive && !gCombatClearActive && !gDescentActive && !gDirEnterActive && !gBossIntroActive
         && gGame.phase != PHASE_GAMEOVER)
-        DrawSceneArrival(canvas, C_GREEN);
+        DrawSceneArrival(canvas, C_GREEN, SceneArrivalMajor());
     if (gTurnTraceActive) DrawTurnCalculation(canvas);
     else if (gDescentActive) DrawDescent(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gDirEnterActive) DrawDirectoryEnter(canvas, BASE_WIDTH, BASE_HEIGHT);

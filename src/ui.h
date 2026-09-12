@@ -33,6 +33,19 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 // 실제 속도는 그리기가 정한다 (WM_TIMER는 밀린 만큼 쌓이지 않는다).
 #define FX_TIMER_MS 8
 
+// ---- 타이틀 진입 연출 ------------------------------------------------------
+// 전원이 들어오고 18개 섹터가 타 들어가면 그 불이 지나간 자리에서 서명 → 제목 →
+// 안내 → 버튼 → 진행도가 차례로 드러난다. 구간 경계는 그리기(screens.cpp)와
+// 소리(main.cpp)가 같은 값을 봐야 하므로 여기 모아 둔다 - 제목이 앉는 순간과
+// 그 소리가 어긋나면 조립되는 것이 아니라 느리게 그려지는 것으로 읽힌다.
+#define TITLE_SIGN_AT   110    // 부팅 서명이 찍힌다
+#define TITLE_LOGO_AT   170    // 제목이 판에서 밀려 올라온다
+#define TITLE_BLURB_AT  620    // 안내 세 줄이 한 줄씩 찍힌다
+#define TITLE_START_AT  900    // 시작 버튼이 열린다
+#define TITLE_SHARD_AT  1090   // 복구 진행도와 조각 칸이 선다
+#define TITLE_HINT_AT   1280   // 맨 아래 조작 안내
+#define TITLE_SETTLE_AT 1560   // 여기부터는 헤드가 계속 판을 읽는 유휴 상태다
+
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
 // 새 게임을 누르면 지금 화면이 먼저 갈라지고, 소용돌이에 감겨 빨려 들어가 플로피
 // 한 장이 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 책상 위 컴퓨터의 3.5인치
@@ -211,6 +224,9 @@ int NoiseStep(int die);
 int EnemyBob(int index);
 void SyncIdleAnimation();
 int SceneElapsed(); // visible phase/page entrance, presentation state only
+// 이번 도착이 화면 자체가 바뀐 것인가. 0이면 같은 화면에서 쪽만 넘긴 것이라
+// 도착 연출이 브라운관을 다시 열지 않는다.
+int SceneArrivalMajor();
 int UiFocusElapsed(); // ms on the current actionable hover target, -1 when absent
 // 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
 // 동안에도 리페인트를 계속 돌려야 노이즈가 멈추지 않는다.
