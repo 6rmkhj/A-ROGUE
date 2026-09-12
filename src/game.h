@@ -356,7 +356,7 @@ void DebugWinCombat(GameState* game);
 int DebugWinDrive(GameState* game);
 // 관리자 터미널(`)의 boss 전용. 남은 일반전과 보상을 건너뛰고 지금 층의 보스
 // 구역으로 바로 들어간다. 보스 조우 연출과 기믹을 손으로 확인할 때 쓴다.
-int DebugJumpToBoss(GameState* game);
+int DebugJumpToBoss(GameState* game, int floor);   // floor < 0 = 지금 층 그대로
 void SelectReward(GameState* game, int rewardIndex);
 void InstallSelectedReward(GameState* game, int dieIndex, int faceIndex);
 void InstallTsr(GameState* game, int rewardIndex);

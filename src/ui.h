@@ -241,8 +241,12 @@ int DisplayTurn();
 // ---- 기믹 발동 연출 --------------------------------------------------------
 // 계산 재생이 끝나 새 턴 화면이 드러나는 순간 시작된다. 규칙은 이미 game.cpp에서
 // 확정된 뒤이므로 여기서는 보여 주는 방식만 정한다.
+// C:\ 3층 파쇄에서 초상이 칸 윗변을 누르는 순간. 세 시간표와 연출, 소리 박자가
+// 모두 이 값 하나를 본다.
+#define SHRED_IMPACT 1000
 int GimmickFxKind();        // 재생 중인 기믹 (GIMMICK_NONE = 없음)
-int GimmickFxElapsed();     // 시작으로부터 경과 ms
+int GimmickFxElapsed();     // 시작으로부터 경과 ms (히트스톱 동안은 멈춰 있다)
+int GimmickFxRawElapsed();  // 히트스톱을 풀지 않은 실제 경과 ms. 멈춘 동안에도 도는 빛에 쓴다
 int GimmickFxA();           // 대상 1 (슬롯·주사위·면 또는 수치)
 int GimmickFxB();           // 대상 2
 int GimmickFxDuration(int kind, int b);   // 그 기믹 연출의 총 길이 ms

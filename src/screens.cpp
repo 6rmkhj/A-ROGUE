@@ -4576,9 +4576,6 @@ static void DrawGuide(HDC dc, int width, int height) {
 // 화면을 장악하면 강한 발동의 가치가 사라진다.
 // ---------------------------------------------------------------------------
 
-// C:\ 3층 파쇄. 초상이 칸 윗변을 누르는 순간이고, 세 표와 연출이 같은 값을 봐야 한다.
-#define SHRED_IMPACT 1000
-
 // 총 길이. Local 180~320 / Regional 300~450 / 강한 발동 최대 700 /
 // 되돌릴 수 없는 삭제만 700~1200.
 int GimmickFxDuration(int kind, int b) {
@@ -5129,7 +5126,8 @@ static void DrawShredStrike(HDC dc, int slot, int die, int t, COLORREF fam) {
     int bw = (r.right - r.left) / 2, bh = (r.bottom - r.top) / 2;
     int acx = (art.left + art.right) / 2, acy = (art.top + art.bottom) / 2;
     RECT home = MakeRect(acx - bw, acy - bh, acx + bw, acy + bh);
-    RECT over = MakeRect(r.left, r.top - 190, r.right, r.top - 66);   // 칸 위에 떠서 겨눈다
+    RECT over = MakeRect(r.left, r.top - 200, r.right, r.top - 76);   // 칸 위에 떠서 겨눈다
+    RECT high = MakeRect(r.left, r.top - 300, r.right, r.top - 176);  // 예비: 판 안에 머문 채 뽑혀 올라간다
     int since = t - SHRED_IMPACT;
 
     if (since < 0) {
@@ -5170,31 +5168,69 @@ static void DrawShredStrike(HDC dc, int slot, int die, int t, COLORREF fam) {
         } else DrawShredHole(dc, r, slot, SlotShredTurnsLeft(&gGame, slot));
     }
 
-    // 초상: 칸 위로 옮겨 가 살짝 들렸다가 곧장 떨어져 윗변을 누르고, 다시 올라간다.
-    // 돌지도 날아다니지도 않는다 — 지금 게임의 적 돌진과 같은 움직임이다.
+    // 맞은 칸이 통째로 하얗게 날아간다. 초상보다 먼저 깔아 보스가 그 빛 앞에
+    // 실루엣으로 박히게 한다. 가장 짧고 가장 센 층이다.
+    int blow = (since >= 0 && since < 60) ? 1000 - since * 1000 / 60 : 0;
+    if (blow > 0 && FxDecorOn()) {
+        RECT hot = r;
+        InflateRect(&hot, 6 + 26 * blow / 1000, 4 + 18 * blow / 1000);
+        Fill(dc, hot, MixColor(C_BG, RGB(255, 246, 238), FxScale(96 * blow / 1000)));
+        Outline(dc, hot, MixColor(C_BG, C_RED, FxScale(55 + 45 * blow / 1000)), 3);
+    }
+
+    // 초상의 내려찍기. 타격감은 궤적이 아니라 착지에서 난다 — 위로 뽑혀 올라가
+    // 세로로 길게 늘어난 채 떨어지고, 칸을 지나쳐 박히며 한 번 납작해졌다가
+    // 곧장 튕겨 오른다. 누르고 있지 않는다.
     RECT box;
+    int sx = 1000, sy = 1000, flash = 0;
+    RECT land = over; OffsetRect(&land, 0, 116);     // 칸 윗변을 지나쳐 박히는 자리
     if (since < 0) {
-        box = LerpRect(home, over, EaseOutCubic(Track(t, 100, 700)));
-        int lift = 18 * EaseOutCubic(Track(t, 720, 860)) / 1000;
-        int drop = 80 * EaseInCubic(Track(t, 860, SHRED_IMPACT)) / 1000;
-        OffsetRect(&box, 0, drop - lift);
+        int drop = EaseInCubic(Track(t, 880, SHRED_IMPACT));         // 216px을 120ms에, 끝에서 몰아친다
+        if (t < 880) box = LerpRect(LerpRect(home, over, EaseOutCubic(Track(t, 100, 600))),
+                                    high, EaseOutCubic(Track(t, 600, 840)));   // 판 밖까지 뽑혀 올라간다
+        else box = LerpRect(high, land, drop);
+        int wind = EaseOutCubic(Track(t, 600, 840));
+        sy = 1000 + 150 * wind / 1000 + 420 * drop / 1000;           // 떨어지며 길게 늘어난다
+        sx = 1000 - 80 * wind / 1000 - 240 * drop / 1000;
+    } else if (since < 80) {
+        box = land; OffsetRect(&box, 0, 26 - 26 * since / 80);       // 파고들었다 빠져나온다
+        sy = 540 + 460 * since / 80;                                 // 납작해졌다 돌아온다
+        sx = 1460 - 460 * since / 80;
+        flash = 1000 - 1000 * since / 80;
     } else {
-        // 잠깐 누르고 있다가 올라간다. 부서지는 칸을 오래 가리지 않는다.
-        RECT pressed = over; OffsetRect(&pressed, 0, 80);
-        box = LerpRect(pressed, home, EaseOutCubic(Track(since, 200, 620)));
+        // 반동. 밀려 올라갔다 제자리로 돌아간다.
+        int kick = EaseOutCubic(Track(since, 80, 300));
+        RECT up = over; OffsetRect(&up, 0, -34);
+        box = LerpRect(land, up, kick);
+        box = LerpRect(box, home, EaseInCubic(Track(since, 300, 640)));
+        sy = 1000 + 90 * (1000 - kick) / 1000;
     }
     if (boss >= 0) {
         // 떠난 자리는 빈 상자로 남는다 — 초상이 둘로 보이지 않게
-        int away = since < 0 ? Track(t, 100, 400) : 1000 - Track(since, 380, 620);
+        int away = since < 0 ? Track(t, 100, 400) : 1000 - Track(since, 400, 640);
         if (away > 0) { Fill(dc, art, C_PANEL); Outline(dc, art, MixColor(C_BG, C_RED, 20 + away / 40), 1); }
-        DrawSpriteArt(dc, box, gGame.enemies[boss].kind, 1, since >= 0 && since < 90, 0, 0);
+        // 낙하 잔상: 지나온 길에 세로 줄이 길게 남는다
+        if (FxDecorOn() && t >= 840 && since < 60) {
+            int tail = since < 0 ? 70 + 260 * EaseInCubic(Track(t, 880, SHRED_IMPACT)) / 1000 : 330;
+            for (int i = 0; i < 5; ++i) {
+                int lx = box.left + 12 + i * (box.right - box.left - 24) / 4;
+                int level = FxScale((i & 1 ? 46 : 72) * (since < 0 ? 1000 : 1000 - since * 1000 / 60) / 1000);
+                int top = box.top - tail; if (top < 70) top = 70;
+                if (level > 0 && box.top + 6 > top) Fill(dc, MakeRect(lx, top, lx + 2, box.top + 6), MixColor(C_BG, C_RED, level));
+            }
+        }
+        // 초상은 판 안에서만 보인다. 판 밖으로 뽑혀 올라간 동안은 헤더를 넘지 않는다.
+        int clipped = SaveDC(dc);
+        if (clipped) IntersectClipRect(dc, 0, 69, BASE_WIDTH, BASE_HEIGHT);
+        DrawSpriteArt(dc, box, gGame.enemies[boss].kind, 1, FxScale(flash), 0, 0, sx, sy);
         int heat = since < 0 ? Track(t, 500, SHRED_IMPACT) : 1000 - Track(since, 0, 420);
         if (heat > 0) Outline(dc, box, MixColor(C_BG, C_RED, 30 + heat / 18), 2);
+        if (clipped) RestoreDC(dc, clipped);
     }
 
     if (since >= 0 && since < 900) {
         // 충돌: 바닥을 따라 뻗는 빛줄기, 충격파 두 겹, 균열, 파편
-        int spread = EaseOutCubic(Track(since, 0, 240)), fade = 1000 - Track(since, 60, 560);
+        int spread = EaseOutCubic(Track(since, 0, 170)), fade = 1000 - Track(since, 40, 520);
         if (fade > 0) {
             int reach = 420 * spread / 1000;
             Fill(dc, MakeRect(cx - reach, r.top - 1, cx + reach, r.top + 2), MixColor(C_BG, RGB(255, 226, 206), FxScale(fade / 11)));
@@ -5208,8 +5244,31 @@ static void DrawShredStrike(HDC dc, int slot, int die, int t, COLORREF fam) {
                     MixColor(C_BG, i ? fam : C_RED, 85 - 80 * ring / 1000), i ? 1 : 2);
             }
             if (since < 300) DrawCracks(dc, cx, r.top, Lerp(40, 210, EaseOutCubic(Track(since, 0, 300))), slot * 13 + 7, C_RED, MixColor(C_BG, C_RED, 45));
-            DrawFxShardsStaggered(dc, cx, r.top, since, 620, 26, slot * 5 + 17, RGB(255, 176, 138), 7);
-            DrawFxTear(dc, MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT), t, FxScale(since < 200 ? 16 - 16 * since / 200 : 0), GIMMICK_BLUE_SCREEN);
+            DrawFxShardsStaggered(dc, cx, r.top, since, 620, 34, slot * 5 + 17, RGB(255, 176, 138), 5);
+            // 맞은 자리에서 양옆으로 밀려나는 흙먼지
+            DrawPixelBurst(dc, cx - 34, r.top + 2, since, 520, FxScale(9), slot * 3 + 1, MixColor(C_BG, RGB(150, 118, 96), 70));
+            DrawPixelBurst(dc, cx + 34, r.top + 2, since, 520, FxScale(9), slot * 3 + 2, MixColor(C_BG, RGB(150, 118, 96), 70));
+            DrawFxTear(dc, MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT), t, FxScale(since < 180 ? 30 - 30 * since / 180 : 0), GIMMICK_BLUE_SCREEN);
+        }
+    }
+
+    // 임팩트 프레임. 히트스톱으로 판이 멈춘 80ms 동안 앞 40ms는 색이 뒤집히고
+    // 뒤 40ms는 붉게 뒤집힌다. 멈춘 시간이 아니라 실제 시각으로 도는 유일한 층이다.
+    // 화면 전체가 두 번 번쩍이므로 연출 강도를 낮추면 아예 그리지 않는다.
+    if (FxScale(100) >= 100) {
+        int raw = GimmickFxRawElapsed() - SHRED_IMPACT;
+        if (raw >= 0 && raw < 80) {
+            RECT sc = MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT);
+            PatBlt(dc, sc.left, sc.top, sc.right - sc.left, sc.bottom - sc.top, DSTINVERT);
+            if (raw >= 40) {
+                HBRUSH tint = CreateSolidBrush(RGB(206, 44, 34));
+                if (tint) {
+                    HGDIOBJ was = SelectObject(dc, tint);
+                    PatBlt(dc, sc.left, sc.top, sc.right - sc.left, sc.bottom - sc.top, PATINVERT);
+                    SelectObject(dc, was);
+                    DeleteObject(tint);
+                }
+            }
         }
     }
 
@@ -5333,7 +5392,9 @@ void DrawGimmickFx(HDC dc) {
 
     // 임팩트 순간의 공용 처리: 짧은 섬광과 가장자리 글로우. 세기는 접근성 모드를 따른다.
     if (sinceImpact >= 0 && sinceImpact < 300 && FxDecorOn()) {
-        DrawFxImpact(dc, screen, sinceImpact, 170, fam);
+        // 파쇄는 제 임팩트 프레임(색 반전 → 붉은 반전)을 따로 쓴다. 공용 전면
+        // 섬광까지 겹치면 옅은 빛이 170ms 동안 판을 덮어 때린 느낌이 오히려 죽는다.
+        if (kind != GIMMICK_BLUE_SCREEN) DrawFxImpact(dc, screen, sinceImpact, 170, fam);
         DrawEdgeGlow(dc, screen, fam, FxScale(1000 - sinceImpact * 1000 / 300), 14);
     }
 
