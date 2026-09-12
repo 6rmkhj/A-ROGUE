@@ -125,6 +125,15 @@ void DrawScreenStatic(HDC dc, const RECT& area, int step, int level);
 void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness);
 // 가장자리에서 안쪽으로 옅어지는 경고 테두리. 피격·위독 상태를 알린다.
 void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness);
+// 위독 전용 가장자리 노이즈. DrawEdgeStatic과 달리 느린 묶음 시계가 격자를
+// 잡고 빠른 칸 시계가 그 안을 깜빡여 띠가 한꺼번에 튀지 않으며, 밀도가 안쪽
+// 으로 제곱으로 잦아들어 겹 경계가 보이지 않고, 색이 붉은 계열이라 경고
+// 테두리와 같은 사건으로 읽힌다. surge(0~1000)는 파열의 세기다.
+void DrawCriticalStatic(HDC dc, const RECT& area, uint32_t tick, int level, int thickness, int surge);
+// 가로 한 줄을 옆으로 밀어 신호가 어긋난 것처럼 보이게 한다. 덧칠이 아니라
+// 이미 그려진 화면을 실제로 옮기고, 비는 자리를 gap으로 채운다. skew는 아래로
+// 갈수록 더 벌어지는 몫이다(0이면 통째로 같은 만큼 밀린다).
+void DrawSignalSlip(HDC dc, const RECT& area, int y, int height, int shift, int skew, COLORREF gap);
 
 // ---- 전투 연출 프리미티브 --------------------------------------------------
 // 전부 게임 상태를 모르고 넘겨받은 숫자만 그린다. 위치·강도는 호출자가 경과

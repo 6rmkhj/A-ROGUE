@@ -376,11 +376,6 @@ static int CriticalSeverity() {
     return CRITICAL_HP + 1 - gGame.playerHp;                  // 1 ~ CRITICAL_HP
 }
 
-static int CriticalPulse() {
-    int pulse = (int)((GetTickCount() / 70) % 20u);
-    return pulse > 10 ? 20 - pulse : pulse;                   // 0 ~ 10
-}
-
 // 마지막 한 칸이 남은 뒤로는 버틴 시간만큼 띠가 더 두꺼워지고 짙어진다.
 // 화면 전체로 번지지는 않는다 - 판을 삼키는 것은 정지 연출의 몫이다.
 static int LastGaspBoost() {
@@ -391,18 +386,115 @@ static int LastGaspBoost() {
     return boost > 1000 ? 1000 : boost;
 }
 
+// 한 박의 길이. 체력이 낮을수록, 마지막 한 칸을 오래 버틸수록 빨라진다.
+static int CriticalBeatPeriod() {
+    int severity = CriticalSeverity();
+    if (severity <= 0) return 0;
+    int period = Lerp(1180, 660, (severity - 1) * 1000 / (CRITICAL_HP - 1));
+    return period - LastGaspBoost() * 120 / 1000;             // 540 ~ 1180ms
+}
+
+// 위독 연출의 박자(0~1000). 예전에는 70ms마다 한 칸씩 오르내리는 삼각파였다.
+// 일정한 속도로 밝아졌다 어두워지기만 하니 기계가 깜빡이는 것으로 보였다.
+// 지금은 심박이다 - 강한 첫 박이 45ms에 치솟아 잦아들고, 그 뒤에 작은 둘째
+// 박이 붙고, 나머지는 쉰다. 같은 밝기 변화라도 "버티고 있는 것"으로 읽힌다.
+static int CriticalPulse() {
+    int period = CriticalBeatPeriod();
+    if (period <= 0) return 0;
+    int t = (int)(GetTickCount() % (uint32_t)period), beat = 0;
+    if (t < 250) beat = t < 45 ? t * 1000 / 45 : 1000 - (t - 45) * 1000 / 205;
+    int second = t - 270;
+    if (second >= 0 && second < 210) {
+        int tail = (second < 40 ? second * 1000 / 40 : 1000 - (second - 40) * 1000 / 170) * 58 / 100;
+        if (tail > beat) beat = tail;
+    }
+    return beat < 0 ? 0 : beat;
+}
+
+// 맞는 순간에는 반드시 크게 터진다. 불규칙한 파열만으로는 "지금 맞았다"와
+// "그냥 위독하다"가 구분되지 않아, 연출이 판에서 벌어지는 일과 따로 논다.
+// 방어도가 전부 막아낸 타격은 건드리지 않는다 - 그건 버텨 낸 사건이다.
+static int CriticalHitKick() {
+    if (PlayerHitBlocked()) return 0;
+    int flash = PlayerHitFlash();
+    return flash <= 0 ? 0 : flash * 880 / 1000;
+}
+
+// 불규칙하게 찾아오는 파열(0~1000). 고정 주기로 지직거리면 그 주기가 먼저
+// 읽혀 연출이 아니라 배경 애니메이션이 된다. 그래서 올 시각과 길이를 해시로
+// 흩고 네 번에 한 번쯤은 통째로 걸러 언제 올지 예측되지 않게 한다. 평소에는
+// 낮게 깔려 있다가 이 순간에만 크게 무너진다.
+// 피격이 겹치면 둘 중 큰 쪽을 쓴다.
+static int CriticalSurge() {
+    int severity = CriticalSeverity();
+    if (severity <= 0) return 0;
+    int gasp = LastGaspBoost();
+    int slot = Lerp(2700, 1150, (severity - 1) * 1000 / (CRITICAL_HP - 1)) - gasp * 350 / 1000;
+    if (slot < 520) slot = 520;
+    uint32_t now = GetTickCount();
+    uint32_t h = Hash3((int)(now / (uint32_t)slot), 0x5EA1, 3);
+    if ((h >> 20) % 100u < 26u) return CriticalHitKick();      // 조용히 지나가는 슬롯
+    int span = 110 + (int)((h >> 9) % 190u);                   // 110 ~ 300ms
+    int at = (int)(h % (uint32_t)(slot - span));
+    int t = (int)(now % (uint32_t)slot) - at;
+    if (t < 0 || t >= span) return CriticalHitKick();
+    int rise = span / 6 + 1;                                   // 세게 들어왔다 잦아든다
+    int env = t < rise ? t * 1000 / rise : 1000 - (t - rise) * 1000 / (span - rise);
+    int peak = 380 + severity * 45 + gasp * 220 / 1000;
+    if (peak > 1000) peak = 1000;
+    int surge = env * peak / 1000, kick = CriticalHitKick();
+    return kick > surge ? kick : surge;
+}
+
 int AmbientNoiseLevel() {
     int severity = CriticalSeverity();
     if (severity <= 0) return 0;
-    int level = 90 + severity * 34 + CriticalPulse() * severity * 2 + LastGaspBoost() * 130 / 1000;
-    if (level > 680) level = 680;
+    // 바닥은 낮게 깔아 두고 눈에 띄는 변화는 심박과 파열이 만든다. 예전에는
+    // 바닥이 높고 삼각파가 그 위에서 흔들려 항상 같은 세기로 지직거렸다.
+    int level = 70 + severity * 26
+        + CriticalPulse() * (60 + severity * 14) / 1000
+        + LastGaspBoost() * 120 / 1000
+        + CriticalSurge() * 340 / 1000;
+    if (level > 700) level = 700;
     return FxScale(level);
 }
+
+int AmbientNoisePulse() { return FxScale(CriticalPulse()); }
+int AmbientNoiseSurge() { return FxScale(CriticalSurge()); }
 
 int AmbientNoiseBand() {
     int severity = CriticalSeverity();
     if (severity <= 0) return 0;
-    return 34 + severity * 12 + LastGaspBoost() * 40 / 1000;   // 46 ~ 194픽셀
+    int band = 34 + severity * 12 + LastGaspBoost() * 40 / 1000;   // 46 ~ 194픽셀
+    // 심박을 따라 띠가 숨을 쉰다. 두께가 고정이면 같은 자리에서 밀도만 깜빡여
+    // 평면으로 보인다. 두께가 같이 움직여야 안쪽으로 밀려드는 것으로 읽힌다.
+    return band + FxScale(band * CriticalPulse() / 6000) + FxScale(CriticalSurge() * 22 / 1000);
+}
+
+// 파열 순간에 가장자리 띠 안에서 가로로 어긋나는 줄. 덧칠이 아니라 화면을
+// 실제로 밀어내는 연출이라 몇 줄인지·어디인지를 여기서 정해 넘긴다. 판
+// 한가운데를 가리지 않도록 자리는 항상 위·아래 띠 안이다.
+//
+// 자리는 띠 안에서 고르되 가장자리 쪽에 몰리게 한다(제곱). 띠 안 아무 데나
+// 고르게 뿌리면 안쪽 경계에 줄이 걸려 띠의 끝이 어디인지가 드러난다.
+int AmbientSlip(int index, int* y, int* height, int* shift, int* skew) {
+    int surge = AmbientNoiseSurge();
+    if (surge < 260 || index < 0 || index >= AMBIENT_SLIP_MAX) return 0;
+    int band = AmbientNoiseBand();
+    uint32_t now = GetTickCount();
+    uint32_t h = Hash3((int)(now / 55), index, 0x513);
+    if ((int)((h >> 17) % 1000u) > surge) return 0;
+    int span = 3 + (int)((h >> 3) % 12u);
+    int room = band > span ? band - span : 1;
+    int pick = (int)((h >> 7) % (uint32_t)room);
+    int pos = pick * pick / room;                              // 가장자리 쪽으로 몰린다
+    *y = (h & 1u) ? pos : BASE_HEIGHT - pos - span;
+    *height = span;
+    int dir = (h >> 21) & 1u ? 1 : -1;
+    *shift = dir * (3 + (int)((h >> 13) % 26u) * surge / 1000);
+    // 아래로 갈수록 조금 더 벌어진다. 통째로 미는 것보다 미끄러지는 것으로 읽힌다.
+    *skew = dir * (int)((h >> 27) % 9u) * surge / 1000;
+    return 1;
 }
 
 // 체력 1이 "언제부터"인지가 띠가 자라는 기준이라 시각을 잡아 둔다.

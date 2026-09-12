@@ -807,6 +807,235 @@ void DrawEdgeStatic(HDC dc, const RECT& area, int step, int level, int thickness
     }
 }
 
+// ---- 위독 노이즈 -----------------------------------------------------------
+// 예전에는 위독 연출도 DrawEdgeStatic을 그대로 썼다. 부자연스러웠던 이유가 셋이다.
+//   1. 띠 전체가 90ms마다 한꺼번에 다시 뽑혔다. 모든 칸이 같은 박자로 켜졌다
+//      꺼지니 "무너지는 신호"가 아니라 일정하게 깜빡이는 색종이로 보였다.
+//   2. 세 겹의 밀도가 100 / 67 / 33%로 끊겨 사각형 세 개의 경계가 그대로 보였다.
+//   3. 색이 TV 백색소음의 청록이라 그 위에 따로 얹는 붉은 테두리와 따로 놀았다.
+//
+// 그래서 위독 전용으로 다시 그린다. 핵심은 시계를 둘로 나눈 것이다.
+//
+//   느린 묶음 시계 (16픽셀 묶음, 220~580ms)
+//     칸의 가로 경계와 그 자리가 지금 얼마나 무너져 있는지를 정한다. 한 묶음
+//     안의 네 행이 같은 경계를 쓰므로 가로줄이 아니라 덩어리로 무너진다.
+//   빠른 칸 시계 (행마다 60~200ms, 칸마다 위상이 다름)
+//     그 격자 안에서 칸 하나하나를 깜빡인다. 위상이 흩어져 있어 한 행이
+//     통째로 갈리는 순간이 없다.
+//
+// 밀도는 가장자리에서 안쪽으로 제곱으로 잦아들고, 모서리에서는 두 변이 함께
+// 물러나 사각형 테가 아니라 둥근 그늘로 읽힌다. 색은 어두운 피에서 잉걸까지
+// 이고, 밝은 칸은 옆으로 흐린 잔상을 끌어 색이 번진 것처럼 보인다.
+// surge(0~1000)는 불규칙하게 찾아오는 파열이다 - 그 순간에만 묶음이 통째로
+// 길게 찢어지고 잉걸이 늘어난다.
+
+// 사각형 가장자리까지의 거리. 모서리에서는 두 변이 함께 물러나므로 사각형
+// 거리(두 변 중 가까운 쪽)보다 짙게 쳐야 테가 아니라 둥근 그늘로 보인다.
+static int CriticalDepth(int dx, int dy, int thickness) {
+    int depth = dx < dy ? dx : dy;
+    if (dx < thickness && dy < thickness) {
+        int outer = dx > dy ? dx : dy;     // far/near는 windef.h가 이미 쓰는 이름이다
+        depth -= (thickness - outer) / 3;
+    }
+    return depth < 0 ? 0 : depth;
+}
+
+// 가장자리 level, 띠 안쪽 0. 제곱이라 겹 경계가 눈에 걸리지 않는다.
+static int CriticalDensity(int depth, int thickness, int level) {
+    if (depth >= thickness) return 0;
+    int fall = (thickness - depth) * 1000 / thickness;
+    return level * fall / 1000 * fall / 1000;
+}
+
+// 산 묶음 안에서 한 행이 채우는 비율의 상한(천분율). 높을수록 덩어리가
+// 단단해지고 낮을수록 잘게 흩어진다. 전체 밀도는 이 값과 무관하게 같다 -
+// 묶음이 살 확률을 그만큼 되돌려 나누기 때문이다.
+#define CRIT_BLOCK_FILL 720
+
+// 한 행을 그리는 동안 이어 붙이는 중인 칸과 그 꼬리.
+//
+// 칸 하나에 FillRect를 한 번씩 부르면 GDI 호출 수가 그대로 값이 된다 (넓이보다
+// 호출 수가 비싸다). 나란히 붙은 같은 색은 하나로 이어 붙여 한 번에 칠한다 -
+// 나오는 그림은 한 픽셀도 다르지 않다. 꼬리도 같은 이유로 미뤄 둔다. 바로
+// 다음 칸이 붙어 있으면 어차피 덮이므로, 칠한 자리가 끊기는 곳에서만 그린다.
+struct CriticalRun {
+    int left, right, shade;          // shade < 0 = 이어 붙이는 중인 칸 없음
+    int tailAt, tailShade, tailLag;  // tailAt < 0 = 내보낼 꼬리 없음
+};
+
+static void CriticalRunBreak(HDC dc, const RECT& area, int top, int bottom,
+                             HBRUSH* shade, CriticalRun* run) {
+    if (run->shade >= 0) {
+        RECT cells = MakeRect(run->left, top, run->right, bottom);
+        FillRect(dc, &cells, shade[run->shade]);
+        run->shade = -1;
+    }
+    if (run->tailAt >= 0 && run->tailShade >= 2) {
+        int right = run->tailAt + run->tailLag;
+        if (right > area.right) right = area.right;
+        if (run->tailAt < right) {
+            RECT tail = MakeRect(run->tailAt, top, right, bottom);
+            FillRect(dc, &tail, shade[run->tailShade - 1]);
+        }
+    }
+    run->tailAt = -1;
+}
+
+static void CriticalRow(HDC dc, const RECT& area, int y, int rowBottom, int thickness,
+                        int level, int surge, uint32_t tick, HBRUSH* shade) {
+    int dyTop = y - area.top, dyBot = area.bottom - 1 - y;
+    int dy = dyTop < dyBot ? dyTop : dyBot;
+
+    // 묶음의 값은 한 번만 정한다. 같은 묶음의 네 행이 반드시 같은 x 경계를
+    // 걷게 하려면 행마다 달라지는 dy를 여기 섞으면 안 된다. 기준은 묶음에서
+    // 가장자리에 가장 가까운 행이다 - 그래야 묶음 밀도가 어느 행의 밀도보다도
+    // 크고, 아래에서 몫을 되돌려 나눌 때 잘리는 자리가 없다.
+    int blockKey = y >> 4, blockTop = blockKey << 4;
+    int bdyTop = blockTop - area.top, bdyBot = area.bottom - 1 - (blockTop + 15);
+    int bdy = bdyTop < bdyBot ? bdyTop : bdyBot;
+    if (bdy < 0) bdy = 0;
+    uint32_t bs = Hash3(blockKey, 0x517C, 5);
+    int blockPeriod = 220 + (int)(bs % 5u) * 90;              // 묶음은 220~580ms
+    int blockStep = (int)((tick + bs % (uint32_t)blockPeriod) / (uint32_t)blockPeriod);
+    // 파열 중에만, 그것도 일부 묶음만 통째로 길게 찢어진다.
+    int torn = surge > 0 && (int)(Hash3(blockStep, blockKey, 0x7EA1) % 1000u) < surge * 3 / 5;
+
+    int rowKey = y >> 2;
+    uint32_t rs = Hash3(rowKey, 0x9E37, 11);
+    int period = 60 + (int)(rs % 6u) * 28;                    // 행마다 60~200ms
+    int hot = 2 + level * 5 / 1000 + surge * 9 / 1000;        // 잉걸이 나올 몫
+
+    CriticalRun run = {0, 0, -1, -1, 0, 0};
+    int x = area.left;
+    for (int i = 0; x < area.right; ++i) {
+        int dxLeft = x - area.left, dxRight = area.right - 1 - x;
+        int dx = dxLeft < dxRight ? dxLeft : dxRight;
+        // 판 한가운데는 건드리지 않는다. 건너뛰는 판단도 묶음 기준이라야 같은
+        // 묶음의 네 행이 같은 칸을 센다.
+        if (bdy >= thickness && dx >= thickness) {
+            CriticalRunBreak(dc, area, y, rowBottom, shade, &run);
+            int jump = area.right - thickness;
+            if (jump <= x) break;
+            x = jump; continue;
+        }
+
+        // 가로 경계는 묶음 시계에서 나온다 (네 행이 같은 값을 본다).
+        uint32_t block = Hash3(blockStep, blockKey, i);
+        int blockDepth = dx < bdy ? dx : bdy;
+        int w = torn ? 40 + (int)(block % 130u)                      // 찢어진 묶음은 길게
+              : blockDepth * 3 < thickness ? 8 + (int)(block % 42u)  // 바깥은 넓게
+              : 5 + (int)(block % 17u);                              // 안쪽은 잘게 흩어진다
+        if (x + w > area.right) w = area.right - x;
+
+        // 밀도는 두 번 잰다. 행마다의 정확한 밀도와, 그 행이 속한 묶음의 밀도다.
+        // 흔들림(jitter)은 둘에 똑같이 걸어 둘의 비율이 깨지지 않게 한다.
+        int jitter = 30 + (int)((block >> 19) % 140u);
+        int density = CriticalDensity(CriticalDepth(dx, dy, thickness), thickness, level) * jitter / 100;
+        int blockDensity = CriticalDensity(CriticalDepth(dx, bdy, thickness), thickness, level) * jitter / 100;
+        if (torn) { density += density / 2; blockDensity += blockDensity / 2; }
+
+        // 묶음 단위로 먼저 살았는지를 가른다. 이 관문이 없으면 네 행이 각자
+        // 주사위를 굴려 세로로 이어지지 않고 가로줄만 남는다. 묶음이 죽으면
+        // 그 자리가 통째로 비고, 살면 네 행이 함께 짙어져 덩어리가 생긴다.
+        int alive = blockDensity * 1000 / CRIT_BLOCK_FILL;
+        if (alive > 1000) alive = 1000;
+        int lit = 0, index = 0, lag = 0;
+        if (alive > 0 && (int)((block >> 5) % 1000u) < alive) {
+            // 산 묶음 안에서 그 행이 채울 몫. 묶음이 살 확률로 되돌려 나누므로
+            // 전체 밀도는 density 그대로다 (관문이 밀도를 깎지 않는다).
+            int fill = density * 1000 / alive;
+            if (fill > 1000) fill = 1000;
+            // 칸마다 위상을 어긋나게 둔다. 한 행이 통째로 갈리는 순간이 없어진다.
+            int cellStep = (int)((tick + (rs + (uint32_t)i * 4177u) % (uint32_t)period) / (uint32_t)period);
+            uint32_t h = Hash3(cellStep, rowKey, i);
+            if ((int)((h >> 11) % 1000u) < fill) {
+                // 색은 따로 해시한다. h를 더 밀어 쓰면 (h >> 26)이 여섯 비트뿐이라
+                // 0~63밖에 안 나오고, 그러면 네 색 중 위의 둘이 영영 안 나온다.
+                // 칠하기로 정해진 칸에서만 도는 해시라 비용은 거의 없다.
+                uint32_t pick = Hash3(cellStep, rowKey, ~i) % 100u;
+                // 대부분은 신호가 끊긴 검정과 어두운 피다. 짙을수록, 파열일수록
+                // 잉걸이 늘어난다.
+                index = pick < 40u ? 0 : pick < 68u ? 1 : (int)pick < 96 - hot ? 2 : 3;
+                lag = 2 + (int)((h >> 7) % 5u);
+                lit = 1;
+            }
+        }
+
+        if (!lit) CriticalRunBreak(dc, area, y, rowBottom, shade, &run);
+        else {
+            if (run.shade == index && run.right == x) run.right = x + w;
+            else {
+                if (run.shade >= 0) {
+                    RECT cells = MakeRect(run.left, y, run.right, rowBottom);
+                    FillRect(dc, &cells, shade[run.shade]);
+                }
+                run.left = x; run.right = x + w; run.shade = index;
+            }
+            // 밝은 칸은 옆으로 한 단 흐린 꼬리를 끌고 간다. 아날로그 신호에서
+            // 색이 휘도보다 늦게 따라붙어 생기는 번짐이고, 이것 하나로 같은
+            // 사각형이 "칠해진 칸"이 아니라 "새어 나온 빛"으로 보인다.
+            run.tailAt = x + w; run.tailShade = index; run.tailLag = lag;
+        }
+        x += w;
+    }
+    CriticalRunBreak(dc, area, y, rowBottom, shade, &run);
+}
+
+void DrawCriticalStatic(HDC dc, const RECT& area, uint32_t tick, int level, int thickness, int surge) {
+    if (level <= 0 || thickness <= 0) return;
+    if (level > 1000) level = 1000;
+    if (surge < 0) surge = 0; else if (surge > 1000) surge = 1000;
+    int width = area.right - area.left, height = area.bottom - area.top;
+    if (width <= 2 || height <= 2) return;
+    if (thickness * 2 > height) thickness = height / 2;
+    if (thickness * 2 > width) thickness = width / 2;
+    if (thickness <= 0) return;
+
+    HBRUSH shade[4] = {CreateSolidBrush(RGB(9, 9, 13)),   CreateSolidBrush(RGB(38, 15, 17)),
+                       CreateSolidBrush(RGB(92, 30, 28)), CreateSolidBrush(RGB(178, 74, 58))};
+    RECT clip; int clipped = GetClipBox(dc, &clip) > NULLREGION;
+    for (int y = area.top; y < area.bottom; y += 4) {
+        int bottom = y + 4 > area.bottom ? area.bottom : y + 4;
+        if (clipped && (bottom <= clip.top || y >= clip.bottom)) continue;
+        CriticalRow(dc, area, y, bottom, thickness, level, surge, tick, shade);
+    }
+    for (int i = 0; i < 4; ++i) DeleteObject(shade[i]);
+}
+
+// 한 줄을 통째로 옆으로 민다. 캔버스는 매 프레임 배경색으로 다시 칠하고
+// 시작하므로 제자리 복사가 다음 프레임에 남지 않는다.
+static void SlipBand(HDC dc, const RECT& area, int y, int height, int shift, COLORREF gap) {
+    if (height <= 0 || shift == 0) return;
+    int width = area.right - area.left;
+    int span = shift < 0 ? -shift : shift;
+    if (span >= width) return;
+    if (shift > 0) {
+        BitBlt(dc, area.left + span, y, width - span, height, dc, area.left, y, SRCCOPY);
+        Fill(dc, MakeRect(area.left, y, area.left + span, y + height), gap);
+    } else {
+        BitBlt(dc, area.left, y, width - span, height, dc, area.left + span, y, SRCCOPY);
+        Fill(dc, MakeRect(area.right - span, y, area.right, y + height), gap);
+    }
+}
+
+// 가로 한 줄이 옆으로 어긋난다. 노이즈를 덧칠하는 것과 달리 이미 그려진 화면을
+// 실제로 밀어내므로 "덮였다"가 아니라 "신호가 끊겼다"로 읽힌다. 밀려나 비는
+// 자리에는 gap이 남아 어긋난 것이 눈에 보인다.
+//
+// skew는 아래로 갈수록 더 벌어지는 몫이다. 통째로 같은 만큼 밀면 오려 붙인
+// 종이처럼 보이는데, 조금씩 벌어지면 신호가 미끄러지는 중으로 읽힌다.
+void DrawSignalSlip(HDC dc, const RECT& area, int y, int height, int shift, int skew, COLORREF gap) {
+    if (height <= 0) return;
+    if (y < area.top) { height += y - area.top; y = area.top; }
+    if (y + height > area.bottom) height = area.bottom - y;
+    if (height <= 0) return;
+    int steps = height >= 9 ? 3 : height >= 6 ? 2 : 1;
+    for (int i = 0; i < steps; ++i) {
+        int top = y + height * i / steps, bottom = y + height * (i + 1) / steps;
+        SlipBand(dc, area, top, bottom - top, shift + skew * i / (steps > 1 ? steps - 1 : 1), gap);
+    }
+}
+
 // 바깥 테두리가 가장 진하고 안쪽으로 갈수록 배경색에 녹아든다.
 void DrawEdgeGlow(HDC dc, const RECT& area, COLORREF color, int level, int thickness) {
     if (level <= 0 || thickness <= 0) return;

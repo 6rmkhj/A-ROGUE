@@ -285,8 +285,19 @@ int ScreenShakeY();
 //   체력 2~CRITICAL_HP : 체력이 줄수록 띠가 두꺼워지고 짙어진다
 //   체력 1             : 버티는 시간만큼 띠가 더 두꺼워지고 짙어진다 (중앙은 그대로)
 //   체력 0             : 띠는 걷히고 사망 연출이 글자 단위로 이어받는다
+//
+// 세기는 세 갈래로 나눠 넘긴다. 하나로 합치면 "언제나 같은 세기로 지직거리는"
+// 평면이 된다. 바닥(Level)은 낮게 깔고, 심박(Pulse)이 규칙적으로 밀어 올리고,
+// 파열(Surge)이 불규칙하게 크게 무너뜨린다. 한 프레임 안에서는 셋 다 시간의
+// 함수라 값이 흔들리므로, 그리는 쪽은 프레임마다 한 번만 읽어 돌려 쓸 것.
 int AmbientNoiseLevel();   // 테두리 띠 밀도 (0 = 위독 연출 없음)
 int AmbientNoiseBand();    // 테두리 띠 두께(px)
+int AmbientNoisePulse();   // 심박 0~1000. 규칙적으로 두 번 뛰고 쉰다
+int AmbientNoiseSurge();   // 파열 0~1000. 불규칙하게 찾아온다 (평소 0)
+// 파열 순간에 띠 안에서 가로로 어긋나는 줄. 있으면 1과 함께 자리를 채워 준다.
+// skew는 아래로 갈수록 더 벌어지는 몫이라 그대로 DrawSignalSlip에 넘기면 된다.
+#define AMBIENT_SLIP_MAX 3
+int AmbientSlip(int index, int* y, int* height, int* shift, int* skew);
 void SyncLastGasp();       // 체력 1이 된 시각을 잡아 둔다 (띠가 자라는 기준)
 int NoiseFrameStep();
 

@@ -6382,11 +6382,27 @@ void PaintGame(HWND window) {
     // 연출이 글자 단위로 이어받는다 (화면 전체를 잡음으로 덮지 않는다).
     // 삽입 연출이 도는 동안에는 아직 지난 판의 상태가 남아 있다. 그 위독 노이즈를
     // 새 게임 화면 위에 얹으면 방금 버린 런의 흔적이 따라 들어온다.
+    // 세기는 시각의 함수라 부를 때마다 값이 달라진다. 예전에는 한 프레임 안에서
+    // AmbientNoiseLevel을 세 번 불러 띠와 테두리가 서로 다른 순간을 그렸다.
+    // 파열이 들어오면 그 차이가 눈에 보이므로 이제 한 번만 읽어 돌려 쓴다.
     int edge = gBootActive || gDeathActive ? 0 : AmbientNoiseLevel();
-    if (edge > 0) DrawEdgeStatic(canvas, canvasRect, NoiseFrameStep() + 5, edge, AmbientNoiseBand());
+    if (edge > 0) {
+        int surge = AmbientNoiseSurge();
+        DrawCriticalStatic(canvas, canvasRect, GetTickCount(), edge, AmbientNoiseBand(), surge);
+        // 파열 순간에만 띠 안의 가로 줄이 옆으로 밀린다. 덮는 것이 아니라 이미
+        // 그려진 화면이 어긋나므로 "신호가 끊겼다"가 한눈에 읽힌다. 잘린 윗선에는
+        // 잉걸이 한 줄 남아 어디서 끊겼는지가 보인다 - 이 한 줄이 없으면
+        // 밀린 자리가 그냥 어긋난 그림으로 보이고 사건으로 읽히지 않는다.
+        int slipY, slipH, slipShift, slipSkew;
+        for (int i = 0; i < AMBIENT_SLIP_MAX; ++i)
+            if (AmbientSlip(i, &slipY, &slipH, &slipShift, &slipSkew)) {
+                DrawSignalSlip(canvas, canvasRect, slipY, slipH, slipShift, slipSkew, RGB(24, 7, 9));
+                Fill(canvas, MakeRect(0, slipY, BASE_WIDTH, slipY + 1), RGB(146, 54, 42));
+            }
+    }
     int hitFlash = gBootActive ? 0 : PlayerHitFlash();
     if (hitFlash > 0) DrawEdgeGlow(canvas, canvasRect, PlayerHitBlocked() ? C_BLUE : C_RED, hitFlash, 12);
-    else if (!gDeathActive && !gBootActive && AmbientNoiseLevel() > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, AmbientNoiseLevel(), 8);
+    else if (edge > 0) DrawEdgeGlow(canvas, canvasRect, C_RED, edge, 8 + AmbientNoisePulse() * 7 / 1000);
 
     // 관리자 터미널은 연출을 포함해 무엇보다 위에 온다.
     // 진행도를 못 쓰고 있다는 사실은 어느 화면에서도 보여야 한다. 쓰기 권한이
