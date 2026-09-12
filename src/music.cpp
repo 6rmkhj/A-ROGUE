@@ -294,8 +294,9 @@ void MusicRender(MusicState* m, int32_t* out, int frames) {
             sample += Scale(Scale(tick, m->drum.hatEnv), g1) * 10 / 100;
             m->drum.hatEnv -= m->drum.hatEnv / 64; if (m->drum.hatEnv < 64) m->drum.hatEnv = 0;
         }
-        // 위독: 바닥에 잡음이 깔린다.
-        if (crit) sample += Scale(noise, crit) * 6 / 100;
+        // 위독: 바닥에 잡음이 깔린다. 백색소음 그대로 내면 "치이익" 하는 히스가 되므로
+        // 저역만 남겨 낮게 떠는 소리로 만든다. 세기는 옛 백색소음과 같은 수준이다.
+        if (crit) sample += Scale(LowPass(&m->critLp, noise, 30), crit) * 22 / 100;
 
         sample = (int)((int64_t)sample * m->driveFade / 65536 * m->sceneFade / 65536);
         out[i] += sample;

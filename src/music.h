@@ -29,6 +29,7 @@ struct MusicState {
     int ending;
     int pendingStep;     // 1이면 다음 샘플에서 현재 스텝의 음·타악기를 트리거한다
     int chordThird;      // 이번 마디 코드의 3도 (3 단조 / 4 장조). 코드 성부가 읽는다
+    int critLp;          // 위독할 때 깔리는 잡음의 저역통과 상태
 };
 
 void MusicInit(MusicState* music);
