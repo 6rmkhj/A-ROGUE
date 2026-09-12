@@ -2735,11 +2735,14 @@ int DebugWinDrive(GameState* game) {
     return 1;
 }
 
-// 관리자 터미널 전용. 남은 일반전과 그 보상을 건너뛰고 지금 층의 보스 구역으로
-// 바로 들어간다. 층·볼륨·덱·체력은 그대로이므로 보스 조우 연출과 기믹을 손으로
-// 확인할 때 쓴다. 진행 중인 볼륨이 없으면 판을 건드리지 않고 0을 반환한다.
-int DebugJumpToBoss(GameState* game) {
+// 관리자 터미널 전용. 남은 일반전과 그 보상을 건너뛰고 보스 구역으로 바로
+// 들어간다. floor가 0 이상이면 그 층으로 갈아 끼우고(층마다 보스와 기믹이
+// 다르므로), 음수면 지금 층 그대로다. 볼륨·덱·체력은 건드리지 않는다.
+// 진행 중인 볼륨이 없으면 판을 그대로 두고 0을 반환한다.
+int DebugJumpToBoss(GameState* game, int floor) {
     if (!game || !InsideVolume(game)) return 0;
+    if (floor >= DRIVE_BOSS_COUNT) return 0;
+    if (floor >= 0) game->floor = floor;
     game->encounter = 2;
     ClearDirectoryCombatEffects(game);
     return StartCombat(game);

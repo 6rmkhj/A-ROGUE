@@ -521,21 +521,22 @@ static void FinishTurnTrace() {
 // ---- 기믹 발동 연출 -------------------------------------------------------
 static int gFxActive, gFxKind, gFxA, gFxB;
 static DWORD gFxStart, gFxShakeAt;
-static int gFxShakePeak;
+static int gFxShakePeak, gFxShakeMs, gFxCue;
 
 int GimmickFxKind() { return gFxActive ? gFxKind : 0; }
 // 히트스톱. 착지 시점에 시간을 잠깐 얼린다. 모든 트랙이 이 값을 읽으므로
 // 여기 한 곳에서 18종 전부가 함께 멈춘다. 총 벽시계 길이는 그만큼 늘어난다.
 #define FX_HITSTOP_MS 110
-static int gFxImpactPlayed;
+static int gFxImpactPlayed, gFxHitstopMs = FX_HITSTOP_MS;
 int GimmickFxElapsed() {
     if (!gFxActive) return 0;
     int raw = (int)(GetTickCount() - gFxStart);
     int at = GimmickFxImpactAt(gFxKind, gFxB);
     if (at <= 0 || raw < at) return raw;
-    if (raw < at + FX_HITSTOP_MS) return at;
-    return raw - FX_HITSTOP_MS;
+    if (raw < at + gFxHitstopMs) return at;
+    return raw - gFxHitstopMs;
 }
+int GimmickFxRawElapsed() { return gFxActive ? (int)(GetTickCount() - gFxStart) : 0; }
 int GimmickFxA() { return gFxA; }
 int GimmickFxB() { return gFxB; }
 
@@ -556,8 +557,15 @@ static void BeginGimmickFx(int kind, int a, int b) {
     int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || kind == GIMMICK_SIGNATURE || kind == GIMMICK_SEVENTEENTH
         || (kind == GIMMICK_TIMEOUT && !b) || (kind == GIMMICK_BLUE_SCREEN && b == SHRED_FX_RESTORE);
     gFxShakeAt = 0;
+    gFxCue = 0;
     gFxShakePeak = perTurn ? 0 : (kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
                 || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5);
+    // 파쇄만 칸 하나가 실제로 부서지는 사건이라 더 크게 치고 더 오래 잦아든다.
+    gFxShakeMs = SHAKE_MS;
+    gFxHitstopMs = FX_HITSTOP_MS;
+    if (kind == GIMMICK_BLUE_SCREEN && b != SHRED_FX_RESTORE) {
+        gFxShakePeak = 24; gFxShakeMs = 700; gFxHitstopMs = 150;   // 더 깊게 얼리고 더 크게 흔든다
+    }
     SetTimer(gWindow, 8, FX_TIMER_MS, 0);
 }
 
@@ -570,9 +578,34 @@ static void FinishGimmickFx() {
 
 static int GimmickShakeAmplitude() {
     if (!gFxActive || gFxShakePeak <= 0 || !gFxShakeAt) return 0;
+    int span = gFxShakeMs > 0 ? gFxShakeMs : SHAKE_MS;
     int since = (int)(GetTickCount() - gFxShakeAt);
-    if (since < 0 || since >= SHAKE_MS) return 0;
-    return FxScale(gFxShakePeak * (SHAKE_MS - since) / SHAKE_MS);
+    if (since < 0 || since >= span) return 0;
+    int left = 1000 - since * 1000 / span;
+    // 짧은 흔들림은 곧게 잦아들고, 긴 꼬리는 제곱으로 — 한 번 크게 치고 빠르게 가라앉는다.
+    if (span > SHAKE_MS) left = left * left / 1000;
+    return FxScale(gFxShakePeak * left / 1000);
+}
+
+// 파쇄·복구의 소리 박자. 사망 연출의 DeathCue와 같은 방식으로, 연출 시각에 맞춰
+// 한 번씩만 운다. 한 방으로 끝내지 않고 내려찍기 → 깨짐 → 조각 → 구멍으로 쌓는다.
+static int ShredCue(int index, int* sfx, int* pitch) {
+    *pitch = 0;
+    if (gFxB == SHRED_FX_RESTORE) {
+        if (index == 0) { *sfx = SFX_REPAIR; return 620; }                    // 주사선이 칸을 다시 찍는다
+        if (index == 1) { *sfx = SFX_CONFIRM; return 1350; }                  // 복구 완료
+        return -1;
+    }
+    if (index == 0) { *sfx = SFX_CHARGE; *pitch = 1; return 220; }            // 조준이 붙는다
+    if (index == 1) { *sfx = SFX_HEAVY_HIT; return SHRED_IMPACT; }            // 내려찍는다
+    if (index == 2) { *sfx = SFX_CRASH; return SHRED_IMPACT + 40; }           // 칸이 깨진다
+    index -= 3;
+    if (index < 4) {                                                          // 조각이 하나씩 떨어진다
+        *sfx = SFX_DIE_LOCK; *pitch = 5 - index;
+        return SHRED_IMPACT + 260 + index * 210;
+    }
+    if (index == 4) { *sfx = SFX_FX_QUARANTINE; return SHRED_IMPACT + 1280; } // 구멍만 남는다
+    return -1;
 }
 
 static void BeginTurnTrace(int floor, int encounter, int pendingClear) {
@@ -1618,10 +1651,22 @@ static void TermRun() {
     // 보스 조우 연출과 기믹은 층마다 한 번뿐이라 손으로 보려면 두 판을 이겨야 한다.
     if (lstrcmpW(cmd, L"boss") == 0) {
         if (TermBusy()) { TermPrint(L"  연출이 끝난 뒤에 다시 실행하십시오."); return; }
-        if (!DebugJumpToBoss(&gGame)) { TermPrint(L"  볼륨 안에서만 됩니다."); return; }
+        if (!DebugJumpToBoss(&gGame, -1)) { TermPrint(L"  볼륨 안에서만 됩니다."); return; }
         gTermOpen = 0;
         SyncRollAnimation();
         TermPrint(L"  보스 구역으로 이동했습니다.");
+        return;
+    }
+    // 층마다 보스와 기믹이 다르다. 3층 연출 하나를 보려고 두 층을 이길 필요가 없게 한다.
+    if (lstrcmpW(cmd, L"enter") == 0) {
+        if (TermBusy()) { TermPrint(L"  연출이 끝난 뒤에 다시 실행하십시오."); return; }
+        if (!hasArg || arg < 1 || arg > DRIVE_BOSS_COUNT) { TermPrint(L"  enter 1~3 (층 번호)"); return; }
+        if (!DebugJumpToBoss(&gGame, arg - 1)) { TermPrint(L"  볼륨 안에서만 됩니다."); return; }
+        gTermOpen = 0;
+        SyncRollAnimation();
+        wchar_t msg[TERM_LOG_CAP];
+        wsprintfW(msg, L"  %d층 보스 구역으로 이동했습니다.", arg);
+        TermPrint(msg);
         return;
     }
     if (lstrcmpW(cmd, L"hp") == 0) {
@@ -1639,6 +1684,7 @@ static void TermRun() {
         TermPrint(L"  win       현재 전투를 즉시 승리 처리한다");
         TermPrint(L"  winwin    현재 드라이브를 즉시 클리어 처리한다");
         TermPrint(L"  boss      지금 층의 보스 구역으로 바로 이동한다");
+        TermPrint(L"  enter n   n층(1~3)의 보스 구역으로 바로 이동한다");
         TermPrint(L"  hp [n]    체력을 n으로 (생략하면 최대치)");
         TermPrint(L"  perf      페인트 시간과 오디오 언더런");
         TermPrint(L"  clear     기록 지우기");
@@ -1876,6 +1922,13 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
                 gFxImpactPlayed = 1;
                 gFxShakeAt = GetTickCount();
                 if (gFxShakePeak > 0) PlaySfxPitched(SFX_PLAYER_HIT, gFxShakePeak >= 9 ? 0 : 3);
+            }
+            if (gFxKind == GIMMICK_BLUE_SCREEN) {
+                int sfx = 0, pitch = 0, cueAt;
+                while ((cueAt = ShredCue(gFxCue, &sfx, &pitch)) >= 0 && GimmickFxElapsed() >= cueAt) {
+                    PlaySfxPitched(sfx, pitch);
+                    ++gFxCue;
+                }
             }
             if (GimmickFxElapsed() >= GimmickFxDuration(gFxKind, gFxB)) FinishGimmickFx();
             else InvalidateRect(window, 0, FALSE);

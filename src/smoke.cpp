@@ -2166,7 +2166,30 @@ static int CheckDebugWinDrive() {
     if (fin.phase != PHASE_ENDING_CHOICE) return Fail("the folded final volume must still open the final command");
     if (CommittedEnding(&fin) >= 0) return Fail("folding must not commit an ending on its own");
 
+    // enter n: 층을 갈아 끼우고 그 층의 보스 구역으로 바로 들어간다.
+    GameState skip; NewRun(&skip, 0xD1000200u, 0);
+    GameState untouchedSkip = skip;
+    if (DebugJumpToBoss(&skip, 0)) return Fail("enter must refuse before a volume is mounted");
+    if (memcmp(&skip, &untouchedSkip, sizeof(skip))) return Fail("a refused enter must not touch the board");
+    skip.driveChoices[0] = 0; SelectDrive(&skip, 0);
+    if (DebugJumpToBoss(&skip, DRIVE_BOSS_COUNT)) return Fail("enter must refuse a floor past the last one");
+    for (int floor = 0; floor < DRIVE_BOSS_COUNT; ++floor) {
+        GameState g; NewRun(&g, 0xD1000201u + (uint32_t)floor, 0);
+        g.driveChoices[0] = 0; SelectDrive(&g, 0);
+        if (!DebugJumpToBoss(&g, floor)) return Fail("enter must reach the requested floor");
+        if (g.floor != floor || g.encounter != 2) return Fail("enter must land on that floor's boss encounter");
+        if (g.phase != PHASE_COMBAT) return Fail("enter must start the boss fight");
+        if (g.enemies[0].kind != DRIVE_BOSSES[0][floor]) return Fail("enter must spawn that floor's boss");
+    }
+    // 인자 없는 boss는 지금 층을 그대로 둔다.
+    GameState here; NewRun(&here, 0xD1000300u, 0);
+    here.driveChoices[0] = 0; SelectDrive(&here, 0);
+    here.floor = 1;
+    if (!DebugJumpToBoss(&here, -1)) return Fail("boss must reach the current floor's boss");
+    if (here.floor != 1) return Fail("boss without a floor must leave the floor alone");
+
     printf("PASS: terminal winwin folds six volumes and the final one through the normal clear path\n");
+    printf("PASS: terminal enter reaches every floor's boss and refuses outside a volume\n");
     return 0;
 }
 
