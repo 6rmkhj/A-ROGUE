@@ -1613,7 +1613,7 @@ static void HandleClick(int x, int y) {
             SetUiLanguage(i);
             // 번역 표가 없으면 English 요청은 거부된다. 창 제목은 실제로 적용된
             // 언어를 따라가야 하므로 요청이 아니라 결과를 읽는다.
-            SetWindowTextW(gWindow, UiLanguage() == LANGUAGE_ENGLISH ? L"A:\\ROGUE · 1.44MB · English" : L"A:\\ROGUE · 1.44MB");
+            SetWindowTextW(gWindow, UiLanguage() == LANGUAGE_ENGLISH ? L"A:\\ROGUE · English" : L"A:\\ROGUE");
             PlaySfx(SFX_UI_CLICK); InvalidateRect(gWindow, 0, FALSE); return;
         }
         for (int i = 0; i < SETTINGS_SCALE_COUNT; ++i) if (Inside(ScaleOptionRect(i), x, y)) { ApplyWindowedScale(SCALE_OPTIONS[i]); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -2129,11 +2129,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
     RECT desired = {0, 0, BASE_WIDTH, BASE_HEIGHT}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;
     int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-    gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE · 1.44MB", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
+    gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
     if (!gWindow) return 2; ShowWindow(gWindow, showCommand); UpdateWindow(gWindow);
     // 배율·전체화면은 창이 있어야 적용된다. 창 제목도 실제로 적용된 언어를 따른다.
     ApplySettings(1);
-    if (UiLanguage() == LANGUAGE_ENGLISH) SetWindowTextW(gWindow, L"A:\\ROGUE · 1.44MB · English");
+    if (UiLanguage() == LANGUAGE_ENGLISH) SetWindowTextW(gWindow, L"A:\\ROGUE · English");
     MSG message; while (GetMessageW(&message, 0, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
     timeEndPeriod(1);
     return (int)message.wParam;

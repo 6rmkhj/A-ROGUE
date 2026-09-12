@@ -420,7 +420,7 @@ static void DrawTitle(HDC dc, int width, int height) {
         Fill(dc, MakeRect(hx - 1, 432, hx + 2, 440), MixColor(C_BG, C_GREEN, FxScale(20)));
     }
 
-    const wchar_t* sign = L"RECOVERY SYSTEM  /  1.44 MB  /  BUILD 17";
+    const wchar_t* sign = L"RECOVERY SYSTEM  /  BUILD 17";
     TextRect(dc, MakeRect(0, 187, width, 212), sign, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     // 커서는 서명 오른쪽에 따로 찍는다. 문자열에 붙이면 가운데 정렬이라 깜빡일
     // 때마다 줄 전체가 좌우로 흔들린다.
@@ -2621,7 +2621,7 @@ static void DrawBootFloppy(HDC dc, const BootDisk& disk, int back, int shine) {
         Panel(dc, disk.label, RGB(9, 14, 19), RGB(192, 210, 222));
         if (w >= 170) {
             Text(dc, disk.label.left + 2, disk.label.bottom + 10, L"A:\\ROGUE", C_GREEN, gFontSmall);
-            Text(dc, disk.label.left + 2, disk.label.bottom + 32, L"1.44 MB  ·  2HD", C_DIM, gFontSmall);
+            Text(dc, disk.label.left + 2, disk.label.bottom + 32, L"2HD", C_DIM, gFontSmall);
         }
     }
     // 반사광. 몸통 안에서만 지나가도록 잘라 낸다.

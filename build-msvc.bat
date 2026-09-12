@@ -45,13 +45,9 @@ if errorlevel 1 (popd & exit /b 1)
 for %%A in (AROGUE.exe) do set "EXESIZE=%%~zA"
 for %%A in (translations.tsv) do set "TRANSLATIONSIZE=%%~zA"
 set /a PACKAGESIZE=EXESIZE+TRANSLATIONSIZE
-set /a PERCENT=PACKAGESIZE*100/1474560
-echo [4/4] Package: %PACKAGESIZE% bytes ^(EXE %EXESIZE% + translations %TRANSLATIONSIZE%, %PERCENT%%% of 1,474,560 bytes^)
-if %PACKAGESIZE% GTR 1474560 (
-    echo [ERROR] AROGUE.exe and translations.tsv exceed the 1,474,560 byte floppy limit.
-    popd
-    exit /b 1
-)
+rem The 1,474,560 byte floppy limit no longer fails the build. Still report the
+rem size: knowing what ships is useful even when nothing depends on it.
+echo [4/4] Package: %PACKAGESIZE% bytes ^(EXE %EXESIZE% + translations %TRANSLATIONSIZE%^)
 popd
 exit /b 0
 
