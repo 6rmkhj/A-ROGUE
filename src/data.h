@@ -189,7 +189,7 @@ enum BossGimmickKind {
     GIMMICK_NONE = 0,        // 레거시 보스 전용 센티널
     GIMMICK_ACCESS_DENIED,   // 짝수 턴마다 예고된 슬롯 1개 잠금
     GIMMICK_KERNEL_PANIC,    // 직전 턴 최고 출력 슬롯이 다음 턴 잠김
-    GIMMICK_BLUE_SCREEN,     // 3턴마다 증폭+연쇄 동시 잠금
+    GIMMICK_BLUE_SCREEN,     // 파쇄: 3턴마다 칸 하나를 부숴 2턴 동안 없앤다
     GIMMICK_RESTORE_POINT,   // 3턴 창 요구 피해 미달 시 체크포인트 복원
     GIMMICK_TAPE_LOOP,       // 매턴 요구 피해 미달 시 되감기 회복
     GIMMICK_MASTER_BACKUP,   // 체력 40% 미만 시 1회 대복원
@@ -228,7 +228,7 @@ static const BossGimmickInfo BOSS_GIMMICK_INFO[GIMMICK_COUNT] = {
     {FAM_NONE, L"-", L"-", L"-", L"-", 0, 0, 0},
     {FAM_LOCK,       L"섹터 잠금",     L"짝수 턴마다 예고된 슬롯 1개가 잠깁니다.",                     L"예고를 보고 남은 슬롯 배치를 계획하십시오.", L"ACCESS DENIED",          2, 0, 0},
     {FAM_LOCK,       L"패닉 잠금",     L"직전 턴 출력이 가장 컸던 슬롯이 다음 턴 잠깁니다.",           L"매턴 주력 슬롯을 바꿔 잠금을 분산하십시오.", L"KERNEL PANIC",          1, 0, 0},
-    {FAM_LOCK,       L"시스템 정지",   L"3턴마다 증폭과 연쇄 슬롯이 함께 잠깁니다.",                   L"정지 턴에는 공격·방어에만 집중하십시오.", L"FATAL EXCEPTION",             3, 0, 0},
+    {FAM_LOCK,       L"파쇄",         L"3턴마다 칸 하나를 부숴 2턴 동안 없앱니다. 놓인 주사위는 돌아옵니다.", L"예고 턴에 보스 피해 12+로 빗나가게 하거나 그 칸을 비우십시오.", L"SLOT SHREDDED",    3, 12, 2},
     {FAM_RESTORE,    L"복원 지점",     L"3턴 창의 누적 피해가 요구치 미달이면 체력을 되감습니다.",     L"창이 닫히기 전에 요구 피해를 채우십시오.", L"RESTORE POINT",            3, 12, 10},
     {FAM_RESTORE,    L"테이프 루프",   L"한 턴 피해가 요구치 미달이면 턴말에 체력을 되감습니다.",      L"매턴 요구치 이상을 꾸준히 넣으십시오.", L"REWIND",               1, 7, 5},
     {FAM_RESTORE,    L"마스터 백업",   L"체력 40% 미만이 되면 1회 백업 지점으로 복원합니다.",         L"임계 근처에서 한 번에 크게 몰아치십시오.", L"MASTER BACKUP",            40, 60, 14},

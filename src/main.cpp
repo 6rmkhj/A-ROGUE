@@ -552,7 +552,9 @@ static void BeginGimmickFx(int kind, int a, int b) {
     PlaySfxPitched(FAMILY_SFX[family], depth == 0 ? 2 : depth == 1 ? 1 : 0);
     gFxImpactPlayed = 0;
     // 흔들림은 임팩트(히트스톱) 시점에 건다. 매턴 반복되는 것들은 흔들지 않는다.
-    int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || kind == GIMMICK_SIGNATURE || kind == GIMMICK_SEVENTEENTH || (kind == GIMMICK_TIMEOUT && !b);
+    // 파쇄 복구는 벌이 아니라 되찾는 장면이라 흔들지 않는다 (NO.MEDIA 인식 턴과 같다).
+    int perTurn = kind == GIMMICK_TAPE_LOOP || kind == GIMMICK_NO_MEDIA || kind == GIMMICK_SIGNATURE || kind == GIMMICK_SEVENTEENTH
+        || (kind == GIMMICK_TIMEOUT && !b) || (kind == GIMMICK_BLUE_SCREEN && b == SHRED_FX_RESTORE);
     gFxShakeAt = 0;
     gFxShakePeak = perTurn ? 0 : (kind == GIMMICK_BLUE_SCREEN || kind == GIMMICK_ZERO_DAY
                 || kind == GIMMICK_MASTER_BACKUP || kind == GIMMICK_OUT_OF_MEMORY ? 9 : 5);
