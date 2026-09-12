@@ -133,6 +133,11 @@ struct BossRuntime {
     uint8_t empowered;                   // 이번 턴 강화 공격 발동 (R:\ 압력)
     uint8_t lockedSlot[SLOT_COUNT];      // 이번 턴 잠긴 슬롯
     uint8_t nextLockedSlot[SLOT_COUNT];  // 다음 턴 잠금 예고
+    // C:\ 3층 파쇄. 잠금과 달리 턴을 넘겨 유지되므로 턴 시작마다 다시 세우지 않고
+    // 칸마다 남은 턴 수를 들고 있다가 0이 되는 턴 시작에 복구한다.
+    uint8_t shredLeft[SLOT_COUNT];       // 그 칸이 부서진 채로 남아 있는 턴 수
+    int8_t shredNext;                    // 다음 실행에 부술 칸 (-1 없음)
+    uint8_t shredCycle;                  // 방어→증폭→연쇄 순환 위치
     int8_t offlineDie;                   // 이번 턴 오프라인 주사위 (-1 없음)
     int8_t nextOfflineDie;               // 다음 턴 오프라인 예고 (-1 없음)
     int8_t stolenValue;                  // ZERO.DAY가 빼앗아 쓰는 면 출력 (0 = 없음)
@@ -402,4 +407,11 @@ int IsEnemyScanned(const GameState* game, int kind);
 // ---- 보스 기믹 상태 질의 (UI·휴리스틱 공용) --------------------------------
 int SlotLockedThisTurn(const GameState* game, int slot);
 int SlotLockedNextTurn(const GameState* game, int slot);
+// 파쇄. 남은 턴이 있으면 그 칸은 없는 칸이고, 예고된 칸은 아직 배치를 받지만
+// 실행을 누르는 순간 부서진다 (놓인 주사위는 미배치로 돌아온다).
+int SlotShredTurnsLeft(const GameState* game, int slot);
+int SlotShredPending(const GameState* game, int slot);
+// 파쇄 연출 기록의 fxB 규약: 0 이상이면 되돌아간 주사위 번호, -1이면 빈 칸을
+// 부순 것, SHRED_FX_RESTORE면 복구 연출이다.
+#define SHRED_FX_RESTORE (-2)
 int ResolveOrderReversed(const GameState* game);

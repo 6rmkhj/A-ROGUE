@@ -1008,17 +1008,60 @@ static int CheckLockGimmicks() {
     if (!AttackTurn(&k)) return Fail("kernel panic turn 1 must resolve");
     if (!SlotLockedThisTurn(&k, SLOT_ATTACK)) return Fail("kernel panic must lock last turn's best slot");
 
-    // BLUE.SCREEN: 3턴마다 증폭+연쇄 동시 잠금
+    // BLUE.SCREEN 파쇄: 3턴마다 칸 하나를 실행 순간에 부수고 2턴 뒤 복구한다.
     GameState s; SetupBossFight(&s, 0, 2, 0xC0C0C003u, 1);
     if (s.boss.gimmick != GIMMICK_BLUE_SCREEN) return Fail("floor3 C boss must use BLUE.SCREEN");
     s.enemies[0].hp = 999; s.enemies[0].maxHp = 999;
-    if (!PassTurn(&s)) return Fail("blue screen turn 1 must pass");
-    if (!SlotLockedNextTurn(&s, SLOT_AMPLIFY) || !SlotLockedNextTurn(&s, SLOT_CHAIN)) return Fail("blue screen must announce the double lock");
-    if (!PassTurn(&s)) return Fail("blue screen turn 2 must pass");
-    if (!SlotLockedThisTurn(&s, SLOT_AMPLIFY) || !SlotLockedThisTurn(&s, SLOT_CHAIN)) return Fail("blue screen must lock amplify and chain on turn 3");
-    if (SlotLockedThisTurn(&s, SLOT_ATTACK) || SlotLockedThisTurn(&s, SLOT_DEFEND)) return Fail("blue screen must leave attack and defend open");
-    if (!PassTurn(&s)) return Fail("blue screen turn 3 must pass");
-    if (SlotLockedThisTurn(&s, SLOT_AMPLIFY) || SlotLockedThisTurn(&s, SLOT_CHAIN)) return Fail("blue screen locks must release on turn 4");
+    if (s.boss.shredNext >= 0) return Fail("turn 1 must carry no shred warning");
+    if (!PassTurn(&s)) return Fail("shred turn 1 must pass");
+    // 예고 턴: 대상 칸이 예고되지만 아직 배치를 받는다.
+    if (s.boss.shredNext != SLOT_DEFEND) return Fail("shred must announce defend first");
+    if (!SlotLockedNextTurn(&s, SLOT_DEFEND)) return Fail("announced shred must show as a next-turn lock");
+    if (SlotLockedThisTurn(&s, SLOT_DEFEND)) return Fail("the announce turn must still accept placement");
+    if (!PassTurn(&s)) return Fail("shred turn 2 must pass");
+    // 발동 턴: 예고와 같은 칸이고, 실행 전에는 아직 열려 있다.
+    if (!SlotShredPending(&s, SLOT_DEFEND)) return Fail("announced slot must be the one that fires");
+    if (SlotLockedThisTurn(&s, SLOT_DEFEND)) return Fail("the shred slot must stay open until execute");
+    if (!AssignDieToSlot(&s, 1, SLOT_DEFEND)) return Fail("the doomed slot must still accept a die");
+    if (!AssignDieToSlot(&s, 0, SLOT_ATTACK)) return Fail("attack must stay open during a shred");
+    s.playerHp = 999;
+    EndTurn(&s);
+    if (s.dice[1].assignedSlot != -1) return Fail("the shredded slot must return its die unassigned");
+    if (s.dice[1].faces[s.dice[1].rolledFace].kind == FACE_EMPTY) return Fail("the returned die must not be lost");
+    if (s.lastTurnSlotOutput[SLOT_DEFEND] != 0) return Fail("a shredded slot must output nothing");
+    if (SlotShredTurnsLeft(&s, SLOT_DEFEND) <= 0) return Fail("the shredded slot must stay gone for more than this turn");
+    if (!SlotLockedThisTurn(&s, SLOT_DEFEND)) return Fail("the shredded slot must reject placement");
+    if (AssignDieToSlot(&s, 1, SLOT_DEFEND)) return Fail("a shredded slot must refuse a die");
+    if (SlotLockedThisTurn(&s, SLOT_ATTACK)) return Fail("shred must never touch the attack slot");
+    if (s.boss.shredNext >= 0) return Fail("no new shred may be announced while one is running");
+    if (!TraceHealthy(&s)) return Fail("shred turn must not overflow the trace");
+    if (!PassTurn(&s)) return Fail("the turn after a shred must pass");
+    if (SlotLockedThisTurn(&s, SLOT_DEFEND)) return Fail("the shredded slot must come back two turns later");
+    if (SlotShredTurnsLeft(&s, SLOT_DEFEND)) return Fail("recovery must clear the remaining turn count");
+    if (s.boss.shredNext != SLOT_AMPLIFY) return Fail("the recovery turn must announce the next slot in the cycle");
+
+    // 12+ 회피: 예고 턴에 임계 피해를 넣으면 내려찍기가 빗나간다.
+    GameState m; SetupBossFight(&m, 0, 2, 0xC0C0C004u, 1);
+    m.enemies[0].hp = 999; m.enemies[0].maxHp = 999;
+    if (!PassTurn(&m)) return Fail("miss check turn 1 must pass");
+    if (m.boss.shredNext != SLOT_DEFEND) return Fail("miss check must reach the announce turn");
+    SetAllFaces(&m, FACE_NUMBER, 20);
+    if (!AttackTurn(&m)) return Fail("miss check burst turn must resolve");
+    SetAllFaces(&m, FACE_NUMBER, 1);
+    if (m.boss.shredNext >= 0) return Fail("clearing the threshold must cancel the announced shred");
+    if (SlotShredPending(&m, SLOT_DEFEND)) return Fail("a cancelled shred must not fire");
+    if (!PassTurn(&m)) return Fail("cancelled shred turn must pass");
+    if (SlotLockedThisTurn(&m, SLOT_DEFEND)) return Fail("a cancelled shred must leave the slot whole");
+
+    // 전투 종료 정리: 부서진 칸은 다음 전투로 넘어가지 않는다.
+    GameState c; SetupBossFight(&c, 0, 2, 0xC0C0C005u, 1);
+    c.boss.shredLeft[SLOT_CHAIN] = 2;
+    c.boss.shredNext = SLOT_AMPLIFY;
+    c.enemies[0].hp = 1; c.enemies[0].maxHp = 1; c.enemies[0].block = 0;
+    if (!AttackTurn(&c)) return Fail("shred cleanup fight must resolve");
+    if (c.phase == PHASE_COMBAT) return Fail("shred cleanup fight must end");
+    for (int i = 0; i < SLOT_COUNT; ++i) if (c.boss.shredLeft[i]) return Fail("combat end must rebuild every shredded slot");
+    if (c.boss.shredNext >= 0) return Fail("combat end must clear the shred warning");
     return 0;
 }
 

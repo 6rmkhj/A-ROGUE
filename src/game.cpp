@@ -323,6 +323,28 @@ static const BossGimmickInfo* GimmickInfo(const GameState* game) {
     return &BOSS_GIMMICK_INFO[gimmick];
 }
 
+// ---- C:\ 3층 파쇄 --------------------------------------------------------
+// 잠금 계열이지만 턴을 넘겨 유지되는 유일한 기믹이다. 예고 턴에는 아직 배치를
+// 받고, 실행을 누르는 순간 플레이어 해결보다 먼저 칸이 부서진다.
+static const int SHRED_ORDER[3] = {SLOT_DEFEND, SLOT_AMPLIFY, SLOT_CHAIN};
+
+static int ShredFiresThisTurn(const GameState* game) {
+    const BossRuntime* boss = &game->boss;
+    if (boss->gimmick != GIMMICK_BLUE_SCREEN || boss->shredNext < 0) return 0;
+    int period = BOSS_GIMMICK_INFO[GIMMICK_BLUE_SCREEN].p1;
+    return period > 0 && game->turn % period == 0;
+}
+
+int SlotShredTurnsLeft(const GameState* game, int slot) {
+    if (!game || slot < 0 || slot >= SLOT_COUNT) return 0;
+    return game->boss.shredLeft[slot];
+}
+
+int SlotShredPending(const GameState* game, int slot) {
+    if (!game || slot < 0 || slot >= SLOT_COUNT) return 0;
+    return ShredFiresThisTurn(game) && game->boss.shredNext == slot;
+}
+
 static void ClearGimmickAnnouncements(BossRuntime* boss) {
     for (int i = 0; i < SLOT_COUNT; ++i) { boss->lockedSlot[i] = 0; boss->nextLockedSlot[i] = 0; }
     boss->reversed = 0;
@@ -351,6 +373,7 @@ static void GimmickCombatEnd(GameState* game) {
     game->boss.bestSlotLastTurn = -1;
     game->boss.nextTargetDie = -1;
     game->boss.nextTargetFace = -1;
+    game->boss.shredNext = -1;
     for (int d = 0; d < 3; ++d) game->driveRule.previousSlot[d] = -1;
     game->driveRule.boostedDie = -1;
     game->driveRule.boostedSlot = -1;
@@ -367,6 +390,7 @@ static void GimmickInitCombat(GameState* game) {
     boss->bestSlotLastTurn = -1;
     boss->nextTargetDie = -1;
     boss->nextTargetFace = -1;
+    boss->shredNext = -1;
     if (!enemy) return;
     const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
     boss->gimmick = info->gimmick;
@@ -498,13 +522,31 @@ static void GimmickTurnBegin(GameState* game) {
             RecordFx(game, GIMMICK_KERNEL_PANIC, boss->bestSlotLastTurn, -1);
         }
         break;
-    case GIMMICK_BLUE_SCREEN:
-        if (turn >= 3 && turn % 3 == 0) {
-            boss->lockedSlot[SLOT_AMPLIFY] = 1; boss->lockedSlot[SLOT_CHAIN] = 1;
-            RecordFx(game, GIMMICK_BLUE_SCREEN, SLOT_AMPLIFY, SLOT_CHAIN);
+    case GIMMICK_BLUE_SCREEN: {
+        const BossGimmickInfo* gi = GimmickInfo(game);
+        // 복구가 먼저다. 남은 턴이 0이 되는 칸은 이 턴 시작에 돌아오고, 그래야
+        // 같은 턴에 다음 파쇄를 예고할 수 있다 (파쇄 중에는 예고하지 않는다).
+        int broken = 0;
+        for (int s = 0; s < SLOT_COUNT; ++s) {
+            if (!boss->shredLeft[s]) continue;
+            if (--boss->shredLeft[s] == 0) {
+                RecordFx(game, GIMMICK_BLUE_SCREEN, s, SHRED_FX_RESTORE);
+                PushLog(game, L"[17] 복구 프로그램 가동.");
+                wsprintfW(buffer, L"복구 완료: %s 칸이 다시 조립되었습니다.", SLOT_NAMES[s]);
+                PushLog(game, buffer);
+            } else { boss->lockedSlot[s] = 1; broken = 1; }
         }
-        if ((turn + 1) >= 3 && (turn + 1) % 3 == 0) { boss->nextLockedSlot[SLOT_AMPLIFY] = 1; boss->nextLockedSlot[SLOT_CHAIN] = 1; }
+        if (!broken && boss->shredNext < 0 && (turn + 1) % gi->p1 == 0) {
+            boss->shredNext = (int8_t)SHRED_ORDER[boss->shredCycle % 3];
+            boss->shredCycle = (uint8_t)((boss->shredCycle + 1) % 3);
+        }
+        if (ShredFiresThisTurn(game)) {
+            // 이번 실행에 부서진다. 잠그지는 않는다 — 배치는 받되 실행 순간 되돌린다.
+            wsprintfW(buffer, L"파쇄 경고: %s 칸이 이번 실행에 부서집니다.", SLOT_NAMES[boss->shredNext]);
+            PushLog(game, buffer);
+        } else if (boss->shredNext >= 0) boss->nextLockedSlot[boss->shredNext] = 1;
         break;
+    }
     case GIMMICK_AUTOPLAY:
     case GIMMICK_UNSAFE_EJECT:
     case GIMMICK_NO_MEDIA:
@@ -779,6 +821,25 @@ static void MobTraitTurnEnd(GameState* game) {
     }
 }
 
+// 파쇄만은 턴 시작이 아니라 실행을 누르는 순간, 플레이어 해결보다 먼저 발동한다.
+// 예고를 무시하고 올려 둔 주사위는 미배치로 돌아온다 — 그 턴엔 쓰이지 않지만 잃지 않는다.
+static void GimmickShredExecute(GameState* game) {
+    BossRuntime* boss = &game->boss;
+    if (!ShredFiresThisTurn(game) || !BossEnemy(game)) return;
+    int slot = boss->shredNext;
+    boss->shredNext = -1;
+    boss->shredLeft[slot] = (uint8_t)GimmickInfo(game)->p3;
+    boss->lockedSlot[slot] = 1;
+    int freed = -1;
+    for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot == slot) { game->dice[d].assignedSlot = -1; freed = d; }
+    RecordFx(game, GIMMICK_BLUE_SCREEN, slot, freed);
+    wchar_t trace[96];
+    if (freed >= 0) wsprintfW(trace, L"[파쇄] %s 칸 파괴 · 주사위 %d 미배치로 복귀 (잃지 않음)", SLOT_NAMES[slot], freed + 1);
+    else wsprintfW(trace, L"[파쇄] %s 칸 파괴 · 되돌릴 주사위 없음", SLOT_NAMES[slot]);
+    PushTurnTrace(game, trace);
+    PushLog(game, trace);
+}
+
 static void GimmickTurnEnd(GameState* game) {
     // 임시 격리 타이머는 보스 생사와 무관하게 턴이 지나면 줄어든다.
     for (int d = 0; d < 3; ++d) {
@@ -803,6 +864,14 @@ static void GimmickTurnEnd(GameState* game) {
     case GIMMICK_SEVENTEENTH:
         boss->fxHpBefore = boss->fxHpAfter = (int16_t)enemy->hp;
         RecordFx(game, boss->gimmick, boss->copiedPower, -1);
+        break;
+    case GIMMICK_BLUE_SCREEN:
+        // 예고 턴에 체력 피해 임계를 넘기면 내려찍기가 빗나간다 (LAST.WRITE와 같은 기준).
+        if (boss->shredNext >= 0 && turn % gi->p1 != 0 && boss->damageThisTurn >= gi->p2) {
+            wsprintfW(buffer, L"파쇄 빗나감: 피해 %d로 %s 칸을 지켜 냈습니다.", boss->damageThisTurn, SLOT_NAMES[boss->shredNext]);
+            PushLog(game, buffer);
+            boss->shredNext = -1;
+        }
         break;
     case GIMMICK_LAST_WRITE:
         if (boss->nextSealSlot < 0) break;
@@ -2687,6 +2756,7 @@ void EndTurn(GameState* game) {
     ClearTurnTrace(game);
     ClearCombatFx(game);
     RecordFx(game, GIMMICK_NONE, -1, -1);
+    GimmickShredExecute(game);
     // 읽기 오류의 재굴림은 오프라인 출력 0보다 먼저 처리된다.
     for (int d = 0; d < 3; ++d) {
         if (game->dice[d].unstable) {

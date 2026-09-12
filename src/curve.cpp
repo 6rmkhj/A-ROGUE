@@ -39,11 +39,11 @@ static void AssignDice(GameState* game) {
         int die = order[i], placed = 0;
         for (int p = 0; p < 3 && !placed; ++p) {
             int slot = prefs[p];
-            if (used[slot] || SlotLockedThisTurn(game, slot)) continue;
+            if (used[slot] || (SlotLockedThisTurn(game, slot) || SlotShredPending(game, slot))) continue;
             if (AssignDieToSlot(game, die, slot)) { used[slot] = 1; placed = 1; }
         }
         if (!placed) for (int slot = 0; slot < SLOT_COUNT && !placed; ++slot) {
-            if (used[slot] || SlotLockedThisTurn(game, slot)) continue;
+            if (used[slot] || (SlotLockedThisTurn(game, slot) || SlotShredPending(game, slot))) continue;
             if (AssignDieToSlot(game, die, slot)) { used[slot] = 1; placed = 1; }
         }
     }

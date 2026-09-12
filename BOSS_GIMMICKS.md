@@ -38,7 +38,7 @@
 
 ### C:\ SYSTEM — FAM_LOCK (슬롯 권한 잠금)
 
-| 항목 | 1층 ACCESS.DENIED | 2층 KERNEL.PANIC | 3층 BLUE.SCREEN — **파쇄** (확정 · 미구현) |
+| 항목 | 1층 ACCESS.DENIED | 2층 KERNEL.PANIC | 3층 BLUE.SCREEN — **파쇄** |
 |---|---|---|---|
 | 기믹 | GIMMICK_ACCESS_DENIED | GIMMICK_KERNEL_PANIC | GIMMICK_BLUE_SCREEN (enum 유지, 동작 교체) |
 | 발동 | 짝수 턴 | 2턴부터 매 턴 | 3의 배수 턴, **실행을 누르는 순간** (플레이어 해결보다 먼저) |
@@ -54,12 +54,18 @@
 > **BLUE.SCREEN 교체 — 시스템 정지 → 파쇄.** 옛 규칙은 3턴마다 증폭+연쇄를 동시에 1턴 잠갔다.
 > 잃는 양은 3턴에 칸-턴 2로 같고, 두 칸을 잠깐 잃던 것을 **한 칸을 오래 잃는** 쪽으로 바꿨다.
 > 계열이 1층(칸 1개 1턴) → 2층(주력 칸) → 3층(칸 1개 2턴 파괴 후 복구)으로 커진다.
-> 연출 시안은 `ui-recovery` 페이지의 파쇄 절. **구현 전까지 `RULEBOOK.md`·`CHAIN_PLAN.md`는 옛 규칙을 적고 있다.**
+> 연출 시안은 `ui-recovery` 페이지의 파쇄 절.
 >
-> 구현 메모: `BossRuntime`에 칸별 남은 턴(`shredLeft[SLOT_COUNT]`)을 두고, `GimmickTurnBegin`에서 0보다 큰 칸을
-> `lockedSlot`에 올리고 `GimmickTurnEnd`에서 줄인다. 12+ 판정은 LAST.WRITE와 같은 `damageThisTurn`을 예고 턴의
-> `GimmickTurnEnd`에서 본다. 기존 잠금(턴 시작 확정)과 다른 흐름은 **실행 순간 발동** 하나뿐이다 — `ResolvePlayer` 앞에서
-> 대상 칸의 주사위를 미배치로 돌리고 칸을 잠근다. 미리보기도 같은 경로를 타야 한다. 표식: `SLOT SHREDDED`.
+> 구현: `BossRuntime.shredLeft[SLOT_COUNT]`가 칸별 남은 턴을 든다. `GimmickTurnBegin`이 먼저 줄여 0이 된 칸을
+> 복구하고(그래야 같은 턴에 다음 파쇄를 예고할 수 있다) 남은 칸을 `lockedSlot`에 올린다. 발동만은 턴 시작이 아니라
+> `GimmickShredExecute`가 `ResolvePlayer` 앞에서 처리한다 — 대상 칸의 주사위를 미배치로 돌리고 칸을 잠근다.
+> 미리보기는 `PreviewTurn`이 사본에 `EndTurn`을 돌리므로 같은 경로를 탄다. 12+ 판정은 예고 턴의 `GimmickTurnEnd`에서
+> LAST.WRITE와 같은 `damageThisTurn`으로 본다. 화면은 `SlotShredTurnsLeft`(빈 구멍)와 `SlotShredPending`(조준)을 읽고,
+> 연출은 `DrawShredStrike`(fxB = 되돌아간 주사위 번호, 2800ms)와 `DrawShredRestore`(fxB = `SHRED_FX_RESTORE`, 1900ms)다.
+> 표식: `SLOT SHREDDED`.
+>
+> 밸런스: 교체 후 `balance.exe`의 C:\ 승률은 202/300 → 186/300이다. 휴리스틱은 12+ 회피를 쓰지 않고 예고 칸만
+> 비우므로 사람이 낼 수 있는 상한은 이보다 높다. 공격 칸까지 순환에 넣을지는 여전히 밸런스 검사로 정한다.
 
 ### D:\ ARCHIVE — FAM_RESTORE (복원·되감기)
 

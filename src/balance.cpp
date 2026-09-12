@@ -74,12 +74,12 @@ static void AssignDice(GameState* game) {
         int placed = 0;
         for (int p = 0; p < 3 && !placed; ++p) {
             int slot = prefs[p];
-            if (used[slot] || SlotLockedThisTurn(game, slot)) continue;
+            if (used[slot] || (SlotLockedThisTurn(game, slot) || SlotShredPending(game, slot))) continue;
             if (AssignDieToSlot(game, die, slot)) { used[slot] = 1; placed = 1; }
         }
         if (!placed) {
             for (int slot = 0; slot < SLOT_COUNT && !placed; ++slot) {
-                if (used[slot] || SlotLockedThisTurn(game, slot)) continue;
+                if (used[slot] || (SlotLockedThisTurn(game, slot) || SlotShredPending(game, slot))) continue;
                 if (AssignDieToSlot(game, die, slot)) { used[slot] = 1; placed = 1; }
             }
         }
@@ -87,7 +87,7 @@ static void AssignDice(GameState* game) {
     // E: 낮은 눈은 남는 슬롯으로 한 번 옮겨 HOT SWAP을 실제 사용한다.
     if (game->selectedDrive == 2 && !game->driveRule.hotSwapUsed) {
         int weakest = order[2], freeSlot = -1;
-        for (int s = 0; s < SLOT_COUNT; ++s) if (!used[s] && !SlotLockedThisTurn(game, s)) { freeSlot = s; break; }
+        for (int s = 0; s < SLOT_COUNT; ++s) if (!used[s] && !(SlotLockedThisTurn(game, s) || SlotShredPending(game, s))) { freeSlot = s; break; }
         int oldSlot = game->dice[weakest].assignedSlot;
         if (freeSlot >= 0 && oldSlot >= 0 && EffectiveDiePower(game, weakest) <= 2) {
             AssignDieToSlot(game, weakest, freeSlot);

@@ -478,9 +478,19 @@ static void FormatGimmickStatus(wchar_t* out, int size) {
             if (boss->lockedSlot[s] && locked < 0) locked = s;
             if (boss->nextLockedSlot[s] && next < 0) next = s;
         }
-        if (locked >= 0 && boss->gimmick == GIMMICK_BLUE_SCREEN) lstrcpynW(out, L"발동: 증폭·연쇄 잠김", size);
-        else if (locked >= 0) wsprintfW(out, L"발동: %s 슬롯 잠김", SLOT_NAMES[locked]);
-        else if (next >= 0 && boss->gimmick == GIMMICK_BLUE_SCREEN) lstrcpynW(out, L"예고: 다음 턴 증폭·연쇄 잠금", size);
+        if (boss->gimmick == GIMMICK_BLUE_SCREEN) {
+            // 파쇄는 잠금과 달리 턴을 넘겨 유지되므로 남은 턴을 그대로 보여 준다.
+            int gone = -1, left = 0;
+            for (int s = 0; s < SLOT_COUNT; ++s) if (boss->shredLeft[s] > left) { gone = s; left = boss->shredLeft[s]; }
+            if (gone >= 0) wsprintfW(out, L"%s 칸 파쇄됨 · %d턴 뒤 복구", SLOT_NAMES[gone], left);
+            else if (boss->shredNext >= 0 && SlotShredPending(&gGame, boss->shredNext))
+                wsprintfW(out, L"파쇄 임박: 실행하면 %s 칸이 부서집니다", SLOT_NAMES[boss->shredNext]);
+            else if (boss->shredNext >= 0)
+                wsprintfW(out, L"예고: 다음 턴 %s 칸 파쇄 · 피해 %d+로 빗나감", SLOT_NAMES[boss->shredNext], gi->p2);
+            else lstrcpynW(out, L"다음 파쇄 대기 중", size);
+            break;
+        }
+        if (locked >= 0) wsprintfW(out, L"발동: %s 슬롯 잠김", SLOT_NAMES[locked]);
         else if (next >= 0) wsprintfW(out, L"예고: 다음 턴 %s 잠금", SLOT_NAMES[next]);
         else if (boss->gimmick == GIMMICK_KERNEL_PANIC) lstrcpynW(out, L"이번 최고 출력 슬롯이 다음 턴 잠김", size);
         else lstrcpynW(out, L"다음 잠금 대기 중", size);
@@ -1034,10 +1044,65 @@ static COLORREF SlotAccent(int slot) {
 // 슬롯과 주사위 카드 양쪽에 같은 기호를 찍어 짝을 드러낸다.
 static const wchar_t* const DIE_BADGE[3] = {L"①", L"②", L"③"};
 
+// 빈 구멍 안에서 깜빡이는 오류 기호. 파쇄가 남긴 자리와 복구를 기다리는 자리가
+// 같은 잡음을 쓴다.
+static void DrawShredNoise(HDC dc, const RECT& r, int slot, int step, COLORREF tone) {
+    if (!FxDecorOn()) return;
+    static const wchar_t ERRG[] = L"#%&?@$*+=<>0123456789ABCDEF";
+    for (int i = 0; i < 10; ++i) {
+        uint32_t h = Hash3(slot + 40, i, step);
+        if (h % 3u) continue;
+        wchar_t g[2] = {ERRG[(h >> 9) % (uint32_t)(sizeof(ERRG) / sizeof(ERRG[0]) - 1)], 0};
+        Text(dc, r.left + 8 + (int)((h >> 3) % (uint32_t)(r.right - r.left - 18)),
+                 r.top + 6 + (int)((h >> 17) % (uint32_t)(r.bottom - r.top - 22)), g, tone, gFontSmall);
+    }
+}
+
+// 부서진 칸은 빈 구멍으로 남는다. 남은 칸을 당겨 채우면 클릭 자리가 움직여
+// 잘못 누르게 되므로 자리는 그대로 두고, 가장자리만 불씨처럼 타다 식는다.
+static void DrawShredHole(HDC dc, const RECT& r, int slot, int turnsLeft) {
+    Fill(dc, r, RGB(5, 7, 10));
+    int step = (int)(GetTickCount() / 110);
+    for (int i = 0; i < 24; ++i) {
+        uint32_t h = Hash3(slot, i, step / 3);
+        int along = (int)(h % 1000u), side = i & 3, x, y;
+        if (side == 0)      { x = r.left + (r.right - r.left) * along / 1000; y = r.top; }
+        else if (side == 1) { x = r.right - 2; y = r.top + (r.bottom - r.top) * along / 1000; }
+        else if (side == 2) { x = r.left + (r.right - r.left) * along / 1000; y = r.bottom - 2; }
+        else                { x = r.left; y = r.top + (r.bottom - r.top) * along / 1000; }
+        int lit = (int)((h >> 11) % 100u);
+        Fill(dc, MakeRect(x, y, x + 2, y + 2),
+            MixColor(RGB(5, 7, 10), lit > 55 ? RGB(255, 120, 60) : C_RED, 45 + lit / 2));
+    }
+    DrawShredNoise(dc, r, slot, step, RGB(90, 42, 36));   // 안쪽에서 오류 기호가 깜빡인다
+    Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], MixColor(C_BG, C_RED, 60), gFontMedium);
+    wchar_t left[8]; wsprintfW(left, L"%d", turnsLeft);
+    TextRect(dc, MakeRect(r.left, r.top + 34, r.right, r.top + 84), left, C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(r.left, r.top + 86, r.right, r.top + 106), L"턴 뒤 복구", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), L"SLOT SHREDDED",
+        MixColor(C_BG, C_RED, 75), gFontSmall, DT_CENTER | DT_SINGLELINE);
+}
+
+// 실행을 누르면 부서질 칸. 아직 배치는 받으므로 잠그지 않고 조준선만 붙인다.
+static void DrawShredAim(HDC dc, const RECT& r) {
+    int phase = (int)(GetTickCount() % 1200u);
+    COLORREF tone = MixColor(C_BG, C_RED, 45 + 45 * (phase < 600 ? phase : 1200 - phase) / 600);
+    for (int i = 0; i < 4; ++i) {
+        int x = (i & 1) ? r.right + 3 : r.left - 4, dx = (i & 1) ? -14 : 14;
+        int y = (i & 2) ? r.bottom + 3 : r.top - 4, dy = (i & 2) ? -10 : 10;
+        DrawLine(dc, x, y, x + dx, y, tone, 2);
+        DrawLine(dc, x, y, x, y + dy, tone, 2);
+    }
+    RECT tag = MakeRect(r.left + 3, r.bottom - 29, r.right - 3, r.bottom - 5);
+    Fill(dc, tag, RGB(38, 16, 18));
+    TextRect(dc, tag, L"실행 시 파쇄", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 static void DrawSlot(HDC dc, int slot) {
     RECT r = SlotRect(slot); int die = DieForSlotUI(slot); int hover = Inside(r, gMouse.x, gMouse.y);
     int locked = SlotLockedThisTurn(&gGame, slot) && !GimmickLockPending(slot);
     int lockedNext = SlotLockedNextTurn(&gGame, slot);
+    if (locked && SlotShredTurnsLeft(&gGame, slot) > 0) { DrawShredHole(dc, r, slot, SlotShredTurnsLeft(&gGame, slot)); return; }
     if (locked) {
         // 잠긴 슬롯: 배치를 받지 않으며 어둡고 붉게 오버레이한다.
         Panel(dc, r, RGB(38, 16, 18), C_RED);
@@ -1087,6 +1152,7 @@ static void DrawSlot(HDC dc, int slot) {
     if (lockedNext) TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6),
         die >= 0 ? L"" : L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     if (lockedNext && die >= 0) TextRect(dc, MakeRect(r.left + 4, r.top + 88, r.right - 4, r.top + 108), L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    if (SlotShredPending(&gGame, slot)) DrawShredAim(dc, r);
 }
 
 // 여섯 면의 상태 띠. 큰 굴림값과 별개로 어느 면이 격리·삭제 예고 대상인지,
@@ -4158,7 +4224,7 @@ static void DrawGuideDrivePage(HDC dc, const RECT& panel) {
             C_TEXT, gFontSmall, GUIDE_LINE) + 12;
         // A:\는 여섯 조각을 모두 모아야 열리는 최종 볼륨이라 여기 싣지 않는다.
         static const wchar_t* const family[6] = {
-            L"슬롯 권한 잠금과 시스템 정지", L"피해 목표 미달 시 복원 · 되감기", L"예고된 주사위 연결 끊김",
+            L"슬롯 권한 잠금과 칸 파쇄", L"피해 목표 미달 시 복원 · 되감기", L"예고된 주사위 연결 끊김",
             L"슬롯 해결 순서 역전", L"메모리 압력 게이지와 강화 공격", L"면 격리, 최종 보스는 영구 삭제"
         };
         for (int i = 0; i < 6; ++i) {
@@ -4280,6 +4346,9 @@ static void DrawGuide(HDC dc, int width, int height) {
 // 화면을 장악하면 강한 발동의 가치가 사라진다.
 // ---------------------------------------------------------------------------
 
+// C:\ 3층 파쇄. 초상이 칸 윗변을 누르는 순간이고, 세 표와 연출이 같은 값을 봐야 한다.
+#define SHRED_IMPACT 1000
+
 // 총 길이. Local 180~320 / Regional 300~450 / 강한 발동 최대 700 /
 // 되돌릴 수 없는 삭제만 700~1200.
 int GimmickFxDuration(int kind, int b) {
@@ -4289,7 +4358,7 @@ int GimmickFxDuration(int kind, int b) {
     case GIMMICK_LAST_WRITE: return 2000;
     case GIMMICK_ACCESS_DENIED:  return 2000;
     case GIMMICK_KERNEL_PANIC:   return 2250;
-    case GIMMICK_BLUE_SCREEN:    return 3400;   // 전면 BSOD 뒤 두 칸에 철문
+    case GIMMICK_BLUE_SCREEN:    return b == SHRED_FX_RESTORE ? 1900 : 2800;   // 파쇄 / 복구
     case GIMMICK_RESTORE_POINT:  return 2000;
     case GIMMICK_TAPE_LOOP:      return 900;    // 매턴 나올 수 있어 가장 짧다
     case GIMMICK_MASTER_BACKUP:  return 3200;   // 런에 한 번뿐
@@ -4310,14 +4379,14 @@ int GimmickFxDuration(int kind, int b) {
 }
 
 // 동작 자체에 쓰는 시간. 나머지는 도장·배너가 걷히는 짧은 여운이다.
-static int GimmickFxAction(int kind) {
+static int GimmickFxAction(int kind, int b) {
     switch (kind) {
     case GIMMICK_SIGNATURE: return 560;
     case GIMMICK_SEVENTEENTH: return 560;
     case GIMMICK_LAST_WRITE: return 1150;
     case GIMMICK_ACCESS_DENIED:  return 1100;
     case GIMMICK_KERNEL_PANIC:   return 1250;
-    case GIMMICK_BLUE_SCREEN:    return 2400;
+    case GIMMICK_BLUE_SCREEN:    return b == SHRED_FX_RESTORE ? 1350 : 1500;
     case GIMMICK_RESTORE_POINT:  return 1150;
     case GIMMICK_TAPE_LOOP:      return 560;
     case GIMMICK_MASTER_BACKUP:  return 1700;
@@ -4343,7 +4412,7 @@ int GimmickFxImpactAt(int kind, int b) {
     case GIMMICK_LAST_WRITE:    return 1000;
     case GIMMICK_ACCESS_DENIED:  return 983;    // 철문 착지 = 동작의 89%
     case GIMMICK_KERNEL_PANIC:   return 1118;
-    case GIMMICK_BLUE_SCREEN:    return 60;
+    case GIMMICK_BLUE_SCREEN:    return b == SHRED_FX_RESTORE ? 0 : SHRED_IMPACT;
     case GIMMICK_RESTORE_POINT:  return 1150;
     case GIMMICK_MASTER_BACKUP:  return 200;
     case GIMMICK_AUTOPLAY:       return 360;
@@ -4477,14 +4546,6 @@ static void DrawFxStamp(HDC dc, int kind, int t, int dur, COLORREF fam) {
         gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-// BLUE.SCREEN의 전면 파란 화면은 전투당 한 번만 나온다. 매턴 반복되면 강한
-// 사건이 흔한 장식이 되고, 그동안 판이 통째로 가려진다.
-static int gBsodFloor = -1, gBsodEncounter = -1;
-static int BlueScreenTakeoverAllowed() {
-    return !(gBsodFloor == gGame.floor && gBsodEncounter == gGame.encounter);
-}
-static void MarkBlueScreenShown() { gBsodFloor = gGame.floor; gBsodEncounter = gGame.encounter; }
-
 // ---- C:\ 잠금 -------------------------------------------------------------
 // 보스 카드에서 얇은 경로가 슬롯까지 내려오고, 도착한 슬롯의 좌우 테두리가
 // 가운데로 닫힌다. 슬롯 하나로 끝나는 사건이므로 화면은 건드리지 않는다.
@@ -4524,12 +4585,19 @@ static void DrawLockShutter(HDC dc, int slot, int act, COLORREF fam, int style, 
 int GimmickLockPending(int slot) {
     int kind = gGame.boss.firedFx;
     if (kind != GIMMICK_ACCESS_DENIED && kind != GIMMICK_KERNEL_PANIC && kind != GIMMICK_BLUE_SCREEN && kind != GIMMICK_LAST_WRITE) return 0;
+    if (kind == GIMMICK_BLUE_SCREEN) {
+        // 파쇄는 fxB가 되돌아간 주사위 번호라 슬롯으로 읽으면 안 된다. 연출이
+        // 도는 동안은 칸 그리기를 통째로 연출에 넘긴다 (깨지는 칸을 두 번 그리지 않는다).
+        if (gGame.boss.fxA != slot || gGame.boss.fxB == SHRED_FX_RESTORE) return 0;
+        if (gTurnTraceActive) return 1;
+        return GimmickFxKind() == kind;
+    }
     if (gGame.boss.fxA != slot && gGame.boss.fxB != slot) return 0;
     if (gTurnTraceActive) return 1;                    // 재생 중 — 아직 벌어지지 않은 일이다
     if (GimmickFxKind() != kind) return 0;             // 연출이 끝났다 — 이제 잠긴 게 맞다
     int t = GimmickFxElapsed();
     int dur = GimmickFxDuration(kind, GimmickFxB());
-    int actionMs = GimmickFxAction(kind);
+    int actionMs = GimmickFxAction(kind, GimmickFxB());
     if (actionMs > dur) actionMs = dur;
     if (actionMs <= 0) return 0;
     int act = t < actionMs ? t * 1000 / actionMs : 1000;
@@ -4795,6 +4863,225 @@ static void DrawBossSquash(HDC dc, int sxMille, int syMille, int flash) {
     DrawSpriteStretched(dc, art, e->kind, 1, flash, sxMille, syMille);
 }
 
+// ---- C:\ 3층 파쇄 ---------------------------------------------------------
+// 보스가 칸 하나를 내려찍어 없앤다. 조준 → 내려찍기 → 충돌 → 오염 → 깨짐 →
+// 빈 구멍. 오염과 깨짐은 사망 연출의 글자 분해(DrawDeathRot)를 칸 이름 위에서
+// 그대로 돌린 것이고, 바탕은 맞은 자리부터 4px 점 단위로 먹혀 들어간다.
+#define SHRED_BITE 5    // 오염이 1px 번지는 데 걸리는 ms
+#define SHRED_HOLE 1300 // 충돌 이후 이만큼 지나면 칸이 다 사라져 빈 구멍만 남는다
+
+// 칸 바탕을 4px 점으로 갉아 먹는다. 격자가 아니라 맞은 곳에서 가까운 점부터
+// 물들고, 먹히는 순간 불씨처럼 한 번 빛난 뒤 구멍이 된다. 거리에 잡음을 얹어
+// 번지는 앞이 고르지 않게 들어온다.
+static void DrawShredDots(HDC dc, const RECT& r, int slot, int age) {
+    int cx = (r.left + r.right) / 2;
+    for (int y = r.top; y < r.bottom; y += 4) {
+        for (int x = r.left; x < r.right; x += 4) {
+            int dx = x + 2 - cx; if (dx < 0) dx = -dx;
+            int dy = (y + 2 - r.top) * 6 / 5;
+            int dist = dx > dy ? dx + dy / 2 : dy + dx / 2;          // 값싼 거리
+            int since = age - dist * SHRED_BITE - (int)(Hash3(slot, x, y) % 150u);
+            if (since < 0) continue;
+            RECT cell = MakeRect(x, y, x + 4, y + 4);
+            if (since < 240) { Fill(dc, cell, MixColor(C_PANEL, RGB(118, 108, 86), since * 100 / 240)); continue; }
+            if (since < 360) { Fill(dc, cell, MixColor(RGB(30, 14, 10), RGB(235, 140, 62), 100 - (since - 240) * 100 / 120)); continue; }
+            Fill(dc, cell, RGB(5, 7, 10));
+        }
+    }
+}
+
+static void DrawShredStrike(HDC dc, int slot, int die, int t, COLORREF fam) {
+    if (slot < 0 || slot >= SLOT_COUNT) return;
+    RECT r = SlotRect(slot);
+    int cx = (r.left + r.right) / 2, boss = BossCardIndex();
+    // 초상은 칸과 같은 크기로 옮겨 간다. 판 위를 지나며 부풀면 다른 칸을 가린다.
+    RECT art = PortraitRect(EnemyRect(boss < 0 ? 0 : boss));
+    int bw = (r.right - r.left) / 2, bh = (r.bottom - r.top) / 2;
+    int acx = (art.left + art.right) / 2, acy = (art.top + art.bottom) / 2;
+    RECT home = MakeRect(acx - bw, acy - bh, acx + bw, acy + bh);
+    RECT over = MakeRect(r.left, r.top - 190, r.right, r.top - 66);   // 칸 위에 떠서 겨눈다
+    int since = t - SHRED_IMPACT;
+
+    if (since < 0) {
+        // 조준선이 네 모서리에서 좁혀 든다
+        int close = EaseOutCubic(Track(t, 150, SHRED_IMPACT));
+        int off = Lerp(26, 3, close);
+        COLORREF aim = MixColor(C_BG, C_RED, 55 + close * 45 / 1000);
+        for (int i = 0; i < 4; ++i) {
+            int x = (i & 1) ? r.right + off : r.left - off, dx = (i & 1) ? -16 : 16;
+            int y = (i & 2) ? r.bottom + off : r.top - off, dy = (i & 2) ? -12 : 12;
+            DrawLine(dc, x, y, x + dx, y, aim, 2);
+            DrawLine(dc, x, y, x, y + dy, aim, 2);
+        }
+        RECT tag = MakeRect(r.left + 3, r.bottom - 29, r.right - 3, r.bottom - 5);
+        Fill(dc, tag, RGB(38, 16, 18));
+        TextRect(dc, tag, close > 880 ? L"TARGET LOCK" : L"파쇄 예고", C_RED, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        // 예고를 무시하고 올려 둔 주사위는 아직 칸 안에 보인다 (규칙은 이미 되돌렸다)
+        if (die >= 0 && die < 3) {
+            const Face* face = &gGame.dice[die].faces[gGame.dice[die].rolledFace];
+            wchar_t value[24]; FormatFace(face, value);
+            RECT band = MakeRect(r.left + 2, r.top + 38, r.right - 2, r.top + 86);
+            Fill(dc, band, C_PANEL);
+            TextRect(dc, band, value, FaceColor(face), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    } else {
+        // 칸을 연출이 넘겨받는다. 오염이 번지고, 이름이 기호로 떨다 갈라져 떨어진다.
+        Fill(dc, r, C_PANEL);
+        DrawShredDots(dc, r, slot, since);
+        int rot = Track(since, 0, 620);
+        if (since < 760) Outline(dc, r, MixColor(C_RED, RGB(206, 128, 52), rot / 10), 2);
+        if (since < SHRED_HOLE) {
+            HFONT old = (HFONT)SelectObject(dc, gFontMedium);
+            DeathRot name;
+            name.origin = 0; name.infect = 60; name.step = 30; name.brk = 430; name.breakStep = 26;
+            name.gap = since >= 430 ? 4 : 0; name.seed = slot * 97 + 31;
+            DrawDeathRot(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], lstrlenW(SLOT_SHORT_NAMES[slot]), name, since, MixColor(C_BG, C_TEXT, 92), 4);
+            SelectObject(dc, old);
+        } else DrawShredHole(dc, r, slot, SlotShredTurnsLeft(&gGame, slot));
+    }
+
+    // 초상: 칸 위로 옮겨 가 살짝 들렸다가 곧장 떨어져 윗변을 누르고, 다시 올라간다.
+    // 돌지도 날아다니지도 않는다 — 지금 게임의 적 돌진과 같은 움직임이다.
+    RECT box;
+    if (since < 0) {
+        box = LerpRect(home, over, EaseOutCubic(Track(t, 100, 700)));
+        int lift = 18 * EaseOutCubic(Track(t, 720, 860)) / 1000;
+        int drop = 80 * EaseInCubic(Track(t, 860, SHRED_IMPACT)) / 1000;
+        OffsetRect(&box, 0, drop - lift);
+    } else {
+        // 잠깐 누르고 있다가 올라간다. 부서지는 칸을 오래 가리지 않는다.
+        RECT pressed = over; OffsetRect(&pressed, 0, 80);
+        box = LerpRect(pressed, home, EaseOutCubic(Track(since, 200, 620)));
+    }
+    if (boss >= 0) {
+        // 떠난 자리는 빈 상자로 남는다 — 초상이 둘로 보이지 않게
+        int away = since < 0 ? Track(t, 100, 400) : 1000 - Track(since, 380, 620);
+        if (away > 0) { Fill(dc, art, C_PANEL); Outline(dc, art, MixColor(C_BG, C_RED, 20 + away / 40), 1); }
+        DrawSpriteArt(dc, box, gGame.enemies[boss].kind, 1, since >= 0 && since < 90, 0, 0);
+        int heat = since < 0 ? Track(t, 500, SHRED_IMPACT) : 1000 - Track(since, 0, 420);
+        if (heat > 0) Outline(dc, box, MixColor(C_BG, C_RED, 30 + heat / 18), 2);
+    }
+
+    if (since >= 0 && since < 900) {
+        // 충돌: 바닥을 따라 뻗는 빛줄기, 충격파 두 겹, 균열, 파편
+        int spread = EaseOutCubic(Track(since, 0, 240)), fade = 1000 - Track(since, 60, 560);
+        if (fade > 0) {
+            int reach = 420 * spread / 1000;
+            Fill(dc, MakeRect(cx - reach, r.top - 1, cx + reach, r.top + 2), MixColor(C_BG, RGB(255, 226, 206), FxScale(fade / 11)));
+            Fill(dc, MakeRect(cx - 2, r.top - 90 * spread / 1000, cx + 2, r.top), MixColor(C_BG, RGB(255, 226, 206), FxScale(fade / 16)));
+        }
+        if (FxDecorOn()) {
+            for (int i = 0; i < 2; ++i) {
+                int ring = Track(since - i * 70, 0, 380);
+                if (ring <= 0 || ring >= 1000) continue;
+                DrawGlowRing(dc, cx, r.top, 20 + 150 * ring / 1000, 8 + 54 * ring / 1000,
+                    MixColor(C_BG, i ? fam : C_RED, 85 - 80 * ring / 1000), i ? 1 : 2);
+            }
+            if (since < 300) DrawCracks(dc, cx, r.top, Lerp(40, 210, EaseOutCubic(Track(since, 0, 300))), slot * 13 + 7, C_RED, MixColor(C_BG, C_RED, 45));
+            DrawFxShardsStaggered(dc, cx, r.top, since, 620, 26, slot * 5 + 17, RGB(255, 176, 138), 7);
+            DrawFxTear(dc, MakeRect(0, 68, BASE_WIDTH, BASE_HEIGHT), t, FxScale(since < 200 ? 16 - 16 * since / 200 : 0), GIMMICK_BLUE_SCREEN);
+        }
+    }
+
+    // 배치 취소: Ctrl+Z처럼 곧은 길을 다섯 번 끊겨 뛰어 미배치 자리로 돌아간다.
+    if (die >= 0 && die < 3 && since >= 120 && since < 700) {
+        RECT tray = DieRect(die);
+        int steps = 1 + Track(since, 120, 520) * 5 / 1000; if (steps > 5) steps = 5;
+        int fx0 = cx, fy0 = r.top + 62, tx = (tray.left + tray.right) / 2, ty = tray.top + 52;
+        const Face* face = &gGame.dice[die].faces[gGame.dice[die].rolledFace];
+        wchar_t value[24]; FormatFace(face, value);
+        for (int k = 1; k <= steps; ++k) {
+            int p = k * 1000 / 5, last = k == steps;
+            int gx = Lerp(fx0, tx, p), gy = Lerp(fy0, ty, p);
+            RECT g = MakeRect(gx - 31, gy - 25, gx + 31, gy + 25);
+            if (!last) { Outline(dc, g, MixColor(C_BG, C_BLUE, 30), 1); continue; }
+            Fill(dc, g, C_PANEL); Outline(dc, g, C_BLUE, 2);
+            // 한 번 뛸 때마다 오염이 한 겹씩 벗겨진다
+            TextRect(dc, g, value, MixColor(RGB(206, 128, 52), C_TEXT, p / 10), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            RECT tag = MakeRect(g.left - 26, g.top - 23, g.right + 26, g.top - 3);
+            Fill(dc, tag, C_INK); Outline(dc, tag, MixColor(C_BG, C_BLUE, 45), 1);
+            TextRect(dc, tag, L"↶ 배치 취소", C_BLUE, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+}
+
+// 복구. 호박색 괄호가 칸을 조여 들고, 테두리가 먼저 그어지고, 주사선이 위에서
+// 아래로 지나가며 칸을 한 줄씩 다시 찍는다. 벌이 아니라 되찾는 장면이라
+// 히트스톱도 흔들림도 없다.
+static void DrawShredRestore(HDC dc, int slot, int t) {
+    if (slot < 0 || slot >= SLOT_COUNT) return;
+    RECT r = SlotRect(slot);
+    int cx = (r.left + r.right) / 2, h = r.bottom - r.top, w = r.right - r.left;
+    Fill(dc, r, RGB(5, 7, 10));
+    DrawShredNoise(dc, r, slot, t / 110, MixColor(C_BG, C_YELLOW, 45));
+    int grip = EaseOutCubic(Track(t, 0, 340)), off = Lerp(34, 4, grip);
+    COLORREF amber = MixColor(C_BG, C_YELLOW, 40 + grip / 18);
+    for (int i = 0; i < 4; ++i) {
+        int x = (i & 1) ? r.right + off : r.left - off, dx = (i & 1) ? -18 : 18;
+        int y = (i & 2) ? r.bottom + off : r.top - off, dy = (i & 2) ? -13 : 13;
+        DrawLine(dc, x, y, x + dx, y, amber, 2);
+        DrawLine(dc, x, y, x, y + dy, amber, 2);
+    }
+    // 테두리를 둘레를 따라 한 바퀴 긋는다
+    int run = (w * 2 + h * 2) * Track(t, 280, 640) / 1000;
+    if (run > 0) {
+        Fill(dc, MakeRect(r.left, r.top, r.left + (run < w ? run : w), r.top + 2), C_YELLOW);
+        if (run > w) Fill(dc, MakeRect(r.right - 2, r.top, r.right, r.top + (run - w < h ? run - w : h)), C_YELLOW);
+        if (run > w + h) Fill(dc, MakeRect(r.right - (run - w - h < w ? run - w - h : w), r.bottom - 2, r.right, r.bottom), C_YELLOW);
+        if (run > w * 2 + h) Fill(dc, MakeRect(r.left, r.bottom - (run - w * 2 - h < h ? run - w * 2 - h : h), r.left + 2, r.bottom), C_YELLOW);
+    }
+    // 주사선이 지나간 자리는 호박빛이 식으며 원래 칸으로 돌아온다
+    int scan = EaseOutCubic(Track(t, 620, 1350)), scanY = r.top + h * scan / 1000;
+    if (scanY > r.top + 1) {
+        RECT done = MakeRect(r.left, r.top, r.right, scanY);
+        Fill(dc, done, C_PANEL);
+        Fill(dc, MakeRect(r.left + 1, r.top + 1, r.right - 1, r.top + 4), MixColor(C_PANEL, SlotAccent(slot), 30));
+        int saved = SaveDC(dc);
+        if (saved) {
+            IntersectClipRect(dc, done.left, done.top, done.right, done.bottom);
+            Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], MixColor(SlotAccent(slot), C_YELLOW, scan < 300 ? 70 : 0), gFontMedium);
+            TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+            RestoreDC(dc, saved);
+        }
+    }
+    if (scan < 1000 && t >= 620) {
+        Fill(dc, MakeRect(r.left, scanY - 1, r.right, scanY + 2), MixColor(C_BG, RGB(255, 214, 150), 95));
+        // 주사선 바로 밑에서 막 쓰이는 기호 줄이 깜빡인다
+        if (FxDecorOn()) {
+            static const wchar_t WRIT[] = L"#%&?@$*+=<>0123456789ABCDEF";
+            for (int i = 0; i < 12; ++i) {
+                uint32_t g = Hash3(slot, i, t / 45);
+                wchar_t c[2] = {WRIT[g % (uint32_t)(sizeof(WRIT) / sizeof(WRIT[0]) - 1)], 0};
+                Text(dc, r.left + 6 + i * 12, scanY + 3, c, MixColor(C_BG, C_YELLOW, 30 + (int)((g >> 9) % 60u)), gFontSmall);
+            }
+        }
+    }
+    // 칸 밑 진행 막대. 주사선과 함께 찬다. 제 바탕을 깔아 아래 연결선과 섞이지 않는다.
+    int pct = Track(t, 620, 1350) / 10;
+    RECT gauge = MakeRect(r.left, r.bottom + 4, r.right, r.bottom + 22);
+    Fill(dc, gauge, C_INK);
+    Fill(dc, MakeRect(gauge.left + 4, gauge.top + 7, gauge.right - 78, gauge.top + 10), RGB(42, 32, 16));
+    Fill(dc, MakeRect(gauge.left + 4, gauge.top + 7, gauge.left + 4 + (gauge.right - 82 - gauge.left) * pct / 100, gauge.top + 10), C_YELLOW);
+    wchar_t bar[24]; wsprintfW(bar, L"복구 %d%%", pct);
+    TextRect(dc, MakeRect(gauge.right - 74, gauge.top, gauge.right - 4, gauge.bottom), bar, C_YELLOW, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    if (t >= 1350) {
+        int done = t - 1350;
+        if (FxDecorOn()) for (int i = 0; i < 2; ++i) {
+            int ring = Track(done - i * 130, 0, 460);
+            if (ring <= 0 || ring >= 1000) continue;
+            RECT halo = r; InflateRect(&halo, 6 + 34 * ring / 1000, 6 + 24 * ring / 1000);
+            Outline(dc, halo, MixColor(C_BG, i ? C_YELLOW : C_GREEN, 90 - 85 * ring / 1000), i ? 1 : 2);
+        }
+        if (done < 90) Fill(dc, r, MixColor(C_PANEL, RGB(230, 255, 245), 62 - done * 62 / 90));
+        int pop = EaseOutCubic(Track(done, 0, 200));
+        RECT say = MakeRect(r.left + 4, r.top + 44 - 8 * (1000 - pop) / 1000, r.right - 4, r.top + 82);
+        Fill(dc, say, C_PANEL);
+        TextRect(dc, say, L"복구 완료", C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (FxDecorOn()) DrawFxShardsStaggered(dc, cx, (r.top + r.bottom) / 2, done, 640, 22, slot * 7 + 3, C_GREEN, 5);
+    }
+}
+
 void DrawGimmickFx(HDC dc) {
     int kind = GimmickFxKind();
     if (kind <= GIMMICK_NONE || kind >= GIMMICK_COUNT) return;
@@ -4803,7 +5090,7 @@ void DrawGimmickFx(HDC dc) {
     int t = GimmickFxElapsed(), dur = GimmickFxDuration(kind, b);
     if (dur <= 0) return;
     if (t > dur) t = dur;
-    int actionMs = GimmickFxAction(kind);
+    int actionMs = GimmickFxAction(kind, b);
     if (actionMs > dur) actionMs = dur;
     int act = t < actionMs ? t * 1000 / actionMs : 1000;   // 동작 진행도, 먼저 끝난다
     int impactAt = GimmickFxImpactAt(kind, b);
@@ -4867,46 +5154,10 @@ void DrawGimmickFx(HDC dc) {
         }
         break;
     }
-    case GIMMICK_BLUE_SCREEN: {
-        int takeover = BlueScreenTakeoverAllowed() && t < 1200;
-        if (takeover) {
-            Fill(dc, screen, RGB(0, 26, 132));
-            // 위에서 아래로 훑는 주사선 두 줄과 재부팅 깜빡임
-            int sweep = 68 + (BASE_HEIGHT - 68) * (t % 480) / 480;
-            Fill(dc, MakeRect(0, sweep, BASE_WIDTH, sweep + 3), RGB(120, 150, 235));
-            Fill(dc, MakeRect(0, sweep + 3, BASE_WIDTH, sweep + 12), RGB(40, 70, 175));
-            Fill(dc, MakeRect(BASE_WIDTH / 2 - 92, 200, BASE_WIDTH / 2 + 92, 230), RGB(198, 208, 245));
-            TextRect(dc, MakeRect(BASE_WIDTH / 2 - 92, 200, BASE_WIDTH / 2 + 92, 230), L"A:\\ROGUE", RGB(0, 26, 132), gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            TextRect(dc, MakeRect(0, 262, BASE_WIDTH, 316), L"FATAL EXCEPTION 0E",
-                RGB(232, 238, 255), gFontLarge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            TextRect(dc, MakeRect(160, 330, BASE_WIDTH - 160, 420),
-                L"증폭·연쇄 슬롯이 정지되었습니다.\n이번 턴에는 공격과 방어만 남습니다.",
-                RGB(200, 212, 248), gFontMedium, DT_CENTER | DT_WORDBREAK);
-            if ((t / 380) % 2 == 0)
-                TextRect(dc, MakeRect(0, 500, BASE_WIDTH, 530), L"계속하려면 아무 키나 누르십시오 _", RGB(170, 186, 236), gFontSmall, DT_CENTER | DT_SINGLELINE);
-            if (t < 260 && (t / 55) % 2 == 0) Fill(dc, screen, RGB(210, 222, 255));
-            if (FxDecorOn()) DrawFxTear(dc, screen, t, FxScale(t < 340 ? 16 - 16 * t / 340 : 0), kind);
-            global = 1;
-        } else {
-            if (t >= 1200) MarkBlueScreenShown();
-            // BSOD가 걷힌 뒤 두 칸에 가장 두꺼운 문이 함께 내려온다
-            int shutterAct = Track(t, BlueScreenTakeoverAllowed() ? 1200 : 0, actionMs);
-            int lockAct = 520 + shutterAct * 480 / 1000;
-            DrawLockShutter(dc, a, lockAct, fam, SHUTTER_SLAT, L"HALTED");
-            DrawLockShutter(dc, b, lockAct, fam, SHUTTER_SLAT, L"HALTED");
-            int fall = LockShutterFall(lockAct);
-            if (fall >= 880) {
-                int land = Track(t, actionMs - 60, actionMs + 560);
-                for (int i = 0; i < 2; ++i) {
-                    int s = i == 0 ? a : b;
-                    if (s < 0 || s >= SLOT_COUNT) continue;
-                    RECT r = SlotRect(s);
-                    DrawFxShardsStaggered(dc, (r.left + r.right) / 2, r.bottom - 6, land * 400 / 1000, 400, 16, s * 5 + 21, fam, 10);
-                }
-            }
-        }
+    case GIMMICK_BLUE_SCREEN:
+        if (b == SHRED_FX_RESTORE) DrawShredRestore(dc, a, t);
+        else DrawShredStrike(dc, a, b, t, fam);
         break;
-    }
 
     // ---- D:\ 복원 : 시간이 역행한다 ---------------------------------------
     case GIMMICK_RESTORE_POINT:
