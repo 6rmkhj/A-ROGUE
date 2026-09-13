@@ -112,21 +112,23 @@ static int WriteWav(const char* filename, const short* samples, int count) {
     return ok;
 }
 
-#define MATERIAL_CUES 22
+#define MATERIAL_CUES 26
 static void CheckMaterialCues(int exportWav) {
     static short sounds[MATERIAL_CUES][MAX_SAMPLES];
     const int ids[] = {SFX_UI_FOCUS, SFX_BOSS_ARRIVE, SFX_LOOT_REVEAL, SFX_REPAIR,
         SFX_BOOT_TEAR, SFX_BOOT_VORTEX, SFX_BOOT_FORGE, SFX_BOOT_FLIP, SFX_BOOT_SLIDE,
         SFX_BOOT_LATCH, SFX_BOOT_MOTOR, SFX_BOOT_SEEK, SFX_BOOT_POWER, SFX_BOOT_SWALLOW,
         SFX_BOOT_RISER, SFX_BOOT_STINGER, SFX_BOOT_PULSE, SFX_BOOT_TOLL, SFX_BOOT_RESOLVE,
-        SFX_BOOT_REVEAL, SFX_BOOT_CHATTER, SFX_BOOT_LOCK};
+        SFX_BOOT_REVEAL, SFX_BOOT_CHATTER, SFX_BOOT_LOCK,
+        SFX_MOUNT_SPIN, SFX_MOUNT_LAND, SFX_MOUNT_ROT, SFX_MOUNT_LAW};
     const int lengthsMs[] = {42, 590, 420, 460, 520, 780, 620, 300, 280, 440, 700, 300, 560, 720,
-        1200, 700, 420, 620, 1100, 460, 620, 540};
+        1200, 700, 420, 620, 1100, 460, 620, 540, 1200, 340, 420, 760};
     const char* names[] = {"ui_focus.wav", "boss_arrive.wav", "loot_reveal.wav", "repair.wav",
         "boot_tear.wav", "boot_vortex.wav", "boot_forge.wav", "boot_flip.wav", "boot_slide.wav",
         "boot_latch.wav", "boot_motor.wav", "boot_seek.wav", "boot_power.wav", "boot_swallow.wav",
         "boot_riser.wav", "boot_stinger.wav", "boot_pulse.wav", "boot_toll.wav", "boot_resolve.wav",
-        "boot_reveal.wav", "boot_chatter.wav", "boot_lock.wav"};
+        "boot_reveal.wav", "boot_chatter.wav", "boot_lock.wav",
+        "mount_spin.wav", "mount_land.wav", "mount_rot.wav", "mount_law.wav"};
     int lengths[MATERIAL_CUES]; double maxCorrelation = 0;
     for (int k = 0; k < MATERIAL_CUES; ++k) {
         int count = lengths[k] = RenderSfx(ids[k], 0, sounds[k], MAX_SAMPLES);

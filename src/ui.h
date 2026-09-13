@@ -20,11 +20,114 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define REWARD_REPAIR 3
 
 #define COMBAT_CLEAR_MS 1900
-#define DESCENT_LOCK_MS 520    // 고른 드라이브 카드가 잠기고 나머지가 밀려나는 구간
-#define DESCENT_MS 2920        // 카드 잠금 + 실제 마운트/심층 스캔 전체 길이
 #define DIR_SELECT_LOCK_MS 360 // 고른 디렉터리 카드가 경로로 수렴하는 구간
 #define DIR_ENTER_MS 1460      // 카드 잠금 + 디렉터리 라우팅/진입 전체 길이
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
+
+// ---- 볼륨 마운트 연출 ------------------------------------------------------
+// 예전에는 고른 카드가 잠기고 나면 패널 한 장이 열려 진행 막대를 채웠다. 런에서
+// 가장 큰 결정 - 어느 볼륨으로 들어갈 것인가 - 의 대답이 막대 하나였다는 뜻이다.
+// 이제 고른 볼륨은 실제로 물건이 된다. 나머지 카드가 판 밖으로 뜯겨 나가고, 남은
+// 한 장이 뽑혀 나와 스핀들 위에 눕고, 회전수에 오른 그 원판을 액추에이터가 세
+// 트랙에 걸쳐 읽는다. 읽히는 것은 새로 만든 값이 아니라 방금 카드에 적혀 있던
+// 것들이다 - 손상 섹터 둘과 볼륨 법칙이 판 위의 자리로 나온다.
+//
+//   잠금   고른 카드만 남고 나머지는 좌우로 뜯겨 나간다
+//   안착   남은 카드가 뽑혀 나와 화면 한가운데에서 눕는다 (원판이 된다)
+//   기동   스핀들이 회전수에 오르고 트랙 고리가 열린다
+//   판독   헤드가 바깥→가운데→안쪽 세 트랙을 읽는다. 손상 섹터가 여기서 드러난다
+//   각인   다 읽은 판 한가운데에 볼륨 법칙이 박힌다
+//   마운트 걸쇠가 물리고 카메라가 허브 속으로 들어가며 판이 화면을 삼킨다
+//
+// 구간 경계는 그리기(screens.cpp)와 소리(main.cpp)가 같은 값을 봐야 한다 -
+// 헤드가 트랙에 닿는 순간과 그 소리가 어긋나면 기계가 아니라 애니메이션이 된다.
+// 길이는 읽는 시간이 정한다. 한 트랙을 다 읽을 때마다 딱지가 한 장 붙는데,
+// 다음 딱지가 붙기 전에 그 줄을 읽을 수 있어야 한다. 620ms가 한글 두 줄을
+// 읽는 최소치였고, 각인 뒤에 620ms를 더 세워 둬 판 전체가 한 번 정지한 채
+// 읽힌다. 전체가 5초를 넘지만 클릭·아무 키로 언제든 건너뛸 수 있고, 한 런에
+// 한 번 나오는 장면이다 - 층 하강(DIVE)은 이 절반도 안 된다.
+#define MOUNT_LOCK_MS  560     // 고른 카드가 잠기고 나머지가 뜯겨 나간다
+#define MOUNT_SEAT_MS  400     // 카드가 뽑혀 나와 매체 자리에 눕는다
+#define MOUNT_SPIN_MS  700     // 매체가 깨어난다 (판은 회전수에, 격자는 전원에)
+#define MOUNT_READ_MS 1860     // 세 트랙 판독. 트랙마다 620ms
+#define MOUNT_LAW_MS   560     // 볼륨 법칙 각인
+#define MOUNT_HOLD_MS  900     // 다 읽은 매체가 멈춰 선다. 여기서 판 전체가 읽힌다
+#define MOUNT_SEAL_MS  460     // 걸쇠 + 허브 속으로
+#define MOUNT_SEAT_AT  MOUNT_LOCK_MS
+#define MOUNT_SPIN_AT  (MOUNT_SEAT_AT + MOUNT_SEAT_MS)
+#define MOUNT_READ_AT  (MOUNT_SPIN_AT + MOUNT_SPIN_MS)
+#define MOUNT_LAW_AT   (MOUNT_READ_AT + MOUNT_READ_MS)
+#define MOUNT_HOLD_AT  (MOUNT_LAW_AT + MOUNT_LAW_MS)
+#define MOUNT_SEAL_AT  (MOUNT_HOLD_AT + MOUNT_HOLD_MS)
+#define MOUNT_MS       (MOUNT_SEAL_AT + MOUNT_SEAL_MS)
+#define MOUNT_TRACKS   3       // 바깥·가운데·안쪽
+#define MOUNT_TRACK_MS (MOUNT_READ_MS / MOUNT_TRACKS)
+#define MOUNT_SETTLE_MS 150    // 한 트랙에 옮겨 앉는 시간. 나머지가 한 바퀴 판독이다
+
+// 층 하강은 같은 판에서 일어난다. 판은 이미 물려 돌고 있으므로 잠금도 기동도
+// 없고, 헤드가 지금 트랙에서 한 칸 더 안쪽으로 파고드는 것만 남는다. 한 런에
+// 두 번 더 나오는 장면이라 마운트보다 짧아야 한다.
+#define DIVE_IN_MS    320      // 돌고 있는 매체로 카메라가 들어온다
+#define DIVE_READ_MS  900      // 안쪽 트랙으로 파고들어 읽는다
+#define DIVE_HOLD_MS  420      // 바뀐 용량 한도가 읽히는 시간
+#define DIVE_SEAL_MS  420
+#define DIVE_READ_AT  DIVE_IN_MS
+#define DIVE_HOLD_AT  (DIVE_READ_AT + DIVE_READ_MS)
+#define DIVE_SEAL_AT  (DIVE_HOLD_AT + DIVE_HOLD_MS)
+#define DIVE_MS       (DIVE_SEAL_AT + DIVE_SEAL_MS)
+
+// 마운트(볼륨 선택)와 하강(층 이동)은 같은 함수가 그리고 같은 타이머가 운다.
+// 구간 이름이 같은 자리를 가리키도록 여기서 한 번에 풀어 준다 - 그림·소리·
+// 타이머가 이 표 하나만 보므로 길이를 바꿔도 셋이 같이 움직인다.
+struct MountBeats { int seatAt, spinAt, readAt, lawAt, holdAt, sealAt, total, tracks; };
+inline MountBeats MountBeatsFor(int mount) {
+    MountBeats b;
+    if (mount) {
+        b.seatAt = MOUNT_SEAT_AT; b.spinAt = MOUNT_SPIN_AT; b.readAt = MOUNT_READ_AT;
+        b.lawAt = MOUNT_LAW_AT; b.holdAt = MOUNT_HOLD_AT; b.sealAt = MOUNT_SEAL_AT;
+        b.total = MOUNT_MS; b.tracks = MOUNT_TRACKS;
+    } else {
+        // 하강에는 각인이 없다. 법칙은 마운트에서 이미 박혔고 여기서는 트랙만 옮긴다.
+        // lawAt은 그래서 "판독이 끝나는 자리"라는 뜻만 남는다.
+        b.seatAt = 0; b.spinAt = 0; b.readAt = DIVE_READ_AT;
+        b.lawAt = DIVE_HOLD_AT; b.holdAt = DIVE_HOLD_AT; b.sealAt = DIVE_SEAL_AT;
+        b.total = DIVE_MS; b.tracks = 1;
+    }
+    return b;
+}
+// 한 트랙에 주어지는 시간. 앞의 MOUNT_SETTLE_MS가 옮겨 앉기, 나머지가 판독이다.
+inline int MountTrackMs(const MountBeats& b) { return (b.lawAt - b.readAt) / (b.tracks > 0 ? b.tracks : 1); }
+
+// ---- 볼륨 매체 -------------------------------------------------------------
+// 일곱 볼륨이 전부 같은 원판이면 어느 볼륨에 들어왔는지가 색으로만 남는다.
+// 볼륨마다 실제로 다른 물건이 돌아야 한다 - 데이터에 이미 적혀 있는 성격이
+// 그대로 물건의 형태가 된다.
+//
+//   C:\ SYSTEM      플래터 3장 스택   전원부가 안정적인 기본형. 피벗 암이 읽는다
+//   D:\ ARCHIVE     오픈릴 테이프     넓지만 느린 창고. 릴 둘 사이를 띠가 지나간다
+//   E:\ REMOVABLE   광 디스크         직선 레일 위의 슬레드. 접촉이 끊겨 판독이 튄다
+//   N:\ NETWORK     원격 링크         실체가 없다. 끊긴 고리를 패킷이 채운다
+//   R:\ RAMDISK     셀 격자           도는 것이 없다. 행을 훑고 읽은 자리는 증발한다
+//   X:\ QUARANTINE  격리 캐비닛       우리에 물린 판. 잠금쇠를 풀어야 돈다
+//   A:\ ROGUE       플로피 한 장      복구 도구 자신의 기록. 헤드가 양쪽에서 둘이다
+//
+// 그리기(screens.cpp)와 소리(main.cpp)가 이 표를 같이 본다 - 눈에 보이는 물건과
+// 귀에 들리는 소리가 어긋나면 형태를 갈라 둔 보람이 없다.
+enum MediaKind { MEDIA_STACK, MEDIA_TAPE, MEDIA_OPTICAL, MEDIA_LINK, MEDIA_CELL, MEDIA_CAGE, MEDIA_FLOPPY };
+inline int DriveMedia(int drive) {
+    static const unsigned char TABLE[DRIVE_COUNT] = {
+        MEDIA_STACK, MEDIA_TAPE, MEDIA_OPTICAL, MEDIA_LINK, MEDIA_CELL, MEDIA_CAGE, MEDIA_FLOPPY};
+    return TABLE[drive < 0 || drive >= DRIVE_COUNT ? 0 : drive];
+}
+// 트랙이 고리인가 (아니면 가로줄인가). 테이프와 셀 격자만 줄이다.
+inline int MediaIsDisc(int media) { return media != MEDIA_TAPE && media != MEDIA_CELL; }
+// 돌아가는 축이 있는가. 없으면 스핀들 소리도 쓰지 않는다.
+inline int MediaSpindle(int media) { return media != MEDIA_CELL && media != MEDIA_LINK; }
+inline const wchar_t* MediaName(int media) {
+    static const wchar_t* const NAMES[] = {L"플래터 스택", L"오픈릴 테이프", L"광 디스크",
+                                           L"원격 링크", L"셀 격자", L"격리 캐비닛", L"플로피"};
+    return NAMES[media < 0 || media > MEDIA_FLOPPY ? 0 : media];
+}
 
 // 연출 타이머의 주기. 60fps를 노리고 16으로 두면 안 된다 - WM_TIMER는 시스템
 // 틱(기본 15.6ms) 경계에서만 깨어나므로, 16ms짜리는 매번 다음 틱까지 밀려 두

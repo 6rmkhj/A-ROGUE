@@ -84,7 +84,12 @@ static const SfxSpec SFX[SFX_COUNT] = {
     {{ 110,  0,   0}, {1100, 0,  0},    0, WAVE_TRI,   50,  2, 90,  78,    0, 110,   1},  // BOOT_RESOLVE: A단조로 닫는다
     {{ 520,  0,   0}, {460,  0,  0},    0, WAVE_TRI,   50,  4, 90,  58,    0, 100,   1},  // BOOT_REVEAL:  방이 열린다
     {{ 760,  0,   0}, {620,  0,  0},    0, WAVE_TRI,   50,  1, 90,  34,    0, 140,   1},  // BOOT_CHATTER: 데이터 채터
-    {{ 900,  0,   0}, {540,  0,  0},    0, WAVE_TRI,   50,  1, 90,  46,    0, 150,   1}   // BOOT_LOCK:    18칸이 잠긴다
+    {{ 900,  0,   0}, {540,  0,  0},    0, WAVE_TRI,   50,  1, 90,  46,    0, 150,   1},  // BOOT_LOCK:    18칸이 잠긴다
+    // 볼륨 마운트. 같은 방식으로 층을 쌓으므로 여기서도 뜻이 있는 칸은 길이뿐이다.
+    {{  38,  0,   0}, {1200, 0,  0},    0, WAVE_TRI,   50, 90, 90,  52,    0,  70,   1},  // MOUNT_SPIN:   스핀들이 회전수에 오른다
+    {{ 880,  0,   0}, {340,  0,  0},    0, WAVE_TRI,   50,  1, 90,  50,    0, 150,   1},  // MOUNT_LAND:   헤드가 판에 앉는다
+    {{ 196,  0,   0}, {420,  0,  0},    0, WAVE_TRI,   50,  1, 90,  54,    0, 110,   1},  // MOUNT_ROT:    손상 섹터를 밟는다
+    {{ 659,  0,   0}, {760,  0,  0},    0, WAVE_TRI,   50,  1, 90,  62,    0, 140,   1}   // MOUNT_LAW:    법칙이 각인된다
 };
 
 // 2^(n/12) in 1/256ths, for pitching a cue up by whole semitones
@@ -166,11 +171,14 @@ static void AddRoomTap(short* out, int count, int delayMs, int gain) {
 static int BootWantsRoom(int id) {
     return id == SFX_BOOT_FORGE || id == SFX_BOOT_LATCH || id == SFX_BOOT_POWER
         || id == SFX_BOOT_SWALLOW || id == SFX_BOOT_STINGER || id == SFX_BOOT_TOLL
-        || id == SFX_BOOT_RESOLVE || id == SFX_BOOT_REVEAL;
+        || id == SFX_BOOT_RESOLVE || id == SFX_BOOT_REVEAL
+        // 마운트는 기계 안을 들여다보는 장면이다. 판에 닿는 소리와 각인만
+        // 방을 주고, 스핀들 지속음과 손상 섹터의 갈림은 귀에 붙여 둔다.
+        || id == SFX_MOUNT_LAND || id == SFX_MOUNT_LAW;
 }
 
 static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
-    if (id < SFX_UI_FOCUS || id > SFX_BOOT_LOCK) return 0;
+    if (id < SFX_UI_FOCUS || id > SFX_MOUNT_LAW) return 0;
     int count = SFX_RATE * SFX[id].ms[0] / 1000;
     if (count > capacity) count = capacity;
     uint32_t phase[4] = {}, noise = 0x5f31a129u + (uint32_t)id * 7919u;
@@ -428,6 +436,60 @@ static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
             value = tick * env / 256 * 26 / 100
                 + filtered * env / 256 * 22 / 100
                 + body * MaterialEnvelope(i, 0, 540, 60) / 256 * 20 / 100;
+        } else if (id == SFX_MOUNT_SPIN) {
+            // 정지한 스핀들이 회전수에 오른다. 주파수만 올리면 사이렌이 되므로
+            // 공기를 가르는 소리와 베어링 맥놀이를 속도에 비례해 함께 붙인다 -
+            // 무거운 것이 돌기 시작하는 소리는 음정이 아니라 그 비율이 만든다.
+            // 900ms에 회전수에 닿고 남은 300ms는 그 속도로 돈다 (그림의 기동
+            // 구간이 끝나는 자리에서 판독 채터가 이 소리를 이어받는다).
+            int climb = ms < 900 ? ms : 900, speed = climb * 256 / 900;
+            int base = 26 + climb * 62 / 900;
+            int body  = MaterialTone(&phase[0], base * shift / 256);
+            int whine = MaterialTone(&phase[1], base * 9 * shift / 256);
+            int air   = MaterialTone(&phase[2], base * 23 / 4 * shift / 256);
+            int beatn = MaterialTone(&phase[3], (base * 7 / 4 + 3) * shift / 256);
+            value = body * MaterialEnvelope(i, 0, 1200, 300) / 256 * 46 / 100
+                + whine * MaterialEnvelope(i, 120, 1070, 430) / 256 * 13 / 100 * speed / 256
+                + air * MaterialEnvelope(i, 60, 1130, 360) / 256 * 10 / 100 * speed / 256
+                + beatn * MaterialEnvelope(i, 0, 1190, 260) / 256 * 14 / 100
+                + band * MaterialEnvelope(i, 0, 1200, 520) / 256 * 20 / 100 * speed / 256
+                + filtered * MaterialEnvelope(i, 0, 210, 40) / 256 * 10 / 100;
+        } else if (id == SFX_MOUNT_LAND) {
+            // 헤드가 도는 판 위에 내려앉는다. 닿는 순간의 딱 소리와, 그 뒤로
+            // 짧게 붙어 스치는 마찰. 금속 고리는 판이 아니라 암이 떠는 소리다.
+            int tick = MaterialTone(&phase[0], 1560 * shift / 256);
+            int ring = MaterialTone(&phase[1], 880 * shift / 256);
+            int body = MaterialTone(&phase[2], 146 * shift / 256);
+            value = tick * MaterialEnvelope(i, 0, 26, 1) / 256 * 34 / 100
+                + ring * MaterialEnvelope(i, 4, 300, 3) / 256 * 26 / 100
+                + body * MaterialEnvelope(i, 0, 240, 2) / 256 * 32 / 100
+                + filtered * MaterialEnvelope(i, 0, 34, 1) / 256 * 30 / 100
+                + band * MaterialEnvelope(i, 26, 280, 44) / 256 * 16 / 100;
+        } else if (id == SFX_MOUNT_ROT) {
+            // 손상 섹터를 밟는다. 잡음을 고르게 깔면 '치익' 하나로 들리므로
+            // 33Hz 언저리로 잘라 낸다 - 흠이 난 자리가 판이 도는 주기마다
+            // 되돌아오는 소리다. 반음 어긋난 두 음이 밑에서 맥놀이를 만든다.
+            int chop = ((ms * 66 / 1000) & 1) ? 256 : 88;
+            int fall = ms < 380 ? ms : 380;
+            int rasp = MaterialTone(&phase[0], (196 - fall * 74 / 380) * shift / 256);
+            int beatn = MaterialTone(&phase[1], (207 - fall * 78 / 380) * shift / 256);
+            value = rasp * MaterialEnvelope(i, 0, 400, 6) / 256 * 30 / 100
+                + beatn * MaterialEnvelope(i, 0, 400, 6) / 256 * 22 / 100
+                + band * MaterialEnvelope(i, 0, 400, 8) / 256 * 44 / 100 * chop / 256
+                + filtered * MaterialEnvelope(i, 0, 90, 2) / 256 * 26 / 100;
+        } else if (id == SFX_MOUNT_LAW) {
+            // 각인. 앞의 40ms는 금속에 파고드는 마찰이고, 그 뒤에 A단조 3화음이
+            // 판 전체를 울린다(A4·C5·E5). 삽입 연출의 닫는 화음과 같은 조라
+            // 볼륨이 정해지는 순간이 그 악절 안에 앉는다.
+            int cut = MaterialTone(&phase[0], 2200 * shift / 256);
+            int a = MaterialTone(&phase[1], BootNoteHz(24) * shift / 256);
+            int c = MaterialTone(&phase[2], BootNoteHz(27) * shift / 256);
+            int e = MaterialTone(&phase[3], BootNoteHz(31) * shift / 256);
+            value = cut * MaterialEnvelope(i, 0, 44, 2) / 256 * 24 / 100
+                + filtered * MaterialEnvelope(i, 0, 60, 3) / 256 * 26 / 100
+                + a * MaterialEnvelope(i, 30, 720, 6) / 256 * 30 / 100
+                + c * MaterialEnvelope(i, 46, 680, 10) / 256 * 20 / 100
+                + e * MaterialEnvelope(i, 62, 640, 14) / 256 * 16 / 100;
         } else {
             // 삼켜지는 순간. 520ms 동안 올라붙었다가 한 번 크게 닫힌다.
             int climb = ms < 520 ? ms : 520;
@@ -685,6 +747,12 @@ static int SfxDuckDuration(int id) {
     if (id == SFX_BOOT_REVEAL) return 460;
     if (id == SFX_BOOT_LOCK) return 540;
     if (id == SFX_BOOT_CHATTER) return 0;   // 바닥에 깔리는 소리라 음악을 밀지 않는다
+    // 마운트도 음악 위에서 울리는 것이 아니라 음악을 잠시 밀어낸다. 기동음은
+    // 구간 전체를 받치므로 가장 길고, 각인은 그 위에 한 번 선다.
+    if (id == SFX_MOUNT_SPIN) return 1200;
+    if (id == SFX_MOUNT_LAW) return 760;
+    if (id == SFX_MOUNT_ROT) return 300;
+    if (id == SFX_MOUNT_LAND) return 220;
     if (id >= SFX_BOOT_TEAR && id <= SFX_BOOT_SWALLOW) return 120;
     if (id == SFX_LOOT_REVEAL || id == SFX_REPAIR) return 90;
     if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER

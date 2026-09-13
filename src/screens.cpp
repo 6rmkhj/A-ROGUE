@@ -2077,25 +2077,116 @@ static void DrawSelectionCardExit(HDC dc, const RECT& card, int chosen, int elap
     }
 }
 
-static void DrawDriveSelectionExit(HDC dc, int width, int height, int elapsed) {
+// ---- 볼륨 잠금 -------------------------------------------------------------
+// 선택 화면에서 마운트로 넘어가는 첫 구간. 예전에는 탈락한 카드 위로 셔터가
+// 닫히고 고른 카드에 도장이 찍혔다 - "덮였다"이지 "뽑혔다"가 아니어서, 곧바로
+// 이어지는 안착(카드 한 장이 판을 떠나 스핀들에 눕는다)과 동작이 이어지지
+// 않았다. 이제 탈락한 카드는 판 밖으로 뜯겨 나가고, 남은 한 장을 좌우 레일이
+// 물어 고정한다. 다음 구간은 그 물린 카드를 그대로 집어 든다.
+
+// 뜯겨 나가는 카드. 본문을 다시 그리지 않는다 - 이 속도에서는 읽히지 않고,
+// 글자까지 날아가면 판이 아니라 화면이 흩어지는 것으로 보인다.
+static void DrawEjectedCard(HDC dc, const RECT& card, int drive, int dir, int p) {
+    // 원래 자리를 먼저 비운다. 카드 옆의 랙까지 걷어야 "빠져나간 자리"가 된다.
+    Fill(dc, MakeRect(card.left - 12, card.top - 6, card.right + 10, card.bottom + 6), C_BG);
+    if (p >= 1000) return;
+    COLORREF tone = (COLORREF)DRIVE_INFO[drive].color;
+    int travel = EaseInCubic(p), fade = 1000 - p;
+    int dx = dir * (BASE_WIDTH / 2 + 220) * travel / 1000;
+    int tilt = dir * 30 * travel / 1000;
+    RECT slab = MakeRect(card.left + dx, card.top + tilt, card.right + dx, card.bottom + tilt);
+    Panel(dc, slab, MixColor(C_BG, C_PANEL, 30 + 70 * fade / 1000), MixColor(C_BG, tone, 18 + 62 * fade / 1000));
+    TextRect(dc, MakeRect(slab.left + 8, slab.top + 22, slab.right - 8, slab.top + 88),
+             DRIVE_INFO[drive].letter, MixColor(C_BG, tone, 16 + 74 * fade / 1000), gFontHuge,
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(slab.left + 8, slab.top + 94, slab.right - 8, slab.top + 120),
+             DRIVE_INFO[drive].label, MixColor(C_BG, tone, 10 + 44 * fade / 1000), gFontMedium,
+             DT_CENTER | DT_SINGLELINE);
+    if (!FxDecorOn()) return;
+    // 뜯긴 자리. 판에 붙어 있던 쪽 모서리에서만 파편이 남는다.
+    DrawBandGlitch(dc, slab, p, FxScale(4 + 16 * travel / 1000), drive * 31 + 7, 7);
+    int edge = dir < 0 ? card.right : card.left;
+    DrawPixelBurst(dc, edge, (card.top + card.bottom) / 2, p, 1000, FxScale(10), drive * 13 + 3, tone);
+}
+
+// 좌우에서 물려 들어오는 고정 레일. 카드가 스핀들로 가기 전에 한 번 잡힌다.
+static void DrawLockRail(HDC dc, const RECT& card, int clamp, COLORREF tone) {
+    int gap = Lerp(150, 0, clamp);
+    for (int side = 0; side < 2; ++side) {
+        int x = side ? card.right + 4 + gap : card.left - 16 - gap;
+        RECT rail = MakeRect(x, card.top + 74, x + 12, card.bottom - 74);
+        Panel(dc, rail, MixColor(C_BG, tone, 22), MixColor(C_BG, tone, 58));
+        for (int y = rail.top + 12; y < rail.bottom - 8; y += 26)
+            Fill(dc, MakeRect(rail.left + 3, y, rail.right - 3, y + 4), MixColor(C_BG, tone, 44));
+    }
+}
+
+static void DrawVolumeLock(HDC dc, int width, int height, int elapsed) {
     Fill(dc, MakeRect(0, 68, width, height), C_BG);
     DrawDriveSelect(dc, width, height);
     int chosen = gDescentChoiceIndex;
     if (chosen < 0 || chosen >= gGame.driveChoiceCount) return;
-    const DriveInfo* drive = &DRIVE_INFO[gGame.driveChoices[chosen]];
-    for (int i = 0; i < gGame.driveChoiceCount; ++i)
-        DrawSelectionCardExit(dc, DriveCardRect(i), i == chosen, elapsed, DESCENT_LOCK_MS,
-                              (COLORREF)drive->color, L"VOLUME LOCKED");
+    int drive = gGame.driveChoices[chosen];
+    COLORREF tone = (COLORREF)DRIVE_INFO[drive].color;
+    RECT card = DriveCardRect(chosen);
 
-    int commit = Track(elapsed, DESCENT_LOCK_MS * 2 / 3, DESCENT_LOCK_MS);
-    if (commit > 0) {
-        int y = Lerp(68, height, EaseInCubic(commit));
-        if (FxDecorOn()) {
-            RECT card = DriveCardRect(chosen);
-            DrawSectorStatic(dc, MakeRect(card.left, card.top, card.right, card.bottom), gGame.selectedDrive + 31,
-                             elapsed / NOISE_CHURN_MS, FxScale(120 + 320 * commit / 1000));
-            Fill(dc, MakeRect(0, y - 1, width, y + 1), MixColor(C_BG, (COLORREF)drive->color, FxScale(50)));
+    // 탈락한 카드는 바깥으로 나간다. 고른 카드에서 먼 것부터 뜯겨야 빈자리가
+    // 가운데로 모이고, 시선이 남는 한 장에 붙는다.
+    for (int i = 0; i < gGame.driveChoiceCount; ++i) {
+        if (i == chosen) continue;
+        int away = i < chosen ? chosen - i : i - chosen;
+        int delay = 60 + (away - 1) * 45;
+        DrawEjectedCard(dc, DriveCardRect(i), gGame.driveChoices[i], i < chosen ? -1 : 1,
+                        Track(elapsed, delay, delay + 320));
+    }
+
+    // 고른 카드를 한 번 훑고 지나가는 판독선. 뒤에 짧은 꼬리를 남겨 실제로
+    // 읽어 잠그는 것으로 보이게 한다 (여기까지는 예전 잠금과 같은 동작이다).
+    int scan = Track(elapsed, 20, 300);
+    if (scan < 1000) {
+        int head = Lerp(card.left + 2, card.right - 2, EaseOutCubic(scan));
+        Fill(dc, MakeRect(head - 2, card.top + 2, head + 2, card.bottom - 2), tone);
+        for (int i = 1; i <= 3; ++i) {
+            int x = head - i * 8;
+            if (x > card.left) Fill(dc, MakeRect(x, card.top + 5, x + 1, card.bottom - 5), MixColor(C_BG, tone, 58 - i * 13));
         }
+    }
+
+    int clamp = EaseOutCubic(Track(elapsed, 170, 350));
+    if (clamp > 0) DrawLockRail(dc, card, clamp, tone);
+    Outline(dc, card, tone, clamp >= 1000 ? 3 : 2);
+
+    // 물린 순간. 카드가 한 번 주저앉고 테두리가 바깥으로 퍼진다.
+    int kick = Track(elapsed, 350, 470);
+    if (kick > 0 && kick < 1000) {
+        DrawPulseFrame(dc, card, FxScale(4 + 22 * (1000 - kick) / 1000), 3, MixColor(C_BG, tone, FxScale(80 * (1000 - kick) / 1000)));
+        if (FxDecorOn()) {
+            DrawEdgeStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
+                           FxScale(560 * (1000 - kick) / 1000), 46);
+            DrawPixelBurst(dc, card.left, card.bottom - 12, elapsed - 350, 220, FxScale(12), drive * 9 + 1, tone);
+            DrawPixelBurst(dc, card.right, card.bottom - 12, elapsed - 350, 220, FxScale(12), drive * 9 + 2, tone);
+        }
+    }
+
+    // 도장. 여기서부터 이 카드는 선택지가 아니라 대상이다.
+    int stampP = Track(elapsed, 330, 560);
+    if (stampP > 0) {
+        int h = 44 * EaseOutBack(stampP) / 1000;
+        if (h > 44) h = 44;
+        RECT stamp = MakeRect(card.left + 26, (card.top + card.bottom) / 2 - h / 2,
+                              card.right - 26, (card.top + card.bottom) / 2 + h / 2);
+        Fill(dc, stamp, RGB(5, 9, 13));
+        Outline(dc, stamp, tone, 2);
+        if (h >= 34) TextRect(dc, stamp, L"VOLUME LOCKED", tone, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // 마지막 150ms는 기계 안이 어두워진다. 다음 구간의 판이 이 어둠에서 선다.
+    // 덮는 색에는 알파가 없으므로 줄 간격을 좁혀 가며 잠근다 - 마지막 프레임은
+    // 빈틈이 없어, 안착 구간이 검은 화면에서 이어받는다.
+    int dim = Track(elapsed, MOUNT_LOCK_MS - 150, MOUNT_LOCK_MS);
+    if (dim > 0) {
+        int step = dim > 700 ? 1 : dim > 380 ? 2 : 3;
+        for (int y = 68; y < height; y += step) Fill(dc, MakeRect(0, y, width, y + 1), C_INK);
     }
 }
 
@@ -2403,116 +2494,777 @@ static RECT LerpRect(const RECT& a, const RECT& b, int p) {
                     Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
 }
 
-// 마운트/심층 진입 연출. 모든 값은 경과 시간의 순수 함수라 마우스 이동 리페인트와 겹쳐도 안전하다.
-static void DrawDescent(HDC dc, int width, int height) {
-    const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
-    int totalElapsed = (int)(GetTickCount() - gDescentStart);
-    if (totalElapsed < 0) totalElapsed = 0; if (totalElapsed > DESCENT_MS) totalElapsed = DESCENT_MS;
-    int mount = gDescentToFloor == 0;
-    if (mount && gDescentChoiceIndex >= 0 && totalElapsed < DESCENT_LOCK_MS) {
-        DrawDriveSelectionExit(dc, width, height, totalElapsed);
-        return;
+// ---- 볼륨 마운트 / 층 하강 연출 --------------------------------------------
+// 예전 이 자리에는 패널 한 장이 열리고 진행 막대가 찼다. 막대는 "얼마나 남았나"만
+// 말한다 - 어느 볼륨으로 들어가는지, 그 볼륨이 왜 위험한지는 말하지 못했다.
+//
+// 이제 고른 볼륨은 물건이 된다. 나머지 카드가 판 밖으로 뜯겨 나가고, 남은 한 장이
+// 뽑혀 나와 매체 자리에 눕고, 깨어난 그 매체를 헤드가 세 트랙에 걸쳐 읽는다.
+// 읽히는 값은 새로 만든 것이 아니라 방금 카드에 적혀 있던 것들이다 - 손상 섹터
+// 둘이 트랙 위의 갈린 자리로 드러나고, 볼륨 법칙이 다 읽은 매체에 박힌다.
+//
+// 그리고 그 매체가 볼륨마다 다르다(ui.h의 MediaKind). 트랙이 고리인 볼륨도 있고
+// 가로줄인 볼륨도 있으므로, 아래 그리기는 고리도 줄도 모른다 - 매체에게 "트랙 t의
+// 진행 p가 놓이는 점"만 물어보고, 판독·손상·지시선이 전부 그 점 하나를 같이 쓴다.
+//
+// 모든 값은 경과 ms의 순수 함수다 (같은 시각이면 같은 프레임). 구간 경계는
+// ui.h의 MountBeats가 쥐고 있고 소리(main.cpp)도 같은 표를 본다.
+#define PLATTER_CY      432
+#define PLATTER_R       236
+#define PLATTER_HUB      80
+#define PLATTER_PIVOT_DX 480   // 액추에이터 축. 매체 중심에서 오른쪽 아래로
+#define PLATTER_PIVOT_DY 208
+#define PLATTER_ENTRY    520   // 도는 매체에서 헤드가 닿는 각도(1/10도)
+#define TAPE_SPAN        206   // 릴 사이로 띠가 지나가는 반폭
+#define TAPE_REEL        126
+#define CELL_SPAN        300   // 셀 격자의 반폭
+#define CELL_ROW          96   // 행 간격
+
+// 트랙 반지름. 0이 바깥이고 안으로 갈수록 층이 깊다 - 층 하강이 "더 파고든다"로
+// 읽히려면 이 순서가 층 번호와 같아야 한다.
+static int PlatterTrackR(int track) {
+    static const int RADIUS[MOUNT_TRACKS] = {208, 158, 108};
+    return RADIUS[track < 0 ? 0 : track >= MOUNT_TRACKS ? MOUNT_TRACKS - 1 : track];
+}
+
+static POINT PlatterAt(int cx, int cy, int rx, int ry, int angle) {
+    POINT p = {cx + CosMille(angle) * rx / 1000, cy + SinMille(angle) * ry / 1000};
+    return p;
+}
+
+// 이 연출의 유일한 기하 규약. 매체마다 트랙의 모양이 다르지만(고리 · 가로줄),
+// 판독 진행도도 손상 섹터도 지시선 앵커도 전부 이 한 함수만 보고 그려진다.
+// off는 트랙에 수직인 오프셋(px)이라, 고리에서는 반지름이 되고 줄에서는 높이가 된다.
+static POINT MediaTrackPoint(int media, int cx, int cy, int track, int p, int squash, int off) {
+    if (media == MEDIA_TAPE) {
+        POINT q = {Lerp(cx - TAPE_SPAN, cx + TAPE_SPAN, p), cy + (track - 1) * 34 + off};
+        return q;
     }
-    int elapsed = totalElapsed - (mount && gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
-    int scanMs = DESCENT_MS - (mount && gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
-    Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
-    RECT panel = MakeRect(170, 150, width - 170, height - 150);
-    // 잠금이 끝나는 순간 전혀 다른 판이 통째로 튀어나오던 자리. 이제 패널은 방금 잠근
-    // 카드 자리에서 열려 나온다. 패널 안의 모든 배치가 panel 하나만 보고 정해지므로
-    // 사각형만 키우면 내용이 따라 펼쳐지고, 아직 좁은 동안 밖으로 삐져나오는 부분은
-    // 클립으로 잘라 낸다 (좌표를 따로 접는 것보다 손댈 곳이 없다).
-    // 층 하강은 열려 나올 카드가 없으니 예전대로 곧장 제 크기로 선다.
-    int cardOpen = (mount && gDescentChoiceIndex >= 0 && gDescentChoiceIndex < gGame.driveChoiceCount
-                    && FxDecorOn()) ? Track(elapsed, 0, 260) : 1000;
-    int panelClip = 0;
-    if (cardOpen < 1000) {
-        panel = LerpRect(DriveCardRect(gDescentChoiceIndex), panel, EaseOutCubic(cardOpen));
-        panelClip = SaveDC(dc);
-        if (panelClip) IntersectClipRect(dc, panel.left, panel.top, panel.right, panel.bottom);
+    if (media == MEDIA_CELL) {
+        POINT q = {Lerp(cx - CELL_SPAN, cx + CELL_SPAN, p), cy + (track - 1) * CELL_ROW + off};
+        return q;
     }
-    Panel(dc, panel, C_PANEL, (COLORREF)drive->color);
-    Text(dc, panel.left + 26, panel.top + 20, mount ? L"볼륨 마운트" : L"심층 탐색", C_GREEN, gFontLarge);
-    wchar_t b[160];
-    wsprintfW(b, L"%d층 / 3", gDescentToFloor + 1);
-    TextRect(dc, MakeRect(panel.right - 160, panel.top + 28, panel.right - 26, panel.top + 54), b, C_DIM, gFontMedium, DT_RIGHT | DT_SINGLELINE);
-    if (mount) wsprintfW(b, L"대상 볼륨  %s%s", drive->letter, drive->label);
-    else wsprintfW(b, L"현재 경로  %s", drive->paths[gDescentToFloor - 1]);
-    Text(dc, panel.left + 26, panel.top + 68, b, C_DIM, gFontSmall);
+    int r = PlatterTrackR(track) + off;
+    return PlatterAt(cx, cy, r, r * squash / 1000, PLATTER_ENTRY + 3600 * p / 1000);
+}
 
-    // 목표 경로가 한 글자씩 타이핑된다.
-    const wchar_t* path = drive->paths[gDescentToFloor];
-    int length = lstrlenW(path);
-    int typed = elapsed * length / (scanMs * 3 / 5);
-    if (typed > length) typed = length;
-    wchar_t typedText[64] = L"> ";
-    lstrcpynW(typedText + 2, path, typed + 1);
-    if (typed < length && ((elapsed / 220) & 1)) lstrcatW(typedText, L"_");
-    TextRect(dc, MakeRect(panel.left + 26, panel.top + 98, panel.right - 26, panel.top + 148), typedText, (COLORREF)drive->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+// 헤드가 놓이는 진행도. 도는 판은 입구에 머물고 판이 그 아래로 지나가며,
+// 테이프는 릴 사이 한가운데에 서서 띠가 지나가고, 셀 격자와 링크는 읽는
+// 자리 자체가 움직인다.
+static int MediaHeadProgress(int media, int read) {
+    if (media == MEDIA_TAPE) return 500;
+    if (media == MEDIA_CELL || media == MEDIA_LINK) return read;
+    return 0;
+}
 
-    // 판독 노이즈 밴드: 진행될수록 정적이 걷힌다.
-    int noiseLevel = 900 - elapsed * 900 / scanMs;
-    RECT band = MakeRect(panel.left + 26, panel.top + 162, panel.right - 26, panel.top + 272);
-    Panel(dc, band, RGB(8, 13, 19), C_LINE);
-    RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
-    DrawSectorStatic(dc, inner, gGame.selectedDrive + 11, elapsed / NOISE_CHURN_MS, 200 + noiseLevel);
-    DrawSectorHex(dc, inner, gGame.selectedDrive + 5, elapsed / NOISE_CHURN_MS, 300 + noiseLevel);
-    DrawScanlines(dc, inner);
+// 볼륨 문자가 앉는 자리. 마지막에 카메라가 파고드는 곳이기도 하다.
+static POINT MediaHub(int media, int cx, int cy) {
+    if (media == MEDIA_TAPE) { POINT q = {cx - TAPE_SPAN - TAPE_REEL + 8, cy}; return q; }
+    if (media == MEDIA_CELL) { POINT q = {cx, cy - CELL_ROW - 66}; return q; }
+    POINT q = {cx, cy};
+    return q;
+}
 
-    // 디스크 트랙과 탐색 헤드. 세 구간으로 나뉘어 오디오의 seek 신호와 같은
-    // 시점에 자리를 옮기므로, 소리가 날 때마다 헤드가 다음 트랙에 안착한다.
-    RECT track = MakeRect(panel.left + 26, panel.top + 276, panel.right - 26, panel.top + 284);
-    Fill(dc, track, RGB(8, 12, 17));
-    for (int x = track.left; x < track.right; x += 9)
-        Fill(dc, MakeRect(x, track.top, x + 1, track.bottom), RGB(30, 42, 52));
-    int seekPhase = elapsed * 3 / scanMs;
-    if (seekPhase > 2) seekPhase = 2;
-    int within = elapsed * 3 - seekPhase * scanMs;
-    int trackSpan = track.right - track.left;
-    int from = trackSpan * seekPhase / 3, to = trackSpan * (seekPhase + 1) / 3;
-    int headX = track.left + from + (to - from) * EaseOutCubic(Track(within, 0, 660)) / 1000;
-    Fill(dc, MakeRect(track.left, track.top + 3, headX, track.top + 5), MixColor(C_BG, (COLORREF)drive->color, 62));
-    Fill(dc, MakeRect(headX - 2, track.top - 6, headX + 2, track.bottom + 6), (COLORREF)drive->color);
+// 매체가 실제로 차지하는 자리. 베이의 꺾쇠가 이것을 문다 - 테이프는 옆으로 넓고
+// 셀 격자는 납작한데 꺾쇠만 늘 원판 크기로 서 있으면, 무는 시늉만 하는 것이 된다.
+static RECT MediaFrame(int media, int cx, int cy) {
+    if (media == MEDIA_TAPE)
+        return MakeRect(cx - TAPE_SPAN - TAPE_REEL * 2 - 28, cy - TAPE_REEL - 46,
+                        cx + TAPE_SPAN + TAPE_REEL * 2 + 28, cy + TAPE_REEL + 46);
+    if (media == MEDIA_CELL)
+        return MakeRect(cx - CELL_SPAN - 62, cy - CELL_ROW - 82,
+                        cx + CELL_SPAN + 62, cy + CELL_ROW + 82);
+    return MakeRect(cx - PLATTER_R - 46, cy - PLATTER_R - 46,
+                    cx + PLATTER_R + 46, cy + PLATTER_R + 46);
+}
 
-    RECT barRect = MakeRect(panel.left + 26, panel.top + 288, panel.right - 26, panel.top + 306);
-    Bar(dc, barRect, elapsed, scanMs, (COLORREF)drive->color);
-    wsprintfW(b, L"%d%%", elapsed * 100 / scanMs);
-    TextRect(dc, MakeRect(panel.right - 106, panel.top + 310, panel.right - 26, panel.top + 332), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+static void FillDisc(HDC dc, int cx, int cy, int rx, int ry, COLORREF color) {
+    if (rx < 1 || ry < 1) return;
+    HBRUSH brush = CreateSolidBrush(color);
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(dc, brush);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    Ellipse(dc, cx - rx, cy - ry, cx + rx, cy + ry);
+    SelectObject(dc, oldPen); DeleteObject(pen);
+    SelectObject(dc, oldBrush); DeleteObject(brush);
+}
 
-    int capacity = EffectiveCapacity(&gGame);
-    if (mount) {
-        const ModifierInfo* modA = ActiveModifierInfo(gGame.modifierA);
-        const ModifierInfo* modB = ActiveModifierInfo(gGame.modifierB);
-        wsprintfW(b, L"층 한도 %dB  ·  디스크 손상: %s + %s", capacity, modA ? modA->name : L"-", modB ? modB->name : L"-");
-    } else {
-        int bonus = capacity - FLOOR_CAPACITY[gGame.floor > 2 ? 2 : gGame.floor];
-        wsprintfW(b, L"용량 한도 %dB → %dB  ·  적이 더 강해집니다", FLOOR_CAPACITY[gDescentToFloor - 1] + bonus, capacity);
+// 트랙 위의 한 구간. 고리면 호가 되고 줄이면 선분이 된다.
+static void DrawTrackRun(HDC dc, int media, int cx, int cy, int track, int from, int to,
+                         int squash, int off, COLORREF tone, int thickness) {
+    if (to <= from) return;
+    int steps = MediaIsDisc(media) ? (to - from) / 18 + 2 : 2;
+    if (steps > 100) steps = 100;
+    POINT last = MediaTrackPoint(media, cx, cy, track, from, squash, off);
+    for (int i = 1; i <= steps; ++i) {
+        POINT next = MediaTrackPoint(media, cx, cy, track, from + (to - from) * i / steps, squash, off);
+        DrawLine(dc, last.x, last.y, next.x, next.y, tone, thickness);
+        last = next;
     }
-    Text(dc, panel.left + 26, panel.top + 322, b, C_YELLOW, gFontSmall);
-    if (mount) wsprintfW(b, L"볼륨 특성: %s", drive->perkText);
-    else lstrcpyW(b, L"감염 코어에 접근하기 위해 더 깊은 섹터로 진입합니다.");
-    Text(dc, panel.left + 26, panel.top + 348, b, C_TEXT, gFontSmall);
+}
 
-    // 카드 잠금의 스캔 헤드가 마운트 패널 안으로 이어진다. 초반에는 외곽이
-    // 크게 한 번 숨 쉬고, 각 seek 착지점마다 트랙에서 작은 데이터 파편이 튄다.
-    int reveal = Track(elapsed, 0, 240);
-    if (reveal < 1000) {
-        int sweepY = Lerp(panel.top + 2, panel.bottom - 2, EaseOutCubic(reveal));
-        if (FxDecorOn()) {
-            Fill(dc, MakeRect(panel.left + 2, sweepY - 1, panel.left + 6, sweepY + 2), (COLORREF)drive->color);
-            Fill(dc, MakeRect(panel.right - 6, sweepY - 1, panel.right - 2, sweepY + 2), (COLORREF)drive->color);
-            DrawPulseFrame(dc, panel, FxScale(2 + 8 * (1000 - reveal) / 1000), 2,
-                MixColor(C_BG, (COLORREF)drive->color, FxScale(50 * (1000 - reveal) / 1000)));
+// 손상 섹터. 매끈하게 그리면 색만 다른 트랙이 된다. 실제로 갈려 있으려면 자리가
+// 끊겨 있어야 하므로 트랙을 가로지르는, 이가 빠진 톱니로 그린다 - 볼륨 색이 붉은
+// 계열이어도(X:\) "부서진 자리"로 읽힌다.
+static void DrawDamageRun(HDC dc, int media, int cx, int cy, int track, int from, int span,
+                          int squash, COLORREF tone) {
+    DrawTrackRun(dc, media, cx, cy, track, from, from + span, squash, -7, tone, 2);
+    DrawTrackRun(dc, media, cx, cy, track, from, from + span, squash, 7, tone, 2);
+    for (int i = 1; i < 6; i += 2) {
+        POINT a = MediaTrackPoint(media, cx, cy, track, from + span * i / 6, squash, -7);
+        POINT b = MediaTrackPoint(media, cx, cy, track, from + span * i / 6, squash, 7);
+        DrawLine(dc, a.x, a.y, b.x, b.y, tone, 2);
+    }
+}
+
+// 스핀들 각도(1/10도). 기동 구간에서 제곱으로 붙고 그 뒤는 등속이다. 초당 약
+// 1.9회전 - 더 빠르게 두면 60fps에서 눈금이 뒤로 도는 것처럼 보인다.
+static int PlatterAngle(int elapsed, const MountBeats& beats, int mount) {
+    int spun;
+    if (!mount) spun = elapsed + 1300;   // 하강 때는 이미 회전수에 올라 있다
+    else {
+        int spinMs = beats.readAt - beats.spinAt;
+        int ramp = Track(elapsed, beats.spinAt, beats.readAt);
+        spun = spinMs * ramp / 1000 * ramp / 1000 / 2;   // 가속 동안 쌓인 각
+        if (elapsed > beats.readAt) spun += elapsed - beats.readAt;
+    }
+    return spun * 7 % 3600;
+}
+
+// 손상 섹터의 자리. 볼륨마다 늘 같은 곳이 갈려 있어야 두 번째 플레이에서
+// "그 볼륨"으로 읽힌다. 그래서 난수가 아니라 볼륨 번호의 해시다.
+static int MediaDamage(int drive, int track, int index, int* span) {
+    uint32_t h = Hash3(drive * 17 + 3, track, index * 29 + 11);
+    *span = 34 + (int)(h % 52);
+    return (int)((h >> 9) % 1000);
+}
+
+// 접촉이 끊기는 매체(E:\ 광 디스크)가 지금 끊겨 있는가. 시각의 함수라 프레임이
+// 겹쳐도 같은 값이 나오고, 판독 진행도는 건드리지 않는다 - 값은 그대로 가고
+// 그 프레임의 신호만 사라진다.
+//
+// 처음에는 끊길 때 판까지 통째로 지웠다. 그러면 접촉 불량이 아니라 그리기가
+// 고장 난 것으로 보인다 - 물건은 계속 거기 있어야 하고, 끊기는 것은 그 물건을
+// 읽고 있다는 신호(반사·판독 호·선단)뿐이다.
+static int MediaDropout(int media, int elapsed) {
+    if (media != MEDIA_OPTICAL) return 0;
+    return (Hash3(elapsed / 150, 7, 31) % 100) < 11;
+}
+
+// 도는 판의 앞면. 매끈한 원은 돌아도 가만히 있는 것으로 보이므로, 도는 것을
+// 말하는 일은 눈금과 한자리에 머무는 빛 반사가 맡는다.
+static void DrawPlatterFace(HDC dc, int cx, int cy, int rx, int ry, int spin, COLORREF tone, COLORREF body) {
+    FillDisc(dc, cx, cy, rx + 3, ry + 3, MixColor(C_BG, tone, 16));
+    FillDisc(dc, cx, cy, rx, ry, body);
+    for (int i = 0; i < 24; ++i) {
+        int a = spin + i * 150, lit = (i % 8) == 0;
+        POINT from = PlatterAt(cx, cy, rx * 90 / 100, ry * 90 / 100, a);
+        POINT to = PlatterAt(cx, cy, rx, ry, a);
+        DrawLine(dc, from.x, from.y, to.x, to.y, MixColor(C_BG, tone, lit ? 52 : 22), lit ? 2 : 1);
+    }
+    for (int i = 0; i < 3; ++i) {
+        int hubX = PLATTER_HUB * rx / PLATTER_R, hubY = PLATTER_HUB * ry / PLATTER_R;
+        POINT from = PlatterAt(cx, cy, hubX, hubY, spin + i * 1200);
+        POINT to = PlatterAt(cx, cy, rx * 94 / 100, ry * 94 / 100, spin + i * 1200);
+        DrawLine(dc, from.x, from.y, to.x, to.y, MixColor(C_BG, tone, 18), 1);
+    }
+    DrawTrackRun(dc, MEDIA_STACK, cx, cy, 0, 0, 1000, ry * 1000 / rx, rx * 97 / 100 - 208, MixColor(C_BG, tone, 9), 1);
+    DrawCraftArc(dc, cx, cy, rx * 97 / 100, ry * 97 / 100, 2450, 700, MixColor(C_BG, tone, 30), 2);
+    DrawGlowRing(dc, cx, cy, rx, ry, MixColor(C_BG, tone, 46), 2);
+}
+
+// ---- 매체 일곱 ------------------------------------------------------------
+// 각각이 무엇으로 만들어졌는지가 한눈에 갈려야 한다. 공유하는 것은 트랙 기하와
+// 판독 규칙뿐이고, 아래 몸통은 볼륨마다 따로 그린다.
+
+// C:\ 플래터 3장. 아래 두 장은 가장자리만 보여 두께가 생긴다 - 한 장짜리 판과
+// 달리 "묵직한 기본형"으로 읽히고, 이 볼륨의 안정성이 형태로 먼저 온다.
+static void DrawMediaStack(HDC dc, int cx, int cy, int rx, int ry, int spin, COLORREF tone) {
+    for (int i = 2; i >= 1; --i) {
+        FillDisc(dc, cx, cy + i * 16, rx, ry, RGB(9, 13, 18));
+        DrawGlowRing(dc, cx, cy + i * 16, rx, ry, MixColor(C_BG, tone, 26 - i * 7), 2);
+    }
+    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(18, 25, 33));
+}
+
+// D:\ 오픈릴 테이프. 릴 둘 사이로 띠가 지나가고, 읽을수록 왼쪽 릴이 풀리고
+// 오른쪽 릴이 감긴다. 넓지만 느린 창고가 그대로 형태가 된다.
+static void DrawMediaTape(HDC dc, int cx, int cy, int open, int read, int elapsed, COLORREF tone) {
+    int thread = EaseOutCubic(open), spin = elapsed * 9 % 3600;
+    for (int side = 0; side < 2; ++side) {
+        int rx = side ? cx + TAPE_SPAN + TAPE_REEL : cx - TAPE_SPAN - TAPE_REEL;
+        // 감긴 양. 왼쪽은 풀리고 오른쪽은 감긴다 (합은 늘 같다).
+        int wound = side ? 44 + read * 62 / 1000 : 106 - read * 62 / 1000;
+        FillDisc(dc, rx, cy, TAPE_REEL, TAPE_REEL, RGB(9, 13, 18));
+        FillDisc(dc, rx, cy, wound, wound, RGB(21, 27, 34));
+        DrawGlowRing(dc, rx, cy, wound, wound, MixColor(C_BG, tone, 40), 2);
+        DrawGlowRing(dc, rx, cy, TAPE_REEL, TAPE_REEL, MixColor(C_BG, tone, 34), 2);
+        for (int i = 0; i < 6; ++i) {   // 릴의 살. 이것만 돌아도 감기는 것이 보인다
+            POINT a = PlatterAt(rx, cy, 30, 30, spin * (side ? 1 : -1) + i * 600);
+            POINT b = PlatterAt(rx, cy, TAPE_REEL - 6, TAPE_REEL - 6, spin * (side ? 1 : -1) + i * 600);
+            DrawLine(dc, a.x, a.y, b.x, b.y, MixColor(C_BG, tone, 26), 2);
+        }
+        DrawGlowRing(dc, rx, cy, 28, 28, MixColor(C_BG, tone, 52), 2);
+    }
+    // 띠. 기동 구간에 릴에서 릴로 걸린다.
+    int left = cx - TAPE_SPAN, right = Lerp(cx - TAPE_SPAN, cx + TAPE_SPAN, thread);
+    Fill(dc, MakeRect(left, cy - 52, right, cy + 52), RGB(14, 19, 25));
+    DrawLine(dc, left, cy - 52, right, cy - 52, MixColor(C_BG, tone, 40), 2);
+    DrawLine(dc, left, cy + 52, right, cy + 52, MixColor(C_BG, tone, 40), 2);
+}
+
+// E:\ 광 디스크. 피벗 암이 아니라 직선 레일 위의 슬레드가 읽는다. 표면이 거울이라
+// 무지개 띠가 한자리에 서 있고, 접촉이 끊길 때마다 그 띠가 통째로 사라진다.
+static void DrawMediaOptical(HDC dc, int cx, int cy, int rx, int ry, int spin, int elapsed,
+                             int drop, COLORREF tone) {
+    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(14, 20, 27));
+    if (drop && FxDecorOn())
+        DrawBandGlitch(dc, MakeRect(cx - rx, cy - ry, cx + rx, cy + ry), elapsed, FxScale(14), 91, 9);
+    if (!drop) for (int i = 0; i < 5; ++i) {
+        // 거울면의 반사. 각 띠가 조금씩 다른 색이라 판이 금속이 아니라 광매체다.
+        static const COLORREF SHEEN[5] = {C_BLUE, C_GREEN, C_YELLOW, C_RED, C_BLUE};
+        int r = rx * (72 + i * 5) / 100;
+        DrawCraftArc(dc, cx, cy, r, r * ry / rx, 2280 + i * 40, 560, MixColor(C_BG, SHEEN[i], 26), 3);
+    }
+    // 가운데의 큰 투명 구멍. 광 디스크를 광 디스크로 만드는 것의 절반이다.
+    FillDisc(dc, cx, cy, 40, 40 * ry / rx, RGB(6, 9, 13));
+    DrawGlowRing(dc, cx, cy, 40, 40 * ry / rx, MixColor(C_BG, tone, 44), 2);
+    // 슬레드가 달리는 레일.
+    Fill(dc, MakeRect(cx + 30, cy + ry + 28, cx + rx + 96, cy + ry + 34), MixColor(C_BG, tone, 18));
+}
+
+// N:\ 실체가 없다. 고리는 끊긴 점선이고, 화면 밖 링크에서 온 패킷이 그것을
+// 채운다. 원격 격리가 형태로 온다 - 만질 수 있는 물건이 하나도 없다.
+static void DrawMediaLink(HDC dc, int cx, int cy, int rx, int ry, int open, int elapsed, COLORREF tone) {
+    int lit = EaseOutCubic(open);
+    for (int t = 0; t < MOUNT_TRACKS; ++t) {
+        int r = PlatterTrackR(t), er = r * ry / rx;
+        for (int i = 0; i < 24; ++i) {
+            if (((i + t) % 3) == 0) continue;         // 끊긴 자리
+            int a = i * 150 + t * 60 + elapsed / 9;
+            DrawCraftArc(dc, cx, cy, r, er, a, 78, MixColor(C_BG, tone, 12 + 22 * lit / 1000), 2);
         }
     }
-    int phaseElapsed = elapsed % (scanMs / 3);
-    if (phaseElapsed < 220)
-        DrawPixelBurst(dc, headX, (track.top + track.bottom) / 2, phaseElapsed, 220,
-                       FxScale(12), gGame.selectedDrive * 17 + seekPhase, (COLORREF)drive->color);
+    // 링크. 화면 밖에서 들어와 노드에 닿고, 그 위를 패킷이 흐른다.
+    POINT node = {cx, cy};
+    DrawLine(dc, BASE_WIDTH, cy - 176, node.x + 96, cy - 52, MixColor(C_BG, tone, 22), 1);
+    for (int i = 0; i < 5; ++i) {
+        int at = (elapsed * 2 + i * 400) % 2000;
+        int p = at * 1000 / 2000;
+        int x = Lerp(BASE_WIDTH, node.x + 96, p), y = Lerp(cy - 176, cy - 52, p);
+        Fill(dc, MakeRect(x - 4, y - 2, x + 4, y + 3), MixColor(C_BG, tone, 30 + 40 * lit / 1000));
+    }
+    for (int i = 0; i < 6; ++i) {   // 육각 노드. 판이 아니라 주소 하나다
+        POINT a = PlatterAt(cx, cy, PLATTER_HUB, PLATTER_HUB * ry / rx, i * 600);
+        POINT b = PlatterAt(cx, cy, PLATTER_HUB, PLATTER_HUB * ry / rx, (i + 1) * 600);
+        DrawLine(dc, a.x, a.y, b.x, b.y, MixColor(C_BG, tone, 48), 2);
+    }
+}
+
+// R:\ 셀 격자. 도는 것이 하나도 없다. 행을 훑어 읽고, 읽힌 자리는 곧 증발한다 -
+// 휘발성 램디스크가 형태와 동작 양쪽으로 온다.
+static void DrawMediaCell(HDC dc, int cx, int cy, int open, int elapsed, COLORREF tone) {
+    int powered = EaseOutCubic(open);
+    for (int row = 0; row < MOUNT_TRACKS; ++row) {
+        int y = cy + (row - 1) * CELL_ROW;
+        if (powered < (row + 1) * 1000 / (MOUNT_TRACKS + 1)) continue;
+        Fill(dc, MakeRect(cx - CELL_SPAN - 16, y - 34, cx + CELL_SPAN + 16, y + 34), RGB(10, 15, 21));
+        Outline(dc, MakeRect(cx - CELL_SPAN - 16, y - 34, cx + CELL_SPAN + 16, y + 34), MixColor(C_BG, tone, 24), 1);
+        for (int col = 0; col < 24; ++col) {
+            int x = cx - CELL_SPAN - 4 + col * (CELL_SPAN * 2 + 8) / 24;
+            // 칸마다 다른 주기로 새로 고쳐진다. 램은 가만히 있어도 계속 되쓰인다.
+            int refresh = (elapsed / 90 + col * 5 + row * 11) % 7;
+            Fill(dc, MakeRect(x, y - 22, x + 16, y + 22),
+                 MixColor(C_BG, tone, refresh < 2 ? 30 : 13));
+        }
+    }
+    // 버스. 격자 왼쪽에 세로로 서서 세 행을 모두 문다.
+    Fill(dc, MakeRect(cx - CELL_SPAN - 46, cy - CELL_ROW - 40, cx - CELL_SPAN - 30, cy + CELL_ROW + 40),
+         MixColor(C_BG, tone, 20));
+}
+
+// X:\ 격리 캐비닛. 판은 우리에 물려 있고 잠금쇠 넷이 가장자리를 쥐고 있다.
+// 위아래로 경고 띠가 지나간다 - 여기 있는 것은 복구 대상이 아니라 압수품이다.
+static void DrawMediaCage(HDC dc, int cx, int cy, int rx, int ry, int spin, int open, COLORREF tone) {
+    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(20, 15, 17));
+    int release = EaseOutCubic(open);
+    for (int i = 0; i < 4; ++i) {   // 잠금쇠. 기동과 함께 바깥으로 물러난다
+        int a = 450 + i * 900, reach = rx + 10 + release * 34 / 1000;
+        POINT grip = PlatterAt(cx, cy, reach, reach * ry / rx, a);
+        POINT root = PlatterAt(cx, cy, reach + 44, (reach + 44) * ry / rx, a);
+        DrawLine(dc, root.x, root.y, grip.x, grip.y, MixColor(C_BG, tone, 44), 7);
+        RECT jaw = MakeRect(grip.x - 13, grip.y - 13, grip.x + 13, grip.y + 13);
+        Fill(dc, jaw, RGB(22, 10, 11));
+        for (int x = jaw.left - 12; x < jaw.right; x += 9)
+            DrawLine(dc, x, jaw.bottom, x + 13, jaw.top, MixColor(C_BG, C_RED, 44), 3);
+        Outline(dc, jaw, MixColor(C_BG, tone, 60), 2);
+    }
+    // 경고 띠는 판 위쪽 한 줄뿐이다. 아래에도 두면 판독 데이터 띠와 겹치고,
+    // 위아래 둘이면 경고가 배경 무늬가 되어 아무것도 경고하지 않는다.
+    RECT band = MakeRect(cx - rx - 30, cy - ry - 40, cx + rx + 30, cy - ry - 24);
+    Fill(dc, band, RGB(22, 10, 11));
+    for (int x = band.left; x < band.right; x += 18)
+        DrawLine(dc, x, band.bottom, x + 14, band.top, MixColor(C_BG, C_RED, 40), 3);
+    Outline(dc, band, MixColor(C_BG, C_RED, 40), 1);
+}
+
+// A:\ 플로피 한 장. 복구 도구 자신의 마지막 기록이고, 타이틀과 삽입 연출이 내내
+// 보여 준 바로 그 물건이다. 셔터가 열려 안의 자기면이 드러나고, 헤드가 위아래
+// 양쪽에서 둘이다 - 자기 자신을 읽는 유일한 볼륨이다.
+static void DrawMediaFloppy(HDC dc, int cx, int cy, int rx, int ry, int spin, int open, COLORREF tone) {
+    int jacket = rx + 46, shutter = EaseOutCubic(open);
+    RECT shell = MakeRect(cx - jacket, cy - jacket, cx + jacket, cy + jacket);
+    Fill(dc, shell, RGB(11, 16, 22));
+    Outline(dc, shell, MixColor(C_BG, tone, 40), 2);
+    Fill(dc, MakeRect(shell.right - 34, shell.top, shell.right, shell.top + 34), C_BG);   // 모서리 홈
+    DrawLine(dc, shell.right - 34, shell.top, shell.right, shell.top + 34, MixColor(C_BG, tone, 40), 2);
+    Outline(dc, MakeRect(shell.left + 18, shell.bottom - 48, shell.left + 40, shell.bottom - 26),
+            MixColor(C_BG, tone, 34), 2);                                                 // 쓰기 방지 창
+    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(16, 22, 29));
+    // 금속 셔터. 기동 구간에 옆으로 밀려 자기면을 연다.
+    int slide = jacket * 2 * shutter / 1000;
+    RECT metal = MakeRect(shell.left + 20 + slide, shell.top + 14, shell.left + 20 + slide + 150, shell.top + 76);
+    if (metal.left < shell.right - 24) {
+        Fill(dc, metal, RGB(26, 33, 41));
+        Outline(dc, metal, MixColor(C_BG, tone, 50), 2);
+        Fill(dc, MakeRect(metal.left + 22, metal.top + 12, metal.left + 34, metal.bottom - 12), C_BG);
+    }
+}
+
+// 액추에이터 · 슬레드 · 테이프 헤드 · 버스 프로브. 무엇이 읽고 있는지도 볼륨마다
+// 다르다 - 같은 팔이 일곱 번 나오면 매체를 갈라 둔 것이 형태에서만 끝난다.
+static void DrawReadHead(HDC dc, int media, int cx, int cy, POINT head, int lifted, COLORREF tone) {
+    int lift = lifted * 26 / 1000;
+    POINT seat = head;
+    head.y -= lift;
+    if (media == MEDIA_LINK) {
+        // 읽는 물건이 없다. 도착한 자리에 수신 표시만 선다.
+        DrawGlowRing(dc, head.x, head.y, 16, 16, MixColor(C_BG, tone, 62), 2);
+        Fill(dc, MakeRect(head.x - 4, head.y - 4, head.x + 4, head.y + 4), MixColor(C_BG, tone, 74));
+        return;
+    }
+    if (media == MEDIA_CELL) {
+        // 버스 프로브. 격자의 한 칸을 위아래로 물어 잡는다.
+        Fill(dc, MakeRect(head.x - 12, cy - CELL_ROW - 52, head.x + 12, cy + CELL_ROW + 52),
+             MixColor(C_BG, tone, 16));
+        Fill(dc, MakeRect(head.x - 12, head.y - 30, head.x + 12, head.y + 30), MixColor(C_BG, tone, 54));
+        return;
+    }
+    if (media == MEDIA_TAPE) {
+        // 고정 헤드. 띠가 이 아래를 지나간다. 좌우의 가이드 롤러가 띠를 누른다.
+        for (int side = 0; side < 2; ++side) {
+            int x = cx + (side ? 92 : -92);
+            DrawGlowRing(dc, x, cy + 70, 22, 22, MixColor(C_BG, tone, 34), 2);
+        }
+        Panel(dc, MakeRect(cx - 30, cy + 66, cx + 30, cy + 118), RGB(10, 15, 21), MixColor(C_BG, tone, 40));
+        Fill(dc, MakeRect(cx - 5, cy + 4, cx + 5, cy + 70), MixColor(C_BG, tone, 34));
+        Fill(dc, MakeRect(cx - 16, head.y - 5, cx + 16, head.y + 5), MixColor(C_BG, tone, 70));
+        return;
+    }
+    if (media == MEDIA_OPTICAL) {
+        // 직선 레일 위의 슬레드. 피벗이 없으므로 아래에서 곧게 밀려 올라온다.
+        Fill(dc, MakeRect(head.x - 26, cy + PLATTER_R + 22, head.x + 26, cy + PLATTER_R + 40),
+             MixColor(C_BG, tone, 40));
+        DrawLine(dc, head.x, cy + PLATTER_R + 22, head.x, head.y, MixColor(C_BG, tone, 46), 5);
+        Fill(dc, MakeRect(head.x - 10, head.y - 7, head.x + 10, head.y + 7), MixColor(C_BG, tone, 78));
+        if (lift > 0) DrawLine(dc, head.x, head.y + 7, seat.x, seat.y, MixColor(C_BG, tone, 20), 1);
+        return;
+    }
+    // 피벗 암. A:\ 는 자기 자신을 읽으므로 반대쪽에서 하나 더 온다.
+    for (int arm = 0; arm < (media == MEDIA_FLOPPY ? 2 : 1); ++arm) {
+        int flip = arm ? -1 : 1;
+        POINT tip = {cx + (head.x - cx) * flip, cy + (head.y - cy) * flip};
+        POINT pivot = {cx + PLATTER_PIVOT_DX * flip, cy + PLATTER_PIVOT_DY * flip - lift / 2};
+        Panel(dc, MakeRect(pivot.x - 22, pivot.y - 22, pivot.x + 22, pivot.y + 22),
+              MixColor(C_BG, tone, 14), MixColor(C_BG, tone, 44));
+        Fill(dc, MakeRect(pivot.x - 7, pivot.y - 7, pivot.x + 7, pivot.y + 7), MixColor(C_BG, tone, 56));
+        // 축 반대쪽의 균형추. 팔 하나만 뻗어 있으면 막대기이고, 축을 사이에 두고
+        // 짧은 쪽이 있어야 도는 물건으로 보인다.
+        DrawLine(dc, pivot.x, pivot.y, pivot.x + (pivot.x - tip.x) / 6, pivot.y + (pivot.y - tip.y) / 6,
+                 MixColor(C_BG, tone, 34), 11);
+        DrawLine(dc, pivot.x, pivot.y, tip.x, tip.y, MixColor(C_BG, tone, 40), 7);
+        DrawLine(dc, pivot.x, pivot.y, tip.x, tip.y, MixColor(C_BG, tone, 62), 3);
+        Fill(dc, MakeRect(tip.x - 9, tip.y - 6, tip.x + 9, tip.y + 6), MixColor(C_BG, tone, 74));
+    }
+    if (lift > 0) DrawLine(dc, head.x, head.y + 6, seat.x, seat.y, MixColor(C_BG, tone, 20), 1);
+}
+
+// 매체 한 벌. squash는 도는 판이 얼마나 열렸는지이고, 줄 매체는 쓰지 않는다.
+static void DrawMediaBody(HDC dc, int media, int cx, int cy, int squash, int spin, int open,
+                          int read, int elapsed, int drop, COLORREF tone) {
+    int rx = PLATTER_R, ry = PLATTER_R * squash / 1000;
+    if (media == MEDIA_TAPE) { DrawMediaTape(dc, cx, cy, open, read, elapsed, tone); return; }
+    if (media == MEDIA_CELL) { DrawMediaCell(dc, cx, cy, open, elapsed, tone); return; }
+    if (media == MEDIA_LINK) { DrawMediaLink(dc, cx, cy, rx, ry, open, elapsed, tone); return; }
+    if (media == MEDIA_STACK) { DrawMediaStack(dc, cx, cy, rx, ry, spin, tone); return; }
+    if (media == MEDIA_OPTICAL) { DrawMediaOptical(dc, cx, cy, rx, ry, spin, elapsed, drop, tone); return; }
+    if (media == MEDIA_CAGE) { DrawMediaCage(dc, cx, cy, rx, ry, spin, open, tone); return; }
+    DrawMediaFloppy(dc, cx, cy, rx, ry, spin, open, tone);
+}
+
+// 드라이브 베이. 매체 혼자 어둠에 떠 있으면 이 일이 어디에서 일어나는지 알 수 없다.
+// 레일과 꺾쇠가 매체를 둘러싸 "열려 있는 기계 안"이 되고, 판독으로 나온 값들도 그
+// 레일 안쪽에 붙으므로 화면에 얹힌 설명이 아니라 기계의 계기로 읽힌다.
+static void DrawDriveBay(HDC dc, int width, int height, int media, int cx, int cy, int built, COLORREF tone) {
+    if (built <= 0) return;
+    int p = EaseOutCubic(built), top = 168, bottom = height - 92;
+    COLORREF metal = MixColor(C_BG, tone, 26), dim = MixColor(C_BG, tone, 13);
+    int reach = (bottom - top) * p / 1000;
+    for (int side = 0; side < 2; ++side) {
+        RECT rail = MakeRect(side ? width - 44 : 26, top, side ? width - 26 : 44, top + reach);
+        Fill(dc, rail, MixColor(C_BG, tone, 8));
+        Outline(dc, rail, dim, 1);
+        for (int y = top + 14; y < top + reach - 10; y += 30)
+            Fill(dc, MakeRect(rail.left + 4, y, rail.right - 4, y + 9), metal);
+    }
+    RECT frame = MediaFrame(media, cx, cy);
+    for (int i = 0; i < 4; ++i) {
+        int sx = (i & 1) ? 1 : -1, sy = (i & 2) ? 1 : -1, off = (1000 - p) * 80 / 1000;
+        int x = (sx > 0 ? frame.right : frame.left) + sx * off;
+        int y = (sy > 0 ? frame.bottom : frame.top) + sy * off;
+        DrawLine(dc, x, y, x - sx * 54, y, metal, 3);
+        DrawLine(dc, x, y, x, y - sy * 54, metal, 3);
+    }
+}
+
+// 매체 옆에 붙는 지시선 딱지. 트랙 위의 어느 자리를 말하는지 선으로 이어 준다.
+static void DrawPlatterTag(HDC dc, const RECT& box, int anchorX, int anchorY, int reveal,
+                           const wchar_t* title, const wchar_t* body, COLORREF tone) {
+    if (reveal <= 0) return;
+    int p = EaseOutCubic(reveal);
+    int side = anchorX > box.right ? 1 : -1;   // 매체가 딱지의 어느 쪽에 있는가
+    int edgeX = side > 0 ? box.right : box.left;
+    int midY = (box.top + box.bottom) / 2;
+    DrawLine(dc, edgeX, midY, Lerp(edgeX, anchorX, p), Lerp(midY, anchorY, p), MixColor(C_BG, tone, 50), 1);
+    if (p > 850) Fill(dc, MakeRect(anchorX - 3, anchorY - 3, anchorX + 4, anchorY + 4), tone);
+    int slide = (1000 - p) * 26 / 1000 * side;
+    RECT card = MakeRect(box.left - slide, box.top, box.right - slide, box.bottom);
+    Panel(dc, card, RGB(10, 15, 21), MixColor(C_BG, tone, 40 + p * 30 / 1000));
+    Fill(dc, MakeRect(card.left, card.top, card.left + 3, card.bottom), tone);
+    Text(dc, card.left + 14, card.top + 9, title, tone, gFontSmall);
+    TextRect(dc, MakeRect(card.left + 14, card.top + 31, card.right - 12, card.bottom - 8),
+             body, C_TEXT, gFontSmall, DT_WORDBREAK);
+}
+
+static void DrawDescent(HDC dc, int width, int height) {
+    int mount = gDescentToFloor == 0;
+    int lockStage = mount && gDescentChoiceIndex >= 0;
+    MountBeats beats = MountBeatsFor(mount);
+    int elapsed = (int)(GetTickCount() - gDescentStart);
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > beats.total) elapsed = beats.total;
+    if (lockStage && elapsed < MOUNT_LOCK_MS) { DrawVolumeLock(dc, width, height, elapsed); return; }
+
+    int index = gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive;
+    const DriveInfo* drive = &DRIVE_INFO[index];
+    COLORREF tone = (COLORREF)drive->color;
+    int media = DriveMedia(index), drop = MediaDropout(media, elapsed);
+    int cx = width / 2, cy = PLATTER_CY, trackMs = MountTrackMs(beats);
+
+    // 기계 안. 빈 검정이 아니라 바닥 격자가 깔려 있어야 매체가 어딘가에 놓인다.
+    Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
+    if (FxDecorOn()) {
+        COLORREF grid = MixColor(C_BG, tone, FxScale(9));
+        for (int x = 40; x < width; x += 96) DrawLine(dc, x, 96, x, height - 14, grid, 1);
+        for (int y = 140; y < height; y += 96) DrawLine(dc, 24, y, width - 24, y, grid, 1);
+    }
+
+    // ---- 안착. 잠긴 카드가 뽑혀 나와 매체 자리에 눕는다 --------------------
+    // 카드가 눕는 마지막 모습(납작한 판)과 깨어나기 시작하는 매체의 첫 모습이
+    // 같은 도형이라 그 사이에 이어 붙인 자리가 없다.
+    int squash = 1000;
+    if (mount) {
+        // 떨어지는 것이라 가속한다. EaseOutCubic으로 두면 카드가 처음부터
+        // 납작해져 버려, 눕는 것이 아니라 미끄러지는 것으로 보였다.
+        int seated = EaseInCubic(Track(elapsed, beats.seatAt, beats.spinAt));
+        if (MediaIsDisc(media))
+            squash = 55 + 945 * EaseOutCubic(Track(elapsed, beats.spinAt + 40, beats.readAt - 140)) / 1000;
+        if (seated < 1000) {
+            RECT from = DriveCardRect(gDescentChoiceIndex >= 0 ? gDescentChoiceIndex : 0);
+            RECT to = MakeRect(cx - PLATTER_R, cy - 13, cx + PLATTER_R, cy + 13);
+            RECT slab = LerpRect(from, to, seated);
+            Panel(dc, slab, RGB(12, 17, 23), MixColor(C_BG, tone, 30 + 30 * seated / 1000));
+            if (slab.bottom - slab.top > 120)
+                TextRect(dc, MakeRect(slab.left + 8, slab.top + 22, slab.right - 8, slab.top + 88),
+                         drive->letter, tone, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (FxDecorOn())
+                DrawSectorStatic(dc, slab, index + 31, elapsed / NOISE_CHURN_MS, FxScale(420 * seated / 1000));
+            // 떨어지는 동안 받을 자리가 먼저 켜진다 - 카드가 어디로 가는지가 보인다.
+            POINT hub = MediaHub(media, cx, cy);
+            DrawGlowRing(dc, hub.x, hub.y, PLATTER_HUB, 6, MixColor(C_BG, tone, 20 + 40 * seated / 1000), 2);
+        }
+    }
+
+    DrawDriveBay(dc, width, height, media, cx, cy,
+                 mount ? Track(elapsed, beats.seatAt, beats.spinAt + 200) : 1000, tone);
+
+    // ---- 트랙과 판독 --------------------------------------------------------
+    // 한 트랙은 "옮겨 앉기 + 한 번 훑기"다. 판독 진행도는 매체에 칠해지는 것이
+    // 아니라 헤드가 닿는 자리에서 차오르는 값이다 - 초당 두 바퀴 도는 판 위에
+    // 진행도를 얹으면 얼마나 읽혔는지를 읽을 수 없다.
+    int spin = PlatterAngle(elapsed, beats, mount);
+    int open = mount ? Track(elapsed, beats.spinAt, beats.readAt - 100) : 1000;
+    int visible = !mount || elapsed >= beats.spinAt;
+    int firstTrack = mount ? 0 : (gDescentToFloor < 1 ? 0 : gDescentToFloor - 1);
+    int headTrack = firstTrack, lastTrack = firstTrack, headRead = 0, settleEase = 1000;
+
+    if (visible)
+        DrawMediaBody(dc, media, cx, cy, squash, spin, open,
+                      elapsed >= beats.readAt ? Track(elapsed, beats.readAt, beats.lawAt) : 0,
+                      elapsed, drop, tone);
+    // 링크 볼륨의 고리는 처음부터 끊긴 점선이고 그것을 매체가 직접 그린다.
+    // 여기서 이어진 고리를 한 번 더 깔면 "실체가 없다"가 도로 메워진다.
+    if (visible && media != MEDIA_LINK) for (int t = 0; t < MOUNT_TRACKS; ++t)
+        DrawTrackRun(dc, media, cx, cy, t, 0, 1000, squash, 0, MixColor(C_BG, tone, 16), 1);
+
+    if (elapsed >= beats.readAt) for (int step = 0; step < beats.tracks; ++step) {
+        int track = mount ? step : firstTrack + 1;
+        if (track >= MOUNT_TRACKS) track = MOUNT_TRACKS - 1;
+        int at = beats.readAt + step * trackMs;
+        int settle = Track(elapsed, at, at + MOUNT_SETTLE_MS);
+        int read = Track(elapsed, at + MOUNT_SETTLE_MS, at + trackMs);
+        if (settle <= 0) continue;
+        lastTrack = headTrack = track;
+        settleEase = EaseOutCubic(settle);
+        headRead = read;
+        int done = read >= 1000;
+        // 다 읽은 트랙은 옅게 남고, 읽는 중인 트랙만 밝다. 접촉이 끊긴 순간에는
+        // 그 프레임의 진행도만 사라진다 (값은 그대로 간다 - 다시 붙으면 이어진다).
+        if (!drop) {
+            DrawTrackRun(dc, media, cx, cy, track, 0, read, squash, 0,
+                         MixColor(C_BG, tone, done ? 40 : 72), done ? 2 : 3);
+            if (read > 0 && !done) {
+                POINT lead = MediaTrackPoint(media, cx, cy, track, read, squash, 0);
+                Fill(dc, MakeRect(lead.x - 3, lead.y - 3, lead.x + 4, lead.y + 4), C_TEXT);
+            }
+        }
+        // 손상 섹터는 쓸려 지나간 뒤에야 드러난다 - 미리 붉게 칠해 두면 읽어서
+        // 찾아낸 것이 아니라 처음부터 있던 무늬가 된다. 갈린 트랙은 바깥 둘뿐이고
+        // 그것이 각각 디스크 손상 A와 B다 - 딱지가 둘인데 갈린 자리가 셋이면
+        // 매체 위의 붉은 자리와 옆에 적힌 이름이 서로를 가리키지 않는다.
+        for (int k = 0; k < 3 && track < 2; ++k) {
+            int span = 0, from = MediaDamage(index, track, k, &span);
+            if (from > read) continue;
+            int age = elapsed - (at + MOUNT_SETTLE_MS) - (trackMs - MOUNT_SETTLE_MS) * from / 1000;
+            int fresh = 1000 - Track(age, 0, 260);
+            DrawDamageRun(dc, media, cx, cy, track, from, span, squash, MixColor(C_RED, C_TEXT, 34 * fresh / 1000));
+            if (fresh > 0 && FxDecorOn()) {
+                POINT hit = MediaTrackPoint(media, cx, cy, track, from + span / 2, squash, 0);
+                DrawPixelBurst(dc, hit.x, hit.y, age, 260, FxScale(9), track * 41 + k, C_RED);
+            }
+        }
+    }
+
+    // 볼륨 문자. 매체마다 허브가 다른 자리에 있다.
+    if (visible && (!MediaIsDisc(media) || squash > 420)) {
+        POINT hub = MediaHub(media, cx, cy);
+        if (media == MEDIA_CELL) {
+            // 셀 격자에는 허브가 없다. 모듈에 붙은 이름표가 그 자리를 대신한다.
+            Panel(dc, MakeRect(hub.x - 118, hub.y - 30, hub.x + 118, hub.y + 30),
+                  RGB(9, 13, 18), MixColor(C_BG, tone, 54));
+        } else if (media != MEDIA_LINK) {
+            int hy = MediaIsDisc(media) ? PLATTER_HUB * squash / 1000 : PLATTER_HUB;
+            FillDisc(dc, hub.x, hub.y, PLATTER_HUB, hy, RGB(9, 13, 18));
+            DrawGlowRing(dc, hub.x, hub.y, PLATTER_HUB, hy, MixColor(C_BG, tone, 54), 2);
+        }
+        TextRect(dc, MakeRect(hub.x - PLATTER_HUB, hub.y - 26, hub.x + PLATTER_HUB, hub.y + 26),
+                 drive->letter, tone, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // 헤드. 매체가 깨어나는 동안에는 아직 떠 있고, 판독 직전에 내려앉는다.
+    if (visible) {
+        int arrive = EaseOutCubic(Track(elapsed, beats.readAt - 300, beats.readAt - 40));
+        int prevTrack = mount ? (headTrack > 0 ? headTrack - 1 : 0) : firstTrack;
+        int at = MediaHeadProgress(media, headRead);
+        POINT a = MediaTrackPoint(media, cx, cy, prevTrack, at, squash, 0);
+        POINT b = MediaTrackPoint(media, cx, cy, headTrack, at, squash, 0);
+        POINT seat = {Lerp(a.x, b.x, settleEase), Lerp(a.y, b.y, settleEase)};
+        POINT park = MediaTrackPoint(media, cx, cy, 0, at, squash, 74);
+        POINT head = {Lerp(park.x, seat.x, arrive), Lerp(park.y, seat.y, arrive)};
+        if (drop) head.x += 3, head.y -= 2;   // 접촉이 튀는 순간에는 헤드도 흔들린다
+        DrawReadHead(dc, media, cx, cy, head, 1000 - arrive, tone);
+        if (arrive > 0 && arrive < 1000 && FxDecorOn())
+            DrawPulseFrame(dc, MakeRect(seat.x - 10, seat.y - 10, seat.x + 10, seat.y + 10),
+                           FxScale(3 + 16 * (1000 - arrive) / 1000), 2, MixColor(C_BG, tone, FxScale(60)));
+    }
+
+    // 하강은 이미 돌고 있는 매체로 카메라가 들어오는 것이다. 들어오는 동안만
+    // 신호가 걷힌다 - 이것이 없으면 첫 프레임에 매체가 통째로 튀어나온다. 마운트에는
+    // 기동 구간이 그 역할을 이미 하고 있다.
+    if (!mount && FxDecorOn()) {
+        int enter = Track(elapsed, 0, DIVE_IN_MS);
+        if (enter < 1000) {
+            DrawScreenStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
+                             FxScale(820) * (1000 - enter) / 1000);
+            int y = Lerp(68, height, EaseOutCubic(enter));
+            Fill(dc, MakeRect(0, y - 2, width, y + 2), MixColor(C_BG, tone, FxScale(62)));
+        }
+    }
+
+    // ---- 매체 옆에 붙는 값들 ------------------------------------------------
+    // 트랙 하나를 다 읽을 때마다 그 트랙에서 나온 것이 딱지로 붙는다. 목록을
+    // 미리 깔아 두지 않는 이유는 하나다 - 읽어서 알아낸 것으로 보여야 한다.
+    // 딱지 사이는 한 트랙(620ms) 간격이고, 마지막 딱지 뒤에는 각인과 정지 구간이
+    // 1,180ms 더 있다. 네 장이 한꺼번에 쏟아지면 아무것도 읽히지 않는다.
+    wchar_t line[192];
+    const ModifierInfo* modA = ActiveModifierInfo(gGame.modifierA);
+    const ModifierInfo* modB = ActiveModifierInfo(gGame.modifierB);
+    const DifficultyInfo* difficulty = DifficultyInfoOrNull(gGame.difficulty);
+    int capacity = EffectiveCapacity(&gGame);
+    int tagAt = beats.readAt + trackMs;
+    if (mount) {
+        POINT aAnchor = MediaTrackPoint(media, cx, cy, 0, 410, squash, 0);
+        POINT bAnchor = MediaTrackPoint(media, cx, cy, 1, 440, squash, 0);
+        POINT dAnchor = MediaTrackPoint(media, cx, cy, 0, 790, squash, 0);
+        POINT pAnchor = MediaTrackPoint(media, cx, cy, 2, 520, squash, 0);
+        if (modA) DrawPlatterTag(dc, MakeRect(56, 228, 388, 344), aAnchor.x, aAnchor.y,
+                                 Track(elapsed, tagAt, tagAt + 220), modA->name,
+                                 MODIFIER_BRIEF[gGame.modifierA], C_RED);
+        if (modB) DrawPlatterTag(dc, MakeRect(56, 394, 388, 510), bAnchor.x, bAnchor.y,
+                                 Track(elapsed, tagAt + trackMs, tagAt + trackMs + 220), modB->name,
+                                 MODIFIER_BRIEF[gGame.modifierB], C_RED);
+        if (difficulty) {
+            wsprintfW(line, L"오염(관통) 피해 %d%% · 방어도는 절반만 막습니다", difficulty->corruptPercent);
+            DrawPlatterTag(dc, MakeRect(width - 388, 228, width - 56, 344), dAnchor.x, dAnchor.y,
+                           Track(elapsed, beats.readAt - 40, beats.readAt + 180),
+                           difficulty->name, line, (COLORREF)difficulty->color);
+        }
+        // 마지막 딱지는 안쪽 트랙이 끝나는 자리에 두면 각인과 같은 프레임에 선다.
+        // 한 화면에서 가장 큰 두 사건이 겹치면 둘 다 읽히지 않으므로, 헤드가 이
+        // 딱지의 앵커를 지나는 순간(트랙 절반)으로 당겨 각인보다 먼저 앉힌다.
+        wsprintfW(line, L"%s  ·  한도 %dB", drive->perkText, capacity);
+        DrawPlatterTag(dc, MakeRect(width - 388, 394, width - 56, 510), pAnchor.x, pAnchor.y,
+                       Track(elapsed, tagAt + trackMs * 2 - 260, tagAt + trackMs * 2 - 40),
+                       L"볼륨 특성", line, tone);
+    } else {
+        POINT anchor = MediaTrackPoint(media, cx, cy, lastTrack, 940, squash, 0);
+        int gain = capacity - FLOOR_CAPACITY[gGame.floor > 2 ? 2 : gGame.floor];
+        wsprintfW(line, L"용량 한도 %dB → %dB  ·  이 층의 적이 더 강해집니다",
+                  FLOOR_CAPACITY[gDescentToFloor - 1] + gain, capacity);
+        DrawPlatterTag(dc, MakeRect(width - 388, 292, width - 56, 408), anchor.x, anchor.y,
+                       Track(elapsed, beats.readAt + 120, beats.readAt + 360),
+                       L"심층 트랙", line, tone);
+    }
+
+    // ---- 머리띠와 경로 타이핑 ----------------------------------------------
+    // 매체 이름을 여기 적는다. 형태로 이미 갈라져 있지만, 처음 보는 볼륨에서는
+    // 그 형태가 무엇인지까지 한 번은 글자로 말해 주는 편이 낫다.
+    wsprintfW(line, mount ? L"볼륨 마운트  ·  %s%s  ·  %s" : L"심층 탐색  ·  %s%s  ·  %s",
+              drive->letter, drive->label, MediaName(media));
+    TextRect(dc, MakeRect(0, 78, width, 108), line, C_GREEN, gFontLarge, DT_CENTER | DT_SINGLELINE);
+    // 마운트는 볼륨 전체를 여는 것이므로 층 경로 하나가 아니라 카드가 보여 주던
+    // 탐색 경로 전체를 친다 (최초 마운트의 paths[0]은 "X:\" 세 글자뿐이라, 그것만
+    // 치면 1초 넘게 빈 줄이 남는다). 타이핑은 매체가 깨어날 때 시작해 판독이
+    // 끝나는 자리에서 멎는다 - 경로가 완성되는 순간이 곧 각인이다.
+    const wchar_t* path = mount ? drive->pathPreview
+        : drive->paths[gDescentToFloor > 2 ? 2 : gDescentToFloor];
+    int typeFrom = mount ? beats.spinAt : beats.readAt;
+    int length = lstrlenW(path), typeMs = beats.lawAt - typeFrom;
+    int typed = typeMs > 0 ? (elapsed - typeFrom) * length / typeMs : length;
+    if (typed < 0) typed = 0;
+    if (typed > length) typed = length;
+    wchar_t typedText[96] = L"> ";
+    lstrcpynW(typedText + 2, path, typed + 1);
+    if (typed < length && ((elapsed / 210) & 1)) lstrcatW(typedText, L"_");
+    TextRect(dc, MakeRect(0, 112, width, 142), typedText, tone, gFontMedium, DT_CENTER | DT_SINGLELINE);
+
+    // 매체 아래로 흘러가는 데이터. 판독이 시작된 뒤에만 흐르고, 다 읽으면 멎는다.
+    if (FxDecorOn() && elapsed >= beats.readAt) {
+        RECT ribbon = MakeRect(cx - 376, height - 86, cx + 376, height - 40);
+        Panel(dc, ribbon, RGB(8, 12, 18), MixColor(C_BG, tone, 26));
+        RECT inner = MakeRect(ribbon.left + 2, ribbon.top + 2, ribbon.right - 2, ribbon.bottom - 2);
+        DrawHexBlock(dc, inner, MixColor(C_BG, tone, FxScale(48)), index * 7 + 1,
+                     (uint32_t)(elapsed < beats.lawAt ? elapsed : beats.lawAt), 3);
+        DrawScanlines(dc, inner);
+    }
+
+    // ---- 각인. 다 읽은 매체에 볼륨 법칙이 박힌다 ---------------------------
+    if (mount && elapsed >= beats.lawAt) {
+        const DriveLawInfo* law = &DRIVE_LAW_INFO[index];
+        int p = Track(elapsed, beats.lawAt, beats.lawAt + 260);
+        int h = 116 * EaseOutBack(p) / 1000;
+        if (h > 116) h = 116;
+        RECT plate = MakeRect(cx - 272, cy - h / 2, cx + 272, cy + h / 2);
+        // 각인기가 위아래에서 내려와 문다. 도장이 그냥 나타나면 찍힌 것이 아니라
+        // 떠오른 것이 되고, 이 장면에서 가장 큰 한 방이 힘을 잃는다.
+        int press = Lerp(150, 0, EaseOutCubic(p));
+        for (int side = 0; side < 2; ++side) {
+            int y = side ? plate.bottom + press : plate.top - press - 26;
+            Fill(dc, MakeRect(cx - 92, y, cx + 92, y + 26), MixColor(C_BG, tone, 30));
+            Outline(dc, MakeRect(cx - 92, y, cx + 92, y + 26), MixColor(C_BG, tone, 60), 2);
+        }
+        Fill(dc, plate, RGB(5, 9, 13));
+        Outline(dc, plate, tone, 3);
+        if (h >= 96) {
+            Text(dc, plate.left + 22, plate.top + 12, L"VOLUME LAW", MixColor(C_BG, tone, 70), gFontSmall);
+            TextRect(dc, MakeRect(plate.left + 22, plate.top + 32, plate.right - 22, plate.top + 62),
+                     law->name, tone, gFontMedium, DT_LEFT | DT_SINGLELINE);
+            TextRect(dc, MakeRect(plate.left + 22, plate.top + 66, plate.right - 22, plate.bottom - 10),
+                     law->brief, C_TEXT, gFontSmall, DT_WORDBREAK);
+        }
+        if (p < 1000 && FxDecorOn()) {
+            DrawPulseFrame(dc, plate, FxScale(4 + 26 * (1000 - p) / 1000), 3,
+                           MixColor(C_BG, tone, FxScale(85 * (1000 - p) / 1000)));
+            DrawPixelBurst(dc, cx, cy, elapsed - beats.lawAt, 300, FxScale(18), index * 23 + 5, tone);
+        }
+    }
+
+    // ---- 정지. 다 읽은 매체가 한 번 멈춰 선다 -------------------------------
+    // 이 구간에는 새로 일어나는 일이 없다. 그것이 목적이다 - 딱지 넷과 법칙이
+    // 전부 떠 있는 채로 620ms가 흐르고, 그동안 판독 완료 표시만 하나 선다.
+    if (elapsed >= beats.holdAt && elapsed < beats.sealAt) {
+        int p = Track(elapsed, beats.holdAt, beats.holdAt + 200);
+        RECT done = MakeRect(cx - 132, height - 122, cx + 132, height - 94);
+        Panel(dc, done, RGB(8, 13, 18), MixColor(C_BG, C_GREEN, 22 + 38 * p / 1000));
+        TextRect(dc, done, mount ? L"판독 완료 · 3/3 트랙" : L"트랙 확보",
+                 MixColor(C_BG, C_GREEN, 40 + 55 * p / 1000), gFontSmall,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // ---- 마운트 확정. 걸쇠가 물리고 허브가 화면을 삼킨다 --------------------
+    int seal = Track(elapsed, beats.sealAt, beats.total);
+    if (seal > 0) {
+        POINT hub = MediaHub(media, cx, cy);
+        // 바깥에서 안으로 트랙이 차례로 잠긴다. 잠긴 순서가 판독 순서의 반대라
+        // 읽던 일이 여기서 되감겨 닫히는 것으로 보인다.
+        for (int t = 0; t < MOUNT_TRACKS; ++t) {
+            int lit = Track(elapsed, beats.sealAt + t * 60, beats.sealAt + t * 60 + 200);
+            if (lit <= 0) continue;
+            DrawTrackRun(dc, media, cx, cy, t, 0, 1000, 1000, 0,
+                         MixColor(C_BG, tone, 30 + 60 * (1000 - lit) / 1000), lit < 1000 ? 4 : 2);
+        }
+        int raw = Track(elapsed, beats.sealAt + 130, beats.total);
+        int rush = (EaseInCubic(raw) + raw) / 2;   // 곧바로 움직이고 끝에서 터진다
+        int stage = rush > 0 ? SaveDC(dc) : 0;
+        // 머리띠는 이 연출 내내 남아 있던 틀이다. 마지막 한 동작에서만 그것까지
+        // 덮으면 삼켜진 것이 아니라 그리기가 새어 나간 것으로 보인다.
+        if (stage) IntersectClipRect(dc, 0, 68, width, height);
+        if (rush > 0) {
+            int grow = Lerp(PLATTER_HUB, 1560, rush);
+            // 매체의 표면이 카메라를 덮친다. 끝에서 흰색에 가까워지는 것은 다음 화면의
+            // 도착 연출(DrawSceneArrival)이 밝은 데서 시작해 내려놓기 때문이다 -
+            // 여기서 어둡게 닫으면 가장 큰 사건 바로 뒤에 깜빡임이 하나 남는다.
+            FillDisc(dc, hub.x, hub.y, grow, grow, MixColor(C_INK, tone, 12 + 46 * rush / 1000));
+            // near/far 는 windef.h 가 비어 있는 매크로로 쥐고 있다. 여기서 변수
+            // 이름으로 쓰면 선언 자체가 사라져 엉뚱한 자리에서 터진다.
+            if (FxDecorOn()) for (int i = 0; i < 18; ++i) {
+                POINT rim = PlatterAt(hub.x, hub.y, grow, grow, i * 200 + 40);
+                POINT root = PlatterAt(hub.x, hub.y, grow * 62 / 100, grow * 62 / 100, i * 200 + 40);
+                DrawLine(dc, root.x, root.y, rim.x, rim.y, MixColor(C_INK, tone, 26 + 40 * rush / 1000), 2);
+            }
+            DrawGlowRing(dc, hub.x, hub.y, grow, grow, MixColor(C_BG, C_TEXT, 30 + 55 * rush / 1000), 4);
+            if (rush > 130)
+                TextRect(dc, MakeRect(cx - 340, cy - 44, cx + 340, cy + 44),
+                         mount ? L"VOLUME MOUNTED" : L"TRACK LOCKED", C_TEXT, gFontTitle,
+                         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        if (stage) RestoreDC(dc, stage);
+    }
+
     const wchar_t* hint = gGame.phase == PHASE_PRUNE
-        ? L"진입 후 용량 정리가 필요합니다 · 클릭이나 키로 바로 넘기기"
-        : L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기";
-    TextRect(dc, MakeRect(panel.left + 26, panel.bottom - 44, panel.right - 26, panel.bottom - 18), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    if (panelClip) RestoreDC(dc, panelClip);
+        ? L"진입 후 용량 정리가 필요합니다 · 클릭이나 아무 키로 바로 넘기기"
+        : L"잠시 후 전투가 시작됩니다 · 클릭이나 아무 키로 바로 넘기기";
+    if (seal < 400) TextRect(dc, MakeRect(0, height - 22, width, height - 2), hint, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
 // ---- 새 게임 삽입 연출 -----------------------------------------------------

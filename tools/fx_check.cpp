@@ -355,10 +355,12 @@ static int CheckRuleCombatFrames(HDC dc, void* bits, int w, int h, const char* f
     return 1;
 }
 
-static void DrawTransitionFixture(HDC dc, int directory) {
+// kind 0 = 볼륨 마운트, 1 = 층 하강, 2 = 디렉터리 진입. 마운트와 하강은 같은
+// 함수가 그리지만 구간표가 다르므로(MountBeatsFor) 둘 다 한 장씩 밟아야 한다.
+static void DrawTransitionFixture(HDC dc, int kind) {
     Fill(dc, MakeRect(0, 0, BASE_WIDTH, BASE_HEIGHT), C_BG);
     DrawHeader(dc, BASE_WIDTH);
-    if (directory) DrawDirectoryEnter(dc, BASE_WIDTH, BASE_HEIGHT);
+    if (kind == 2) DrawDirectoryEnter(dc, BASE_WIDTH, BASE_HEIGHT);
     else DrawDescent(dc, BASE_WIDTH, BASE_HEIGHT);
 }
 
@@ -369,10 +371,16 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
     // when the caller uses the 2x logical-to-device mapping.
     HRGN clip = CreateRectRgn(7, 7, w - 7, h - 7), afterClip = CreateRectRgn(0, 0, 0, 0);
     SelectClipRgn(dc, clip);
-    static const int mountAges[] = {230, DESCENT_LOCK_MS, DESCENT_LOCK_MS + 230,
-        DESCENT_LOCK_MS + 660, DESCENT_LOCK_MS + (DESCENT_MS - DESCENT_LOCK_MS) / 3 + 40,
-        DESCENT_LOCK_MS + (DESCENT_MS - DESCENT_LOCK_MS) * 2 / 3 + 40};
+    // 마운트 연출의 구간마다 한 장씩: 잠금 도중, 카드 안착, 판이 열리는 중,
+    // 세 트랙의 판독, 각인, 허브가 화면을 삼키는 마지막.
+    static const int mountAges[] = {230, MOUNT_SEAT_AT + 180, MOUNT_SPIN_AT + 240,
+        MOUNT_READ_AT + 300, MOUNT_READ_AT + MOUNT_TRACK_MS + 300,
+        MOUNT_READ_AT + MOUNT_TRACK_MS * 2 + 300, MOUNT_LAW_AT + 140,
+        MOUNT_HOLD_AT + 300, MOUNT_SEAL_AT + 300};
+    static const int diveAges[] = {120, DIVE_READ_AT + 200, DIVE_READ_AT + DIVE_READ_MS - 120,
+        DIVE_HOLD_AT + 200, DIVE_SEAL_AT + 260};
     static const int directoryAges[] = {180, DIR_SELECT_LOCK_MS + 130, DIR_SELECT_LOCK_MS + 660};
+    static const char* const kindName[3] = {"mount", "dive", "directory"};
     for (int mode = 0; mode < FX_LEVEL_COUNT && ok; ++mode) {
         ResetPresentation(); NewRun(&gGame, 12345u, 0); AdvanceStory(&gGame);
         SelectDrive(&gGame, 1);
@@ -380,8 +388,12 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
             || gGame.modifierA < 0 || gGame.modifierB < 0) { ok = 0; break; }
         gFxLevel = mode; gDescentActive = 1; gDescentStart = 10000;
         gDescentToFloor = 0; gDescentChoiceIndex = 1;
-        for (int directory = 0; directory < 2 && ok; ++directory) {
-            if (directory) {
+        for (int kind = 0; kind < 3 && ok; ++kind) {
+            if (kind == 1) {
+                // 같은 판에서 헤드만 안쪽 트랙으로 파고드는 경로.
+                gGame.floor = 1; gDescentToFloor = 1; gDescentChoiceIndex = -1;
+                gDescentStart = 10000;
+            } else if (kind == 2) {
                 gDescentActive = 0;
                 if (DirectoryChoiceCount(&gGame) < 1) { ok = 0; break; }
                 gDirEnterKind = gGame.directory.choices[0].kind; gDirEnterChoiceIndex = 0;
@@ -390,32 +402,68 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
                 gDirEnterActive = 1; gDirEnterStart = 10000;
             }
             GameState before = gGame;
-            const int* ages = directory ? directoryAges : mountAges;
-            int count = directory ? 3 : 6;
+            const int* ages = kind == 2 ? directoryAges : kind == 1 ? diveAges : mountAges;
+            int count = kind == 2 ? (int)(sizeof(directoryAges) / sizeof(directoryAges[0]))
+                : kind == 1 ? (int)(sizeof(diveAges) / sizeof(diveAges[0]))
+                : (int)(sizeof(mountAges) / sizeof(mountAges[0]));
             for (int frame = 0; frame < count && ok; ++frame) {
                 gCheckTick = 10000 + ages[frame];
                 CheckDcState dcBefore = ReadCheckDcState(dc);
-                DrawTransitionFixture(dc, directory); ++*frames;
+                DrawTransitionFixture(dc, kind); ++*frames;
                 CheckDcState dcAfter = ReadCheckDcState(dc);
                 // Text/TextRect intentionally set these three shared text
                 // attributes. Mapping, GDI selections and clipping must survive.
                 dcAfter.text = dcBefore.text; dcAfter.bk = dcBefore.bk; dcAfter.bkMode = dcBefore.bkMode;
                 if (memcmp(&dcBefore, &dcAfter, sizeof(dcBefore)) || GetClipRgn(dc, afterClip) != 1
                     || !EqualRgn(clip, afterClip) || memcmp(&gGame, &before, sizeof(gGame))) {
-                    printf("FAIL: %s transition state/clip at %d in mode %d\n", directory ? "directory" : "mount", ages[frame], mode);
+                    printf("FAIL: %s transition state/clip at %d in mode %d\n", kindName[kind], ages[frame], mode);
                     ok = 0; break;
                 }
                 uint32_t expected = FrameHash(bits, w, h);
                 if (folder && mode == FX_FULL) {
-                    char name[96]; sprintf_s(name, "transition_%s_age_%d", directory ? "directory" : "mount", ages[frame]);
+                    char name[96]; sprintf_s(name, "transition_%s_age_%d", kindName[kind], ages[frame]);
                     if (!SaveFrame(folder, name, w, h, bits)) { ok = 0; break; }
                 }
-                gCheckTick += 29; DrawTransitionFixture(dc, directory);
-                gCheckTick = 10000 + ages[frame]; DrawTransitionFixture(dc, directory); ++*frames;
+                gCheckTick += 29; DrawTransitionFixture(dc, kind);
+                gCheckTick = 10000 + ages[frame]; DrawTransitionFixture(dc, kind); ++*frames;
                 if (FrameHash(bits, w, h) != expected || memcmp(&gGame, &before, sizeof(gGame))) {
-                    printf("FAIL: %s transition fixed-time pixels at %d\n", directory ? "directory" : "mount", ages[frame]);
+                    printf("FAIL: %s transition fixed-time pixels at %d\n", kindName[kind], ages[frame]);
                     ok = 0;
                 }
+            }
+        }
+    }
+    // 매체 일곱. 볼륨마다 도는 물건이 다르므로(ui.h의 MediaKind) 하나씩 밟는다 -
+    // 마운트 경로 전체를 일곱 번 도는 대신, 형태가 다 서 있는 판독 중간과 매체가
+    // 깨어나는 중간 두 장이면 그리기가 매체를 잘못 짚는 것은 여기서 걸린다.
+    static const int mediaAges[] = {MOUNT_SPIN_AT + 300, MOUNT_READ_AT + MOUNT_TRACK_MS + 300};
+    for (int drive = 0; drive < DRIVE_COUNT && ok; ++drive) {
+        ResetPresentation(); NewRun(&gGame, 12345u, 0); AdvanceStory(&gGame);
+        ConfigureDriveForTest(&gGame, drive, 12345u, 0);
+        gFxLevel = FX_FULL; gDescentActive = 1; gDescentStart = 10000;
+        gDescentToFloor = 0; gDescentChoiceIndex = 0;
+        GameState before = gGame;
+        for (int frame = 0; frame < 2 && ok; ++frame) {
+            gCheckTick = 10000 + mediaAges[frame];
+            CheckDcState dcBefore = ReadCheckDcState(dc);
+            DrawTransitionFixture(dc, 0); ++*frames;
+            CheckDcState dcAfter = ReadCheckDcState(dc);
+            dcAfter.text = dcBefore.text; dcAfter.bk = dcBefore.bk; dcAfter.bkMode = dcBefore.bkMode;
+            if (memcmp(&dcBefore, &dcAfter, sizeof(dcBefore)) || GetClipRgn(dc, afterClip) != 1
+                || !EqualRgn(clip, afterClip) || memcmp(&gGame, &before, sizeof(gGame))) {
+                printf("FAIL: media %d state/clip at %d\n", drive, mediaAges[frame]);
+                ok = 0; break;
+            }
+            uint32_t expected = FrameHash(bits, w, h);
+            if (folder) {
+                char name[96]; sprintf_s(name, "media_%d_age_%d", drive, mediaAges[frame]);
+                if (!SaveFrame(folder, name, w, h, bits)) { ok = 0; break; }
+            }
+            gCheckTick += 29; DrawTransitionFixture(dc, 0);
+            gCheckTick = 10000 + mediaAges[frame]; DrawTransitionFixture(dc, 0); ++*frames;
+            if (FrameHash(bits, w, h) != expected || memcmp(&gGame, &before, sizeof(gGame))) {
+                printf("FAIL: media %d fixed-time pixels at %d\n", drive, mediaAges[frame]);
+                ok = 0;
             }
         }
     }
@@ -803,7 +851,7 @@ int main(int argc, char** argv) {
             }
             SetUiLanguage(LANGUAGE_KOREAN);
             gDescentChoiceIndex = count ? count - 1 : 0;
-            DrawDriveSelectionExit(dc, BASE_WIDTH, BASE_HEIGHT, 160); GdiFlush(); ++frames;
+            DrawVolumeLock(dc, BASE_WIDTH, BASE_HEIGHT, 160); GdiFlush(); ++frames;
             gDescentChoiceIndex = -1;
             if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: drive render or empty click mutated game\n"); return 19; }
         }

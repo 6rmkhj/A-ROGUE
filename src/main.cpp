@@ -719,7 +719,76 @@ int gDescentActive;
 DWORD gDescentStart;
 int gDescentToFloor;   // 진입하는 층 (0 = 최초 마운트)
 int gDescentChoiceIndex;
-static int gDescentSeekPhase; // 진행 중 한 번씩 울리는 섹터 안착 신호 단계
+
+// 마운트 연출의 소리. 예전에는 구간마다 주사위 잠금음(SFX_DIE_LOCK)이 세 번
+// 울렸다 - 3초짜리 장면에서 일어나는 모든 일이 판때기 놓는 소리였다는 뜻이다.
+// 지금은 사건마다 그 물건의 소리가 난다. 대부분은 삽입 연출이 이미 만들어 둔
+// 드라이브 어휘(활강·걸쇠·모터·헤드 이동·채터)를 그대로 쓴다 - 빌려 온 것이
+// 아니라 같은 기계가 내는 같은 소리다. 새로 만든 넷은 거기 없던 사건뿐이다:
+// 정지에서 회전수까지 오르는 스핀들, 판에 내려앉는 헤드, 밟은 손상 섹터, 각인.
+// ★표가 음이다. 기계음이 마디를 치고 이 음들이 그 마디를 악절로 묶는다.
+struct MountCue { int at; int sfx; int pitch; };
+static const MountCue MOUNT_CUES[] = {
+    { 0,                        SFX_BOOT_LATCH,   5 },   // 고른 카드가 레일에 물린다
+    { 40,                       SFX_MOUNT_SPIN,   0 },   // 스핀들이 붙기 시작한다 (1200ms 상승)
+    { 90,                       SFX_BOOT_SLIDE,   1 },   // 탈락한 카드가 판에서 뜯겨 나간다
+    { 190,                      SFX_BOOT_SLIDE,   4 },
+    { 350,                      SFX_BOOT_LATCH,   2 },   // 레일이 닫힌다
+    { MOUNT_LOCK_MS - 150,      SFX_BOOT_TOLL,    0 },   // ★ 잠긴 자리의 근음
+    { MOUNT_SEAT_AT,            SFX_BOOT_SLIDE,   6 },   // 카드가 뽑혀 나온다
+    { MOUNT_SPIN_AT - 70,       SFX_BOOT_LATCH,   0 },   // 스핀들 클램프가 물린다
+    { MOUNT_SPIN_AT,            SFX_BOOT_MOTOR,   0 },   // 판이 회전수에 오른다
+    { MOUNT_SPIN_AT + 220,      SFX_BOOT_PULSE,   0 },   // ★ A3 - 판이 열린다
+    { MOUNT_READ_AT - 120,      SFX_MOUNT_LAND,   0 },   // 헤드가 판에 내려앉는다
+    { MOUNT_READ_AT,            SFX_BOOT_CHATTER, 0 },   // 판독 채터 (바닥에 깔린다)
+    { MOUNT_READ_AT + MOUNT_TRACK_MS,           SFX_MOUNT_ROT,    0 },   // 바깥 트랙의 손상
+    { MOUNT_READ_AT + MOUNT_TRACK_MS,           SFX_BOOT_SEEK,    2 },   // 다음 트랙으로
+    { MOUNT_READ_AT + MOUNT_TRACK_MS + 300,     SFX_BOOT_CHATTER, 2 },
+    { MOUNT_READ_AT + MOUNT_TRACK_MS * 2,       SFX_MOUNT_ROT,    3 },   // 가운데 트랙의 손상
+    { MOUNT_READ_AT + MOUNT_TRACK_MS * 2,       SFX_BOOT_SEEK,    5 },
+    { MOUNT_READ_AT + MOUNT_TRACK_MS * 2 + 300, SFX_BOOT_CHATTER, 4 },
+    { MOUNT_READ_AT + MOUNT_TRACK_MS * 2 + 620, SFX_BOOT_CHATTER, 6 },
+    { MOUNT_LAW_AT,             SFX_MOUNT_LAW,    0 },   // ★ 각인. A단조 3화음
+    { MOUNT_LAW_AT + 140,       SFX_BOOT_PULSE,   7 },   // ★ E4 - 가장 높은 자리
+    // 정지 구간. 여기서는 아무 일도 일어나지 않아야 하므로 소리도 낮은 근음 하나뿐이다
+    // - 읽을 시간을 주려고 세워 둔 620ms를 소리가 다시 채우면 세운 보람이 없다.
+    { MOUNT_HOLD_AT,            SFX_BOOT_TOLL,    3 },   // ★
+    { MOUNT_SEAL_AT,            SFX_BOOT_LATCH,   0 },   // 걸쇠
+    { MOUNT_SEAL_AT,            SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 전투로 넘어가며 계속 운다
+    { MOUNT_SEAL_AT + 150,      SFX_BOOT_SWALLOW, 0 },   // 허브가 화면을 삼킨다
+};
+// 층 하강은 같은 판에서 헤드만 옮긴다. 기동도 각인도 없으니 소리도 그만큼 적다.
+static const MountCue DIVE_CUES[] = {
+    { 0,                    SFX_BOOT_MOTOR,   2 },   // 이미 돌고 있는 판
+    { DIVE_READ_AT - 120,   SFX_MOUNT_LAND,   3 },   // 헤드가 안쪽 트랙에 앉는다
+    { DIVE_READ_AT,         SFX_BOOT_CHATTER, 2 },
+    { DIVE_READ_AT + 60,    SFX_BOOT_SEEK,    4 },
+    { DIVE_READ_AT + DIVE_READ_MS / 2, SFX_MOUNT_ROT, 4 },
+    { DIVE_HOLD_AT,         SFX_BOOT_TOLL,    5 },   // ★ 이 층의 근음
+    { DIVE_SEAL_AT,         SFX_BOOT_LATCH,   2 },
+    { DIVE_SEAL_AT + 130,   SFX_BOOT_SWALLOW, 3 },
+};
+static int gDescentCue;
+
+// 매체가 일곱이면 소리도 일곱이어야 한다. 표는 하나지만 두 가지가 매체를 탄다.
+//
+// 하나, 도는 축이 없는 매체(R:\ 셀 격자 · N:\ 원격 링크)에는 스핀들이 없다.
+// 모터가 회전수에 오르는 소리 대신 전원이 들어오고 버스가 깨어나는 소리를 쓴다 -
+// 화면에 도는 것이 하나도 없는데 모터가 울면 그림과 소리가 서로를 부정한다.
+static int MountCueSfx(int sfx, int media) {
+    if (MediaSpindle(media)) return sfx;
+    if (sfx == SFX_MOUNT_SPIN) return SFX_BOOT_POWER;
+    if (sfx == SFX_BOOT_MOTOR) return SFX_BOOT_CHATTER;
+    return sfx;
+}
+// 둘, 기계의 질감을 내는 큐만 매체 번호만큼 음정을 올린다. 음(★)은 건드리지
+// 않는다 - 그쪽은 A단조 악절이라 볼륨마다 조가 달라지면 연출이 흩어진다.
+static int MountCuePitch(int sfx, int pitch, int media) {
+    if (sfx != SFX_BOOT_SEEK && sfx != SFX_BOOT_CHATTER
+        && sfx != SFX_MOUNT_LAND && sfx != SFX_MOUNT_ROT) return pitch;
+    pitch += media % 4;
+    return pitch > 7 ? 7 : pitch;
+}
 
 static void FinishDescent() {
     if (!gDescentActive) return;
@@ -732,10 +801,9 @@ static void FinishDescent() {
 static void BeginDescent(int toFloor, int choiceIndex) {
     gDescentToFloor = toFloor;
     gDescentChoiceIndex = choiceIndex;
-    gDescentSeekPhase = 0;
+    gDescentCue = 0;
     gDescentStart = GetTickCount();
     gDescentActive = 1;
-    PlaySfx(SFX_READ_START);
     SetTimer(gWindow, 6, FX_TIMER_MS, 0);   // 5번은 오디오 펌프(AUDIO_TIMER_ID)가 쓴다
 }
 
@@ -2053,13 +2121,18 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 6u) {
+            // 그림은 경과 시간만 보고 그려지므로 여기가 할 일은 소리와 리페인트뿐이다.
+            int mount = gDescentToFloor == 0;
             int descentElapsed = (int)(GetTickCount() - gDescentStart);
-            int scanMs = DESCENT_MS - (gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0);
-            int scanStart = gDescentChoiceIndex >= 0 ? DESCENT_LOCK_MS : 0;
-            if (gDescentSeekPhase == 0 && descentElapsed >= scanStart) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 1); }
-            else if (gDescentSeekPhase == 1 && descentElapsed >= scanStart + scanMs / 3) { ++gDescentSeekPhase; PlaySfx(SFX_DIE_LOCK); }
-            else if (gDescentSeekPhase == 2 && descentElapsed >= scanStart + scanMs * 2 / 3) { ++gDescentSeekPhase; PlaySfxPitched(SFX_DIE_LOCK, 4); }
-            if (descentElapsed >= DESCENT_MS) FinishDescent();
+            const MountCue* cues = mount ? MOUNT_CUES : DIVE_CUES;
+            int cueCount = (int)((mount ? sizeof(MOUNT_CUES) : sizeof(DIVE_CUES)) / sizeof(MountCue));
+            int media = DriveMedia(gGame.selectedDrive);
+            while (gDescentCue < cueCount && descentElapsed >= cues[gDescentCue].at) {
+                int sfx = MountCueSfx(cues[gDescentCue].sfx, media);
+                PlaySfxPitched(sfx, MountCuePitch(sfx, cues[gDescentCue].pitch, media));
+                ++gDescentCue;
+            }
+            if (descentElapsed >= MountBeatsFor(mount).total) FinishDescent();
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 8u) {
