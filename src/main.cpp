@@ -834,18 +834,46 @@ static uint32_t gBootSeed;
 
 // 구간이 바뀌는 시점마다 한 번씩 울린다. 그림은 경과 시간만 보고 그려지므로
 // 타이머가 할 일은 이 소리와 리페인트뿐이다.
+//
+// 예전에는 주사위·보상 효과음을 빌려 썼다. 4초짜리 연출의 모든 사건이 판때기를
+// 놓는 소리로 들렸다는 뜻이다. 지금은 사건마다 그 물건의 소리가 따로 있고,
+// 큰 사건에는 둘을 겹쳐 쌓는다 (걸쇠 + 모터, 돌진 + 점등).
 static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
-    { BOOT_SUCK_AT,        SFX_READ_START, 0 },   // 판이 빨려 들어가기 시작한다
-    { BOOT_FLIP_AT - 140,  SFX_REWARD_SET, 0 },   // 디스크 한 장이 만들어진다
-    { BOOT_FLY_AT,         SFX_DIE_PICK,   2 },   // 뒤집힌 디스크를 잡는다
-    { BOOT_PUSH_AT,        SFX_SLOT_SET,   1 },   // 슬롯에 밀어 넣는다
-    { BOOT_PUSH_AT + 200,  SFX_UI_CLICK,   0 },   // 중간에 한 번 걸린다
-    { BOOT_CLUNK_AT,       SFX_DIE_LOCK,   0 },   // 철컥
-    { BOOT_CLUNK_AT + 150, SFX_READ_START, 0 },
-    { BOOT_CLUNK_AT + 380, SFX_DIE_LOCK,   3 },   // 헤드가 트랙을 옮긴다
-    { BOOT_CLUNK_AT + 570, SFX_DIE_LOCK,   5 },
-    { BOOT_SEEK_END,       SFX_PRUNE,      0 },   // 기계가 덮쳐 오며 화면 속으로 빨려 든다
-    { BOOT_INSERT_MS - 150, SFX_CONFIRM,   0 },   // 다 삼킨 순간
+    // ★표가 음이다. 기계 소리만 있을 때는 사건이 열한 번 일어날 뿐 아무것도
+    // 시작되고 끝나지 않았다 - 상승이 없으니 긴장이 쌓이지 않고, 닫는 화음이
+    // 없으니 끝난 것이 아니라 그냥 멈춘 것이었다.
+    { 120,                  SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 정확히 벼림에서 끝난다
+    { BOOT_SURGE_AT,        SFX_BOOT_TEAR,    0 },   // 과전압. 화면이 찢어진다
+    { BOOT_SUCK_AT,         SFX_BOOT_VORTEX,  0 },   // 감겨 들어가기 시작한다
+    { BOOT_FLIP_AT,         SFX_BOOT_STINGER, 0 },   // ★ 벼림 = A단조 화음이 선다
+    { BOOT_FLIP_AT,         SFX_BOOT_FORGE,   0 },   // 그 위에 얹히는 금속 타격
+    // 몸통은 25ms 먼저 들어간다 - 겹쳐 쌓으면 전이음이 같은 샘플에서 더해져
+    // 합이 천장을 넘고, 어긋나면 "쿵-깡"으로 두 겹이 다 들린다.
+    { BOOT_FLIP_AT - 25,    SFX_BOOT_LATCH,   4 },
+    { BOOT_FLIP_AT + 90,    SFX_BOOT_FLIP,    0 },   // 공중에서 한 바퀴
+    { BOOT_FLIP_AT + 240,   SFX_BOOT_PULSE,   7 },   // ★ E4 - 가장 높은 자리
+    { BOOT_FLY_AT,          SFX_BOOT_FLIP,    3 },   // 카메라가 물러난다
+    { BOOT_FLY_AT,          SFX_BOOT_REVEAL,  0 },   // ★ 방이 열린다. 상승의 반대로 내려간다
+    { BOOT_FLY_AT + 60,     SFX_BOOT_PULSE,   3 },   // ★ C4 - 내려온다
+    // 방이 열리는 400ms가 소리로는 거의 비어 있었다 (재 보니 2,000ms 부근의
+    // RMS가 989로 연출 전체의 바닥이었다). 세 번째 음을 여기에 놓아 E-C-A가
+    // 끊기지 않게 하고, 그 끝을 슬롯이 받는다.
+    { BOOT_FLY_AT + 260,    SFX_BOOT_PULSE,   0 },   // ★ A3 - 하강이 근음에 닿는다
+    { BOOT_PUSH_AT,         SFX_BOOT_SLIDE,   0 },   // 플라스틱이 슬롯을 긁는다
+    { BOOT_PUSH_AT + 210,   SFX_BOOT_SLIDE,   2 },   // 중간에 한 번 걸렸다 다시 들어간다
+    { BOOT_CLUNK_AT - 90,   SFX_BOOT_SLIDE,   5 },   // 판이 자리를 잡는다 (걸쇠의 예비 동작)
+    { BOOT_CLUNK_AT,        SFX_BOOT_LATCH,   0 },   // 철컥
+    { BOOT_CLUNK_AT,        SFX_BOOT_TOLL,    0 },   // ★ 낮은 A. 물린 자리의 근음
+    { BOOT_CLUNK_AT + 40,   SFX_BOOT_MOTOR,   0 },   // 스핀들이 회전수에 오른다
+    { BOOT_CLUNK_AT + 120,  SFX_BOOT_POWER,   0 },   // 브라운관이 켜진다
+    { BOOT_CLUNK_AT + 320,  SFX_BOOT_CHATTER, 0 },   // 판을 읽는 동안 깔리는 잔딸깍
+    { BOOT_CLUNK_AT + 330,  SFX_BOOT_SEEK,    0 },   // 헤드가 트랙을 옮긴다
+    { BOOT_CLUNK_AT + 500,  SFX_BOOT_SEEK,    3 },
+    { BOOT_SEEK_END - 110,  SFX_BOOT_SEEK,    6 },   // 마지막 트랙까지 읽었다
+    { BOOT_SEEK_END,        SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 런으로 넘어가며 계속 울린다
+    { BOOT_SEEK_END,        SFX_BOOT_LOCK,    0 },   // ★ 화면 둘레의 18칸이 차례로 잠긴다
+    { BOOT_SEEK_END,        SFX_BOOT_SWALLOW, 0 },   // 기계가 덮쳐 오며 화면 속으로 빨려 든다
+    { BOOT_INSERT_MS - 120, SFX_BOOT_FORGE,   2 },   // 다 삼킨 순간의 섬광
 };
 static int gBootCue;
 
@@ -870,20 +898,47 @@ static void BeginBootInsert() {
     gBootCue = 0;
     gBootStart = GetTickCount();
     gBootActive = 1;
-    PlaySfx(SFX_PRUNE);            // 화면이 디스크로 빨려 들어가는 소리
+    // 누른 즉시 나는 소리. 전원 스위치를 젖힌 것이고, 여기서 시작된 과전압이
+    // 190ms 뒤에 화면을 찢는다 (BOOT_SURGE_AT의 BOOT_TEAR).
+    PlaySfxPitched(SFX_BOOT_LATCH, 2);
     SetTimer(gWindow, 10, FX_TIMER_MS, 0);
 }
 
-// 화면이 갈라지는 동안 조금씩 세지고, 디스크가 물리는 철컥에서 한 번 크게 튄다.
+// 한 사건이 지나가며 남기는 충격. 같은 프레임에 겹치면 큰 쪽이 이긴다.
+static int BootKick(int elapsed, int at, int life, int peak) {
+    int since = elapsed - at;
+    if (since < 0 || since >= life) return 0;
+    return peak * (life - since) / life;
+}
+
+// 화면이 갈라지는 동안 조금씩 세지고, 사건마다 한 번씩 크게 튄다.
 static int BootShakeAmplitude() {
     if (!gBootActive) return 0;
     int elapsed = (int)(GetTickCount() - gBootStart);
-    if (elapsed < BOOT_SUCK_AT) return FxScale(1 + elapsed * 5 / BOOT_GLITCH_MS);
+    if (elapsed < BOOT_SUCK_AT) {
+        // 붕괴. 바닥이 계속 올라가고, 과전압이 터지는 순간 한 번 크게 튄다.
+        int amp = 1 + elapsed * 5 / BOOT_GLITCH_MS;
+        int surge = BootKick(elapsed, BOOT_SURGE_AT, 170, 9);
+        return FxScale(surge > amp ? surge : amp);
+    }
     // 마지막 돌진: 기계가 가까워질수록 떨림이 세진다. 다가오는 것이 무거워 보인다.
-    if (elapsed >= BOOT_SEEK_END) return FxScale(1 + Track(elapsed, BOOT_SEEK_END, BOOT_INSERT_MS) * 5 / 1000);
-    int since = elapsed - BOOT_CLUNK_AT;
-    if (since >= 0 && since < 260) return FxScale(9 * (260 - since) / 260);
-    return 0;
+    if (elapsed >= BOOT_SEEK_END) return FxScale(1 + Track(elapsed, BOOT_SEEK_END, BOOT_INSERT_MS) * 6 / 1000);
+    // 벼림 · 카메라 후퇴의 착지 · 철컥 · 점등 · 헤드 이동 둘.
+    // 후퇴가 멈추는 순간에 충격을 주면 카메라가 미끄러진 것이 아니라 그 자리에
+    // 가서 선 것으로 읽힌다 - 이것 하나로 후퇴 구간의 무게가 달라진다.
+    int amp = BootKick(elapsed, BOOT_FLIP_AT, 260, 12);
+    const int events[5][3] = {
+        {BOOT_PUSH_AT - 40,    200,  7},
+        {BOOT_CLUNK_AT,        280, 12},
+        {BOOT_CLUNK_AT + 120,  150,  5},
+        {BOOT_CLUNK_AT + 330,  100,  3},
+        {BOOT_CLUNK_AT + 500,  100,  3},
+    };
+    for (int i = 0; i < 5; ++i) {
+        int kick = BootKick(elapsed, events[i][0], events[i][1], events[i][2]);
+        if (kick > amp) amp = kick;
+    }
+    return FxScale(amp);
 }
 
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }

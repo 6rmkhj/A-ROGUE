@@ -555,6 +555,10 @@ void DrawShutter(HDC dc, const RECT& slot, int style, int descended, int rattle,
 }
 
 COLORREF MixColor(COLORREF from, COLORREF to, int amount) {
+    // amount는 백분율이다. 100을 넘기면 각 채널이 따로 256을 넘어 BYTE로 잘리고,
+    // 한 채널만 감기는 순간 색상이 통째로 뒤집힌다 (녹색만 감기면 자홍색이 된다).
+    // 범위를 벗어난 값은 언제나 호출자의 실수이므로 여기서 물린다.
+    if (amount < 0) amount = 0; else if (amount > 100) amount = 100;
     int r = GetRValue(from) + (GetRValue(to) - GetRValue(from)) * amount / 100;
     int g = GetGValue(from) + (GetGValue(to) - GetGValue(from)) * amount / 100;
     int b = GetBValue(from) + (GetBValue(to) - GetBValue(from)) * amount / 100;

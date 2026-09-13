@@ -528,6 +528,9 @@ static int CheckSidebarFrames(HDC dc, void* bits, int w, int h, const char* fold
 // 1120 폭으로 그려져 LEGACY_X만큼 밀린 두 무대(보스 조우·새 게임 삽입)의 고정 시각 프레임.
 // 게이트와 기계가 캔버스 한가운데 축에 오는지 눈으로 확인하고, 판을 바꾸지 않는지 본다.
 static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* folder, int* frames) {
+    // 두 무대는 장식이 전부 켜진 상태로 본다. 앞선 검사가 남겨 둔 모드를 물려받으면
+    // 검토용 프레임에 고리도 파편도 없는 채로 통과한다.
+    gFxLevel = FX_FULL;
     ResetPresentation(); NewRun(&gGame, 12345u, 0);
     ConfigureDriveForTest(&gGame, 1, 12345u, 0); gGame.encounter = 2;
     if (!StartCombat(&gGame)) return 0;
@@ -554,8 +557,20 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
     DrawFixture(dc); GdiFlush(); FxSnapshotCapture(dc, w, h);
     if (!FxSnapshotHeld()) return 0;
     GameState title = gGame;
-    static const int bootAges[] = {BOOT_FLIP_AT + 200, BOOT_PUSH_AT + 250, BOOT_SEEK_END - 120};
-    for (int i = 0; i < 3; ++i) {
+    // 연출의 막마다 하나씩. 예전에는 셋뿐이라 붕괴·소용돌이·점등을 한 번도
+    // 그려 보지 않고 통과했다.
+    static const int bootAges[] = {
+        BOOT_SURGE_AT + 90,                  // 과전압으로 화면이 찢어진다
+        BOOT_SUCK_AT + 300,                  // 감겨 들어간다
+        BOOT_FLIP_AT + 40,                   // 디스크 한 장이 벼려진다 (파열)
+        BOOT_FLIP_AT + 200,                  // 공중에서 뒤집힌다
+        BOOT_PUSH_AT + 250,                  // 슬롯에 반쯤 걸린다
+        BOOT_CLUNK_AT + 140,                 // 브라운관이 열린다
+        BOOT_CLUNK_AT + BOOT_POWER_MS + 400, // 섹터를 읽는다
+        BOOT_SEEK_END - 120,                 // 마지막 트랙
+        BOOT_SEEK_END + 340,                 // 기계가 덮쳐 온다
+    };
+    for (int i = 0; i < (int)(sizeof(bootAges) / sizeof(bootAges[0])); ++i) {
         gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i];
         DrawFixture(dc); DrawBootInsert(dc, BASE_WIDTH, BASE_HEIGHT, w, h); GdiFlush(); ++*frames;
         if (folder) {

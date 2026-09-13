@@ -11,7 +11,10 @@
 // (the old 1800-sample buffer silently truncated anything over 163ms, so the
 // 180ms game-over and victory stings were being cut off mid-fade).
 #define SFX_RATE 22050
-#define SFX_MAX_SAMPLES 17640          // 800ms
+// 1200ms. 예전 한도는 800ms였는데, 연출을 하나로 묶는 상승은 그보다 길어야
+// 한다 - 짧게 끊어 이어 붙이면 이은 자리가 들린다. 목소리 여덟 개의 버퍼가
+// 커지지만 전부 BSS라 실행 파일 크기와는 무관하다.
+#define SFX_MAX_SAMPLES 26460
 #define SFX_NOTES 3
 
 enum SfxWave { WAVE_PULSE = 0, WAVE_TRI, WAVE_NOISE };
@@ -60,11 +63,44 @@ static const SfxSpec SFX[SFX_COUNT] = {
     {{430,   0,   0}, { 42,  0,  0},    0, WAVE_TRI,   50,  2, 90,  14,   0, 100,   1},  // UI_FOCUS: felt detent
     {{ 92,   0,   0}, {590,  0,  0},  -36, WAVE_TRI,   50,  8, 90,  72,   0,  60,   1},  // BOSS_ARRIVE: heavy latch + pressure
     {{784,   0,   0}, {420,  0,  0},    0, WAVE_TRI,   50,  3, 90,  43,   0, 130,   1},  // LOOT_REVEAL: struck glass + small catch
-    {{330,   0,   0}, {460,  0,  0},    0, WAVE_TRI,   50, 10, 90,  46,   0, 110,   1}   // REPAIR: soft seal + warm resonance
+    {{330,   0,   0}, {460,  0,  0},    0, WAVE_TRI,   50, 10, 90,  46,   0, 110,   1},  // REPAIR: soft seal + warm resonance
+    // 삽입 연출 전용. 전부 아래 RenderMaterialSfx의 층으로 합성되므로 여기서
+    // 뜻이 있는 칸은 길이(ms[0])뿐이다. 나머지는 표를 읽을 때 어떤 물건의
+    // 소리인지 알아보라고 대표 주파수만 적어 둔다.
+    {{ 168,  0,   0}, {520,  0,  0},    0, WAVE_TRI,   50,  1, 90,  58,    0,  70,   1},  // BOOT_TEAR:    화면이 과전압으로 찢긴다
+    {{  90,  0,   0}, {780,  0,  0},    0, WAVE_TRI,   50,  6, 90,  40,    0,  90,   1},  // BOOT_VORTEX:  감겨 들어가는 소용돌이
+    {{1180,  0,   0}, {620,  0,  0},    0, WAVE_TRI,   50,  1, 90,  46,    0, 150,   1},  // BOOT_FORGE:   디스크 한 장이 벼려진다
+    {{ 300,  0,   0}, {300,  0,  0},    0, WAVE_TRI,   50,  4, 90,  34,    0, 120,   1},  // BOOT_FLIP:    공중에서 한 바퀴
+    {{ 240,  0,   0}, {280,  0,  0},    0, WAVE_TRI,   50,  2, 90,  40,    0, 110,   1},  // BOOT_SLIDE:   플라스틱이 슬롯을 긁는다
+    {{  78,  0,   0}, {440,  0,  0},    0, WAVE_TRI,   50,  1, 90,  56,    0,  60,   1},  // BOOT_LATCH:   걸쇠가 물린다
+    {{  44,  0,   0}, {700,  0,  0},    0, WAVE_TRI,   50, 40, 90,  48,    0,  80,   1},  // BOOT_MOTOR:   스핀들이 돌기 시작한다 (판독 구간을 받치는 유일한 지속음이라 조금 세다)
+    {{ 620,  0,   0}, {300,  0,  0},    0, WAVE_TRI,   50,  1, 90,  40,    0, 130,   1},  // BOOT_SEEK:    헤드가 트랙을 옮긴다
+    {{  96,  0,   0}, {560,  0,  0},    0, WAVE_TRI,   50,  1, 90,  44,    0, 100,   1},  // BOOT_POWER:   브라운관이 켜진다
+    {{ 120,  0,   0}, {720,  0,  0},    0, WAVE_TRI,   50,  3, 90,  54,    0,  90,   1},  // BOOT_SWALLOW: 화면 속으로 삼켜진다
+    {{ 110,  0,   0}, {1200, 0,  0},    0, WAVE_TRI,   50,  4, 90,  62,    0, 120,   1},  // BOOT_RISER:   A단조가 가속하며 오른다
+    {{ 440,  0,   0}, {700,  0,  0},    0, WAVE_TRI,   50,  1, 90,  72,    0, 150,   1},  // BOOT_STINGER: A단조 화음이 선다
+    {{ 220,  0,   0}, {420,  0,  0},    0, WAVE_TRI,   50,  1, 90,  58,    0, 140,   1},  // BOOT_PULSE:   한 음 (0/3/7 = A3·C4·E4)
+    {{  55,  0,   0}, {620,  0,  0},    0, WAVE_TRI,   50,  2, 90,  72,    0,  70,   1},  // BOOT_TOLL:    낮은 A
+    {{ 110,  0,   0}, {1100, 0,  0},    0, WAVE_TRI,   50,  2, 90,  78,    0, 110,   1},  // BOOT_RESOLVE: A단조로 닫는다
+    {{ 520,  0,   0}, {460,  0,  0},    0, WAVE_TRI,   50,  4, 90,  58,    0, 100,   1},  // BOOT_REVEAL:  방이 열린다
+    {{ 760,  0,   0}, {620,  0,  0},    0, WAVE_TRI,   50,  1, 90,  34,    0, 140,   1},  // BOOT_CHATTER: 데이터 채터
+    {{ 900,  0,   0}, {540,  0,  0},    0, WAVE_TRI,   50,  1, 90,  46,    0, 150,   1}   // BOOT_LOCK:    18칸이 잠긴다
 };
 
 // 2^(n/12) in 1/256ths, for pitching a cue up by whole semitones
 static const int SEMITONE[8] = {256, 271, 287, 304, 323, 342, 362, 384};
+
+// A단조. 반음(A2=110Hz 기준)을 Hz로. music.cpp의 NoteHz와 같은 비율표라
+// 연출이 내는 음과 타이틀 곡이 같은 음정에 선다.
+static int BootNoteHz(int semitone) {
+    static const int ratio[12] = {1024,1085,1149,1218,1290,1367,1448,1534,1625,1722,1825,1933};
+    int octave = semitone / 12, note = semitone % 12;
+    if (note < 0) { note += 12; --octave; }
+    int hz = 110 * ratio[note] / 1024;
+    while (octave > 0) { hz *= 2; --octave; }
+    while (octave < 0) { hz /= 2; ++octave; }
+    return hz < 20 ? 20 : hz;
+}
 
 static int SfxOsc(int wave, int phase, int period, int duty, uint32_t* noiseSeed) {
     if (wave == WAVE_NOISE) {
@@ -108,16 +144,46 @@ static int MaterialEnvelope(int sample, int startMs, int lengthMs, int attackMs)
     return tail * tail / 256;
 }
 
+// 아주 짧은 반사 하나. 이 게임의 소리는 전부 건조한 점음원이라, 카메라가 책상과
+// 방을 열어 보여 주는 순간에도 소리는 귀에 붙어 있었다. 큰 사건에만 23ms와 47ms
+// 반사를 얹으면 같은 파형이 "어딘가에서 난 소리"가 된다.
+// 뒤에서부터 읽으므로 반사끼리 되먹임하지 않고, 마지막 80ms는 이득을 0으로
+// 거둬 꼬리를 되살리지 않는다 (되살리면 끝이 잘린 것으로 들린다).
+static void AddRoomTap(short* out, int count, int delayMs, int gain) {
+    int d = SFX_RATE * delayMs / 1000;
+    if (d < 1 || d >= count) return;
+    int taper = SFX_RATE * 80 / 1000;
+    for (int i = count - 1; i >= d; --i) {
+        int left = count - 1 - i;
+        int g = left < taper ? gain * left / taper : gain;
+        if (g <= 0) continue;
+        int v = out[i] + out[i - d] * g / 100;
+        out[i] = (short)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+    }
+}
+
+// 방을 주는 소리. 큰 사건과 음만이고, 잔딸깍·마찰처럼 가까이서 나야 하는 것은 뺀다.
+static int BootWantsRoom(int id) {
+    return id == SFX_BOOT_FORGE || id == SFX_BOOT_LATCH || id == SFX_BOOT_POWER
+        || id == SFX_BOOT_SWALLOW || id == SFX_BOOT_STINGER || id == SFX_BOOT_TOLL
+        || id == SFX_BOOT_RESOLVE || id == SFX_BOOT_REVEAL;
+}
+
 static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
-    if (id < SFX_UI_FOCUS || id > SFX_REPAIR) return 0;
+    if (id < SFX_UI_FOCUS || id > SFX_BOOT_LOCK) return 0;
     int count = SFX_RATE * SFX[id].ms[0] / 1000;
     if (count > capacity) count = capacity;
-    uint32_t phase[3] = {}, noise = 0x5f31a129u + (uint32_t)id * 7919u;
-    int filtered = 0;
+    uint32_t phase[4] = {}, noise = 0x5f31a129u + (uint32_t)id * 7919u;
+    // 잡음 하나에서 세 가지 재료를 뽑는다. filtered는 마찰·전이음, rumble은 훨씬
+    // 느린 극이라 베어링 그릇거림이 되고, 둘의 차(band)는 중역만 남은 바람 소리다.
+    // 대역을 나누지 않으면 무엇을 넣어도 같은 '치익' 하나로 들린다.
+    int filtered = 0, rumble = 0;
     for (int i = 0; i < count; ++i) {
         noise = noise * 1664525u + 1013904223u;
         int hiss = (int)((noise >> 16) & 65535u) - 32768;
         filtered += (hiss - filtered) * 52 / 256;
+        rumble += (hiss - rumble) * 12 / 256;
+        int band = filtered - rumble;
         int ms = i * 1000 / SFX_RATE, value;
         if (id == SFX_UI_FOCUS) {
             int body = MaterialTone(&phase[0], 430 * shift / 256);
@@ -137,7 +203,7 @@ static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
             value = glass * MaterialEnvelope(i, 24, 396, 2) / 256 * 28 / 100
                 + overtone * MaterialEnvelope(i, 26, 233, 3) / 256 * 11 / 100
                 + filtered * MaterialEnvelope(i, 0, 28, 1) / 256 * 18 / 100;
-        } else {
+        } else if (id == SFX_REPAIR) {
             int settle = ms < 200 ? ms : 200;
             int warm = MaterialTone(&phase[0], (286 + settle * 44 / 200) * shift / 256);
             int paired = MaterialTone(&phase[1], 334 * shift / 256);
@@ -145,10 +211,247 @@ static int RenderMaterialSfx(int id, int shift, short* out, int capacity) {
                 + paired * MaterialEnvelope(i, 94, 366, 34) / 256 * 13 / 100
                 + filtered * MaterialEnvelope(i, 0, 185, 22) / 256 * 26 / 100
                 + filtered * MaterialEnvelope(i, 208, 31, 2) / 256 * 12 / 100;
+        } else if (id == SFX_BOOT_TEAR) {
+            // 과전압. 저역이 아래로 떨어지면서 중역이 함께 찢어진다. 맨 앞의
+            // 1.5kHz 한 조각이 "지금 갈라졌다"를 알리는 모서리다.
+            int fall = ms < 300 ? ms : 300;
+            int sub = MaterialTone(&phase[0], (176 - fall * 132 / 300) * shift / 256);
+            int rasp = MaterialTone(&phase[1], (612 - fall) * shift / 256);
+            int shear = MaterialTone(&phase[2], (1480 + fall * 8) * shift / 256);
+            value = sub * MaterialEnvelope(i, 0, 520, 6) / 256 * 42 / 100
+                + rasp * MaterialEnvelope(i, 4, 210, 3) / 256 * 15 / 100
+                + shear * MaterialEnvelope(i, 0, 64, 1) / 256 * 10 / 100
+                + band * MaterialEnvelope(i, 0, 330, 2) / 256 * 26 / 100;
+        } else if (id == SFX_BOOT_VORTEX) {
+            // 감겨 들어가는 소리. 높이와 떨림이 같이 올라간다 - 회전이 빨라질수록
+            // 진동수도 빨라지는 물건이라야 화면이 실제로 감기는 것으로 들린다.
+            int whirl = MaterialTone(&phase[0], (88 + ms * 430 / 780) * shift / 256);
+            int upper = MaterialTone(&phase[1], (264 + ms * 1290 / 780) * shift / 256);
+            int lfo = MaterialTone(&phase[2], 12 + ms * 30 / 780);
+            int trem = 176 + lfo / 410;
+            value = whirl * MaterialEnvelope(i, 0, 780, 60) / 256 * 34 / 100
+                + upper * MaterialEnvelope(i, 40, 740, 180) / 256 * 17 / 100 * trem / 256
+                + band * MaterialEnvelope(i, 0, 780, 120) / 256 * 26 / 100 * trem / 256;
+        } else if (id == SFX_BOOT_FORGE) {
+            // 디스크 한 장이 벼려지는 순간. 금속을 때린 배음 셋이 각기 다른 속도로
+            // 사라지고 그 아래에 몸통이 남는다.
+            int strike = MaterialTone(&phase[0], 1180 * shift / 256);
+            int ring = MaterialTone(&phase[1], 1772 * shift / 256);
+            int shimmer = MaterialTone(&phase[2], 2656 * shift / 256);
+            int drop = ms < 120 ? ms : 120;
+            int thud = MaterialTone(&phase[3], (150 - drop * 78 / 120) * shift / 256);
+            value = strike * MaterialEnvelope(i, 0, 600, 1) / 256 * 26 / 100
+                + ring * MaterialEnvelope(i, 2, 420, 1) / 256 * 15 / 100
+                + shimmer * MaterialEnvelope(i, 4, 230, 2) / 256 * 9 / 100
+                + thud * MaterialEnvelope(i, 0, 620, 3) / 256 * 28 / 100
+                + filtered * MaterialEnvelope(i, 0, 40, 1) / 256 * 16 / 100;
+        } else if (id == SFX_BOOT_FLIP) {
+            // 공중에서 도는 판이 가르는 공기. 가운데에서 가장 세고 양끝이 비어 있다.
+            int swell = ms < 150 ? ms * 256 / 150 : (300 - ms) * 256 / 150;
+            if (swell < 0) swell = 0;
+            int air = MaterialTone(&phase[0], (300 + ms * 2) * shift / 256);
+            value = band * MaterialEnvelope(i, 0, 300, 90) / 256 * 52 / 100 * swell / 256
+                + air * MaterialEnvelope(i, 0, 296, 110) / 256 * 20 / 100;
+        } else if (id == SFX_BOOT_SLIDE) {
+            // 플라스틱이 금속 슬롯을 긁으며 들어간다. 마찰이 잦아드는 동안 몸통
+            // 주파수는 조금 올라간다 - 판이 안으로 물리며 조여지는 소리다.
+            int grip = ms < 200 ? 256 - ms * 96 / 200 : 160;
+            int body = MaterialTone(&phase[0], (232 + ms * 40 / 280) * shift / 256);
+            int squeak = MaterialTone(&phase[1], (1420 - ms * 300 / 280) * shift / 256);
+            value = band * MaterialEnvelope(i, 0, 250, 14) / 256 * 46 / 100 * grip / 256
+                + body * MaterialEnvelope(i, 0, 280, 10) / 256 * 30 / 100
+                + squeak * MaterialEnvelope(i, 60, 150, 24) / 256 * 12 / 100;
+        } else if (id == SFX_BOOT_LATCH) {
+            // 걸쇠. 아주 짧은 금속 모서리 둘과, 한참 남는 무거운 몸통.
+            int drop = ms < 70 ? ms : 70;
+            int body = MaterialTone(&phase[0], (132 - drop * 62 / 70) * shift / 256);
+            int metal = MaterialTone(&phase[1], 538 * shift / 256);
+            int tick = MaterialTone(&phase[2], 1340 * shift / 256);
+            value = body * MaterialEnvelope(i, 0, 440, 3) / 256 * 52 / 100
+                + metal * MaterialEnvelope(i, 2, 165, 1) / 256 * 18 / 100
+                + tick * MaterialEnvelope(i, 0, 34, 1) / 256 * 11 / 100
+                + filtered * MaterialEnvelope(i, 0, 52, 1) / 256 * 17 / 100;
+        } else if (id == SFX_BOOT_MOTOR) {
+            // 스핀들이 회전수에 오른다. 기본음·배음·고역 휘파람이 같은 비율로
+            // 올라가고, 느린 잡음이 베어링 그릇거림을 깐다.
+            int hum = MaterialTone(&phase[0], (42 + ms * 54 / 700) * shift / 256);
+            int harm = MaterialTone(&phase[1], (126 + ms * 162 / 700) * shift / 256);
+            int whine = MaterialTone(&phase[2], (420 + ms * 640 / 700) * shift / 256);
+            value = hum * MaterialEnvelope(i, 0, 700, 150) / 256 * 40 / 100
+                + harm * MaterialEnvelope(i, 30, 670, 260) / 256 * 22 / 100
+                + whine * MaterialEnvelope(i, 120, 580, 340) / 256 * 10 / 100
+                + rumble * MaterialEnvelope(i, 0, 700, 90) / 256 * 24 / 100;
+        } else if (id == SFX_BOOT_SEEK) {
+            // 헤드가 트랙을 넷 옮긴다. 하나하나가 같은 재료의 짧은 딸깍이고
+            // 마지막 하나만 길게 남아 멈춘 자리를 알린다.
+            int env = MaterialEnvelope(i, 0, 46, 1) + MaterialEnvelope(i, 74, 44, 1)
+                + MaterialEnvelope(i, 150, 42, 1) + MaterialEnvelope(i, 224, 76, 1);
+            int rasp = MaterialTone(&phase[0], 624 * shift / 256);
+            int edge = MaterialTone(&phase[1], 1560 * shift / 256);
+            value = rasp * env / 256 * 30 / 100 + edge * env / 256 * 14 / 100
+                + filtered * env / 256 * 40 / 100;
+        } else if (id == SFX_BOOT_POWER) {
+            // 브라운관 점등. 전원 퍽 소리 뒤에 화면이 부풀어 오르고, 그 위에
+            // 플라이백 휘파람이 얇게 남는다 - 켜진 브라운관은 계속 운다.
+            int thump = ms < 90 ? ms : 90;
+            int thunk = MaterialTone(&phase[0], (118 - thump * 56 / 90) * shift / 256);
+            int lift = ms < 300 ? ms : 300;
+            int bloom = MaterialTone(&phase[1], (196 + lift * 120 / 300) * shift / 256);
+            int flyback = MaterialTone(&phase[2], 2456 * shift / 256);
+            value = thunk * MaterialEnvelope(i, 0, 300, 2) / 256 * 40 / 100
+                + bloom * MaterialEnvelope(i, 24, 536, 90) / 256 * 26 / 100
+                + flyback * MaterialEnvelope(i, 40, 520, 200) / 256 * 9 / 100
+                + filtered * MaterialEnvelope(i, 0, 110, 1) / 256 * 22 / 100;
+        } else if (id == SFX_BOOT_RISER) {
+            // 이 연출을 하나의 악절로 묶는 줄. A단조 아르페지오(A·C·E)가 옥타브를
+            // 넘어가며 오르고, 음 하나의 길이가 점점 짧아져 가속한다. 끝은 벼림의
+            // 화음과 같은 자리(A5)라 상승이 그 화음으로 빨려 들어가 멈춘다.
+            // A단조를 두 옥타브 반 올라간다. 22(G4)와 34(G5)는 다음 A로 끌어올리는
+            // 이끔음이다. 마지막 음 A5(880Hz)는 곧 이어지는 화음의 근음보다 한
+            // 옥타브 위라, 상승이 그 화음 위에 얹히며 멈춘다. 더 위로 올리면
+            // 3kHz대가 되어 긴장이 아니라 귀만 아프다.
+            static const int STEP[12] = {0,3,7,12,15,19,22,24,27,31,34,36};
+            int onset = 0, index = 11, local = 0, span = 100;
+            for (int n = 0; n < 12; ++n) {
+                int width = n < 11 ? 145 - n * 9 : 1200 - onset;   // 합이 정확히 1200ms
+                if (ms < onset + width) { index = n; local = ms - onset; span = width; break; }
+                onset += width;
+            }
+            int noteHz = BootNoteHz(STEP[index]);
+            int pluck = MaterialTone(&phase[0], noteHz * shift / 256);
+            int upper = MaterialTone(&phase[1], noteHz * 2 * shift / 256);
+            // 음 하나의 봉투. 짧은 어택에 제곱 감쇠라 계단이 아니라 튕김이 된다.
+            if (span < 4) span = 4;
+            int env = local < 0 || local >= span ? 0
+                : local < 3 ? local * 256 / 3
+                : ((span - local) * 256 / span) * ((span - local) * 256 / span) / 256;
+            // 전체를 받치는 저역. 아르페지오가 가벼우므로 바닥이 같이 올라야 한다.
+            int bed = MaterialTone(&phase[2], (55 + ms * 55 / 1200) * shift / 256);
+            int swell = ms * 256 / 1200;
+            // 위로 갈수록 세진다. 같은 크기로 두면 음이 짧아지는 만큼 구간의
+            // 평균이 오히려 내려가, 올라가는 줄인데 조용해지는 것으로 들린다
+            // (실제로 재 보니 1000ms 부근이 이 연출에서 가장 조용했다).
+            int lift = 190 + index * 14;
+            value = pluck * env / 256 * 30 / 100 * lift / 256
+                + upper * env / 256 * 11 / 100 * lift / 256
+                + bed * MaterialEnvelope(i, 0, 1200, 400) / 256 * 30 / 100 * (160 + swell * 96 / 256) / 256
+                + band * MaterialEnvelope(i, 0, 1200, 700) / 256 * 18 / 100 * swell / 256;
+        } else if (id == SFX_BOOT_STINGER) {
+            // 벼림. A단조 삼화음이 한 번에 서고 오래 남는다. 기계 타격(BOOT_FORGE)이
+            // 위에 얹히므로 이쪽은 음정만 또렷하면 된다.
+            int a4 = MaterialTone(&phase[0], BootNoteHz(24) * shift / 256);   // A4 440
+            int c5 = MaterialTone(&phase[1], BootNoteHz(27) * shift / 256);   // C5 523
+            int e5 = MaterialTone(&phase[2], BootNoteHz(31) * shift / 256);   // E5 659
+            int a2 = MaterialTone(&phase[3], BootNoteHz(0) * shift / 256);    // A2 110 몸통
+            value = a4 * MaterialEnvelope(i, 0, 700, 2) / 256 * 24 / 100
+                + c5 * MaterialEnvelope(i, 4, 640, 2) / 256 * 17 / 100
+                + e5 * MaterialEnvelope(i, 8, 590, 2) / 256 * 14 / 100
+                + a2 * MaterialEnvelope(i, 0, 700, 3) / 256 * 26 / 100
+                + filtered * MaterialEnvelope(i, 0, 34, 1) / 256 * 14 / 100;
+        } else if (id == SFX_BOOT_PULSE) {
+            // 한 음. 피치 0·3·7로 불러 A3·C4·E4가 되고, 디스크가 내려오는 동안
+            // 그 순서로 울려 하강이 음정으로도 내려간다.
+            int base = 220 * shift / 256;
+            int body = MaterialTone(&phase[0], base);
+            int oct = MaterialTone(&phase[1], base * 2);
+            value = body * MaterialEnvelope(i, 0, 420, 2) / 256 * 34 / 100
+                + oct * MaterialEnvelope(i, 2, 300, 2) / 256 * 15 / 100
+                + filtered * MaterialEnvelope(i, 0, 26, 1) / 256 * 16 / 100;
+        } else if (id == SFX_BOOT_TOLL) {
+            // 낮은 A. 걸쇠가 물리는 자리에서 근음을 한 번 눌러 준다. 기계 소리에
+            // 음정이 없으면 철컥이 아무 조성에도 속하지 않는 잡음으로 남는다.
+            // 때린 종이라 근음이 처음 40ms 동안 살짝 위에서 내려앉는다.
+            int bend = ms < 40 ? 40 - ms : 0;
+            int root = MaterialTone(&phase[0], (BootNoteHz(0) + bend) * shift / 256);   // A2 110
+            int sub = MaterialTone(&phase[1], BootNoteHz(-12) * shift / 256);           // A1 55
+            int fifth = MaterialTone(&phase[2], BootNoteHz(19) * shift / 256);          // E4 330 배음
+            value = root * MaterialEnvelope(i, 0, 620, 2) / 256 * 38 / 100
+                + sub * MaterialEnvelope(i, 14, 560, 22) / 256 * 22 / 100
+                + fifth * MaterialEnvelope(i, 0, 260, 2) / 256 * 16 / 100
+                + filtered * MaterialEnvelope(i, 0, 30, 1) / 256 * 14 / 100;
+        } else if (id == SFX_BOOT_RESOLVE) {
+            // 닫는 화음. A단조가 네 옥타브로 펼쳐지고, 아래에서부터 차례로 들어와
+            // 마지막에 한 덩어리가 된다. 여기서 런이 시작되므로 이 소리가 곧
+            // 타이틀 곡에서 게임 곡으로 넘어가는 이음매다.
+            int a1 = MaterialTone(&phase[0], BootNoteHz(-12) * shift / 256);
+            int a2 = MaterialTone(&phase[1], BootNoteHz(0) * shift / 256);
+            int c4 = MaterialTone(&phase[2], BootNoteHz(15) * shift / 256);
+            int e4 = MaterialTone(&phase[3], BootNoteHz(19) * shift / 256);
+            value = a1 * MaterialEnvelope(i, 0, 1100, 8) / 256 * 34 / 100
+                + a2 * MaterialEnvelope(i, 40, 1060, 10) / 256 * 22 / 100
+                + c4 * MaterialEnvelope(i, 120, 980, 14) / 256 * 15 / 100
+                + e4 * MaterialEnvelope(i, 200, 900, 18) / 256 * 13 / 100
+                + filtered * MaterialEnvelope(i, 0, 90, 2) / 256 * 12 / 100;
+        } else if (id == SFX_BOOT_REVEAL) {
+            // 카메라가 물러나며 책상과 방이 한꺼번에 드러나는 400ms. 그림에서는
+            // 이 연출에서 공간이 생기는 유일한 순간인데 소리로는 비어 있었다.
+            // 상승(RISER)의 반대로 내려가고, 마지막에 근음이 도착해 자리를 잡는다.
+            int fall = ms < 320 ? ms : 320;
+            int sweep = MaterialTone(&phase[0], (520 - fall * 390 / 320) * shift / 256);
+            int land = MaterialTone(&phase[1], BootNoteHz(0) * shift / 256);   // A2
+            value = sweep * MaterialEnvelope(i, 0, 380, 10) / 256 * 30 / 100
+                + land * MaterialEnvelope(i, 250, 210, 30) / 256 * 26 / 100
+                + band * MaterialEnvelope(i, 0, 460, 120) / 256 * 24 / 100;
+        } else if (id == SFX_BOOT_CHATTER) {
+            // 판을 읽는 동안의 잔딸깍. 간격을 일정하게 두면 기계가 아니라
+            // 메트로놈이 되므로 칸마다 길이와 높이를 어긋나게 한다. 아래에는
+            // 근음 하나가 계속 깔려 이 구간이 조성 밖으로 나가지 않는다.
+            int k = ms / 38, span = 6 + (k * 7) % 9;
+            int at = i - SFX_RATE * (k * 38) / 1000, len = SFX_RATE * span / 1000;
+            int attack = SFX_RATE / 1000;
+            int env = (ms > 560 || at < 0 || at >= len || len < 2) ? 0
+                : at < attack ? at * 256 / attack
+                : ((len - at) * 256 / len) * ((len - at) * 256 / len) / 256;
+            int tick = MaterialTone(&phase[0], (760 + (k * 137) % 420) * shift / 256);
+            int hum = MaterialTone(&phase[1], BootNoteHz(0) * shift / 256);
+            value = tick * env / 256 * 26 / 100
+                + filtered * env / 256 * 30 / 100
+                + hum * MaterialEnvelope(i, 0, 620, 120) / 256 * 22 / 100;
+        } else if (id == SFX_BOOT_LOCK) {
+            // 18칸이 왼쪽 위부터 잠긴다. 간격이 좁아지는 가속이 그림의 잠금
+            // (EaseOutCubic)과 같은 모양이라 눈과 귀가 같은 리듬을 본다.
+            // 칸이 잠길수록 높아지고, 밑에는 닫는 화음의 근음(A4)이 깔린다.
+            int onset = 0, index = 17, span = 64;
+            for (int n = 0; n < 18; ++n) {
+                int width = n < 17 ? 44 - n * 2 : 540 - onset;
+                if (ms < onset + width) { index = n; span = width; break; }
+                onset += width;
+            }
+            if (span < 4) span = 4;
+            int at = i - SFX_RATE * onset / 1000, len = SFX_RATE * span / 1000;
+            int attack = SFX_RATE / 1000;
+            int env = (at < 0 || at >= len || len < 2) ? 0
+                : at < attack ? at * 256 / attack
+                : ((len - at) * 256 / len) * ((len - at) * 256 / len) / 256;
+            int tick = MaterialTone(&phase[0], (900 + index * 52) * shift / 256);
+            int body = MaterialTone(&phase[1], BootNoteHz(24) * shift / 256);   // A4
+            value = tick * env / 256 * 26 / 100
+                + filtered * env / 256 * 22 / 100
+                + body * MaterialEnvelope(i, 0, 540, 60) / 256 * 20 / 100;
+        } else {
+            // 삼켜지는 순간. 520ms 동안 올라붙었다가 한 번 크게 닫힌다.
+            int climb = ms < 520 ? ms : 520;
+            int rush = MaterialTone(&phase[0], (126 + climb * 640 / 520) * shift / 256);
+            int over = MaterialTone(&phase[1], (252 + climb * 1480 / 520) * shift / 256);
+            int after = ms < 560 ? 0 : ms - 560;
+            int slam = MaterialTone(&phase[2], (172 - (after < 120 ? after : 120) * 110 / 120) * shift / 256);
+            int swell = climb * 256 / 520;
+            value = rush * MaterialEnvelope(i, 0, 545, 300) / 256 * 26 / 100
+                + over * MaterialEnvelope(i, 60, 485, 320) / 256 * 12 / 100 * swell / 256
+                + band * MaterialEnvelope(i, 0, 545, 380) / 256 * 22 / 100
+                + slam * MaterialEnvelope(i, 520, 200, 3) / 256 * 46 / 100
+                + filtered * MaterialEnvelope(i, 520, 90, 1) / 256 * 20 / 100;
         }
+        // 삽입 연출의 소리는 열몇 개가 한 흐름 안에서 겹친다. 하나하나는 알맞은
+        // 크기라도 합치면 천장을 넘으므로(실제로 쟀더니 46,728이었다), 이 계열만
+        // 표의 volume 칸을 실제 이득으로 쓴다. 음(RISER~RESOLVE)을 높게 두고
+        // 기계음을 그 밑에 깐다 - 무엇이 선율이고 무엇이 반주인지 여기서 정한다.
+        // 앞의 재료음 넷은 층 비율이 곧 크기이던 예전 규칙 그대로다.
+        if (id >= SFX_BOOT_TEAR) value = value * SFX[id].volume / 100;
         if (value > 32767) value = 32767; else if (value < -32767) value = -32767;
         out[i] = (short)value;
     }
+    if (BootWantsRoom(id)) { AddRoomTap(out, count, 23, 20); AddRoomTap(out, count, 47, 11); }
     return count;
 }
 
@@ -369,6 +672,20 @@ int RenderSfx(int id, int semitones, short* out, int capacity) {
 
 static int SfxDuckDuration(int id) {
     if (id == SFX_BOSS_ARRIVE) return 260;
+    // 삽입 연출은 음악 위에서 울리는 것이 아니라 음악을 잠시 밀어낸다. 화면이
+    // 찢기고 삼켜지는 동안 타이틀 곡이 그대로 흐르면 두 사건이 따로 논다.
+    if (id == SFX_BOOT_TEAR || id == SFX_BOOT_SWALLOW) return 620;
+    if (id == SFX_BOOT_VORTEX) return 780;
+    if (id == SFX_BOOT_FORGE || id == SFX_BOOT_POWER) return 300;
+    if (id == SFX_BOOT_LATCH) return 240;
+    if (id == SFX_BOOT_RISER) return 1200;
+    if (id == SFX_BOOT_RESOLVE) return 1100;
+    if (id == SFX_BOOT_STINGER || id == SFX_BOOT_TOLL) return 500;
+    if (id == SFX_BOOT_PULSE) return 200;
+    if (id == SFX_BOOT_REVEAL) return 460;
+    if (id == SFX_BOOT_LOCK) return 540;
+    if (id == SFX_BOOT_CHATTER) return 0;   // 바닥에 깔리는 소리라 음악을 밀지 않는다
+    if (id >= SFX_BOOT_TEAR && id <= SFX_BOOT_SWALLOW) return 120;
     if (id == SFX_LOOT_REVEAL || id == SFX_REPAIR) return 90;
     if (id == SFX_EXECUTE || id == SFX_ENEMY_DOWN || id == SFX_VICTORY || id == SFX_GAMEOVER
         || id == SFX_PLAYER_HIT || id == SFX_CRASH || (id >= SFX_FX_LOCK && id <= SFX_CHAIN_ARC)) return 160;

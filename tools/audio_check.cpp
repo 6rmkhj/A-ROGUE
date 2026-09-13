@@ -6,7 +6,7 @@
 #include <math.h>
 #include "../src/audio.h"
 
-static const int RATE = 22050, MAX_SAMPLES = 17640;
+static const int RATE = 22050, MAX_SAMPLES = 26460;
 static const short GUARD = 0x5a3d;
 static int gChecks, gFailures;
 
@@ -112,13 +112,23 @@ static int WriteWav(const char* filename, const short* samples, int count) {
     return ok;
 }
 
+#define MATERIAL_CUES 22
 static void CheckMaterialCues(int exportWav) {
-    static short sounds[4][MAX_SAMPLES];
-    const int ids[] = {SFX_UI_FOCUS, SFX_BOSS_ARRIVE, SFX_LOOT_REVEAL, SFX_REPAIR};
-    const int lengthsMs[] = {42, 590, 420, 460};
-    const char* names[] = {"ui_focus.wav", "boss_arrive.wav", "loot_reveal.wav", "repair.wav"};
-    int lengths[4]; double maxCorrelation = 0;
-    for (int k = 0; k < 4; ++k) {
+    static short sounds[MATERIAL_CUES][MAX_SAMPLES];
+    const int ids[] = {SFX_UI_FOCUS, SFX_BOSS_ARRIVE, SFX_LOOT_REVEAL, SFX_REPAIR,
+        SFX_BOOT_TEAR, SFX_BOOT_VORTEX, SFX_BOOT_FORGE, SFX_BOOT_FLIP, SFX_BOOT_SLIDE,
+        SFX_BOOT_LATCH, SFX_BOOT_MOTOR, SFX_BOOT_SEEK, SFX_BOOT_POWER, SFX_BOOT_SWALLOW,
+        SFX_BOOT_RISER, SFX_BOOT_STINGER, SFX_BOOT_PULSE, SFX_BOOT_TOLL, SFX_BOOT_RESOLVE,
+        SFX_BOOT_REVEAL, SFX_BOOT_CHATTER, SFX_BOOT_LOCK};
+    const int lengthsMs[] = {42, 590, 420, 460, 520, 780, 620, 300, 280, 440, 700, 300, 560, 720,
+        1200, 700, 420, 620, 1100, 460, 620, 540};
+    const char* names[] = {"ui_focus.wav", "boss_arrive.wav", "loot_reveal.wav", "repair.wav",
+        "boot_tear.wav", "boot_vortex.wav", "boot_forge.wav", "boot_flip.wav", "boot_slide.wav",
+        "boot_latch.wav", "boot_motor.wav", "boot_seek.wav", "boot_power.wav", "boot_swallow.wav",
+        "boot_riser.wav", "boot_stinger.wav", "boot_pulse.wav", "boot_toll.wav", "boot_resolve.wav",
+        "boot_reveal.wav", "boot_chatter.wav", "boot_lock.wav"};
+    int lengths[MATERIAL_CUES]; double maxCorrelation = 0;
+    for (int k = 0; k < MATERIAL_CUES; ++k) {
         int count = lengths[k] = RenderSfx(ids[k], 0, sounds[k], MAX_SAMPLES);
         Check(count == RATE * lengthsMs[k] / 1000, "authored event duration", ids[k], 0);
         WaveStats s = Measure(sounds[k], count);
@@ -129,7 +139,7 @@ static void CheckMaterialCues(int exportWav) {
     }
     // Compare overlapping actual PCM after gain normalization, so simply
     // changing volume or truncating a shared cue cannot pass as a new sound.
-    for (int a = 0; a < 4; ++a) for (int b = a + 1; b < 4; ++b) {
+    for (int a = 0; a < MATERIAL_CUES; ++a) for (int b = a + 1; b < MATERIAL_CUES; ++b) {
         int n = lengths[a] < lengths[b] ? lengths[a] : lengths[b];
         double cross = 0, aa = 0, bb = 0;
         for (int i = 0; i < n; ++i) {

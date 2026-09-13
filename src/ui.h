@@ -51,13 +51,18 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 // 한 장이 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 책상 위 컴퓨터의 3.5인치
 // 드라이브에 꽂힌다. 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로
 // 여기 모아 둔다.
-#define BOOT_GLITCH_MS 380     // 판이 띠로 어긋나고 고리가 조여 온다
-#define BOOT_SUCK_MS   820     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
-#define BOOT_FLIP_MS   480     // 만들어진 디스크가 공중에서 한 바퀴 뒤집힌다
-#define BOOT_FLY_MS    320     // 디스크가 슬롯 앞으로 내려온다
-#define BOOT_PUSH_MS   360     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
-#define BOOT_SEEK_MS   820     // 드라이브가 읽는다 (LED 점멸·신호 전송)
+#define BOOT_GLITCH_MS 460     // 판이 띠로 어긋나고 고리가 조여 온다
+#define BOOT_SUCK_MS   860     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
+#define BOOT_FLIP_MS   470     // 클로즈업 안에서 한 바퀴 뒤집힌다
+#define BOOT_FLY_MS    400     // 카메라가 물러나며 책상·기계·바닥이 드러난다
+#define BOOT_PUSH_MS   380     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
+#define BOOT_SEEK_MS   660     // 드라이브가 읽는다 (점등·헤드 이동·신호 전송)
 #define BOOT_ZOOM_MS   520     // 기계 전체가 덮쳐 오고 그 화면 속으로 들어간다
+// 붕괴 직전의 예비 동작. 여기서부터 화면이 과전압으로 하얗게 부풀었다가 찢어진다.
+// 무너지는 구간 안에 무너지기 전이 있어야 첫 소리가 허공에서 나지 않는다.
+#define BOOT_SURGE_AT  (BOOT_GLITCH_MS - 190)
+// 디스크가 물린 뒤 브라운관이 켜지는 시간. 가로 한 줄이 세로로 열린다.
+#define BOOT_POWER_MS  300
 #define BOOT_SUCK_AT   BOOT_GLITCH_MS
 #define BOOT_FLIP_AT   (BOOT_SUCK_AT + BOOT_SUCK_MS)   // 디스크 한 장이 완성되는 순간
 #define BOOT_FLY_AT    (BOOT_FLIP_AT + BOOT_FLIP_MS)

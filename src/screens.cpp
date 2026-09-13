@@ -2538,13 +2538,24 @@ static void DrawDescent(HDC dc, int width, int height) {
 // 덮쳐 오고, 그 브라운관이 캔버스를 넘어설 때 안으로 들어가 있다. 336px짜리
 // 화면이 1352px를 채우려면 4.0배면 되는데, 그만큼만 오면 딱 맞춰 멈춘 것으로
 // 보인다. 넘겨서 와야 "삼켜졌다"가 된다.
-#define BOOT_RUSH_SCALE 4400
-#define BOOT_RUSH_BACK 962       // 덮치기 직전 아주 잠깐 물러난다 (예비 동작)
+#define BOOT_CLOSE_SCALE 1760    // 벼림 직후
+#define BOOT_FLIP_SCALE  2280    // 뒤집기 끝
+// 후퇴가 멈추는 자리. 기계 전체(96~604px, 508px)가 1.18배면 600px로 760 캔버스를
+// 거의 채운다. 더 빼면 드러나는 것이 아니라 그냥 멀어지는 것이 된다.
+#define BOOT_WIDE_SCALE  1180    // 하강 끝. 기계 한 대가 프레임을 채운다
+#define BOOT_SLOT_SCALE  1980    // 슬롯 클로즈업
+#define BOOT_READ_SCALE  1760    // 판독. 모니터가 프레임을 채운다
+
+// 판독이 끝나는 순간 카메라는 이미 모니터에 붙어 있다(BOOT_READ_SCALE). 돌진은
+// 거기서 이어진다 - 예전처럼 1.0배에서 다시 출발하면 붙어 있던 카메라가 한 번
+// 튕겨 나갔다 오는 것으로 보인다.
+#define BOOT_RUSH_SCALE 5200
+#define BOOT_RUSH_BACK 1660      // 덮치기 직전 아주 잠깐 물러난다 (예비 동작)
 
 // 돌진 배율(천분율). 물러났다가 가속해 들어온다.
 static int BootRushScale(int zoom) {
-    if (zoom <= 0) return 1000;
-    if (zoom < 150) return Lerp(1000, BOOT_RUSH_BACK, zoom * 1000 / 150);
+    if (zoom <= 0) return BOOT_READ_SCALE;
+    if (zoom < 150) return Lerp(BOOT_READ_SCALE, BOOT_RUSH_BACK, zoom * 1000 / 150);
     return Lerp(BOOT_RUSH_BACK, BOOT_RUSH_SCALE, EaseInCubic((zoom - 150) * 1000 / 850));
 }
 
@@ -2555,6 +2566,86 @@ static RECT BootScreenRect(int dy)  { return MakeRect(LEGACY_X + 392, 120 + dy, 
 static RECT BootCaseRect(int dy)    { return MakeRect(LEGACY_X + 356, 424 + dy, LEGACY_X + 764, 604 + dy); }
 static RECT BootDriveRect(int dy)   { return MakeRect(LEGACY_X + 396, 448 + dy, LEGACY_X + 724, 540 + dy); }
 static RECT BootSlotRect(int dy)    { return MakeRect(LEGACY_X + 412, 466 + dy, LEGACY_X + 700, 506 + dy); }
+
+// ---- 카메라 ---------------------------------------------------------------
+// 이 연출에서 가장 크게 달라진 것. 예전에는 마지막 돌진에만 배율이 걸려 있었고
+// 앞의 3초는 통째로 고정 시점이었다 - 주인공이 화면의 8분의 1인 채로 절반이
+// 정지 화면이었다는 뜻이다. 이제 막마다 카메라가 따로 있다.
+//
+//   붕괴·소용돌이  시점 없음. 판 자체가 화면이라 들어갈 자리가 없다
+//   벼림           디스크로 확 들어간다 - 한 장이 화면을 가득 채운다
+//   뒤집기         그 클로즈업 안에서 돈다 (금속 허브·셔터가 크게 보인다)
+//   하강           확 물러난다 - 책상·기계·바닥이 한꺼번에 드러난다
+//   삽입           슬롯으로 파고든다
+//   판독           슬롯에서 모니터로 올라간다. 화면이 프레임을 채운다
+//   돌진           그 자리에서 화면 속으로
+//
+// 기계가 아래에서 올라오던 예전 동작은 없앴다. 기계는 처음부터 제자리에 있고,
+// 그것을 드러내는 일은 카메라가 물러나는 것 하나로 한다.
+struct BootCamera { int scale, cx, cy; };   // 천분율, 그리고 화면 한가운데로 올 캔버스 좌표
+
+static int BootRushScale(int zoom);
+
+static BootCamera BootCameraAt(int t) {
+    BootCamera cam = {1000, BASE_WIDTH / 2, BASE_HEIGHT / 2};
+    if (t < BOOT_FLIP_AT) return cam;
+    RECT slot = BootSlotRect(0), screen = BootScreenRect(0);
+    int slotCx = (slot.left + slot.right) / 2, slotCy = (slot.top + slot.bottom) / 2;
+    int screenCx = (screen.left + screen.right) / 2, screenCy = (screen.top + screen.bottom) / 2;
+    int machineCy = (BootMonitorRect(0).top + BootCaseRect(0).bottom) / 2;
+    if (t < BOOT_FLY_AT) {
+        // 벼림의 충격으로 확 들어갔다가, 뒤집는 동안 계속 천천히 민다.
+        int snap = EaseOutCubic(Track(t, BOOT_FLIP_AT, BOOT_FLIP_AT + 130));
+        int creep = Track(t, BOOT_FLIP_AT + 130, BOOT_FLY_AT);
+        cam.scale = creep > 0 ? Lerp(BOOT_CLOSE_SCALE, BOOT_FLIP_SCALE, creep)
+                              : Lerp(1000, BOOT_CLOSE_SCALE, snap);
+        cam.cy = Lerp(BASE_HEIGHT / 2, BOOT_HOLD_CY, snap);
+        return cam;
+    }
+    if (t < BOOT_PUSH_AT) {
+        // 후퇴. 이 연출에서 공간이 생기는 유일한 순간이라 가장 빠르게 뺀다.
+        int back = EaseOutCubic(Track(t, BOOT_FLY_AT, BOOT_PUSH_AT));
+        cam.scale = Lerp(BOOT_FLIP_SCALE, BOOT_WIDE_SCALE, back);
+        cam.cy = Lerp(BOOT_HOLD_CY, machineCy, back);
+        return cam;
+    }
+    if (t < BOOT_CLUNK_AT) {
+        int raw = Track(t, BOOT_PUSH_AT, BOOT_CLUNK_AT);
+        int in = (EaseOutCubic(raw) + raw) / 2;   // 누르자마자 움직이고 끝에서 감속한다
+        cam.scale = Lerp(BOOT_WIDE_SCALE, BOOT_SLOT_SCALE, in);
+        cam.cx = Lerp(BASE_WIDTH / 2, slotCx, in);
+        cam.cy = Lerp(machineCy, slotCy, in);
+        return cam;
+    }
+    if (t < BOOT_SEEK_END) {
+        // 철컥을 슬롯에서 한 박자 보고 나서 모니터로 올라간다.
+        int lift = EaseOutCubic(Track(t, BOOT_CLUNK_AT + 180, BOOT_SEEK_END - 60));
+        cam.scale = Lerp(BOOT_SLOT_SCALE, BOOT_READ_SCALE, lift);
+        cam.cx = Lerp(slotCx, screenCx, lift);
+        cam.cy = Lerp(slotCy, screenCy, lift);
+        return cam;
+    }
+    cam.scale = BootRushScale(Track(t, BOOT_SEEK_END, BOOT_INSERT_MS));
+    cam.cx = screenCx; cam.cy = screenCy;
+    return cam;
+}
+
+// 카메라를 DC에 건다. 캔버스는 이미 MM_ANISOTROPIC(창 BASE, 뷰포트 device)이므로
+// 뷰포트 배율만 곱하고 원점을 옮기면 그리는 쪽은 아무것도 몰라도 된다.
+// 반환값은 RestoreDC에 줄 손잡이다 (0이면 걸지 않았다).
+static int BootCameraPush(HDC dc, int deviceW, int deviceH, const BootCamera& cam) {
+    if (cam.scale == 1000 && cam.cx == BASE_WIDTH / 2 && cam.cy == BASE_HEIGHT / 2) return 0;
+    int saved = SaveDC(dc);
+    SetWindowOrgEx(dc, cam.cx, cam.cy, 0);
+    SetViewportOrgEx(dc, deviceW / 2, deviceH / 2, 0);
+    SetViewportExtEx(dc, deviceW * cam.scale / 1000, deviceH * cam.scale / 1000, 0);
+    return saved;
+}
+
+// FxSnapshotSpin은 DC 변환을 쓰지 않고 자기가 직접 장치 좌표를 셈한다 (돌리는
+// 경로가 MM_TEXT여야 해서 그렇다). 그래서 카메라가 걸린 자리는 여기서 미리 옮긴다.
+static int BootCamX(const BootCamera& cam, int x) { return BASE_WIDTH / 2 + (x - cam.cx) * cam.scale / 1000; }
+static int BootCamY(const BootCamera& cam, int y) { return BASE_HEIGHT / 2 + (y - cam.cy) * cam.scale / 1000; }
 
 // 플로피 한 장의 자리. 배율(천분율)이 몸통·라벨·셔터에 같은 비율로 걸리므로
 // 그리기와 라벨 클립이 언제나 같은 사각형을 본다. squeeze는 가로만 누른다 -
@@ -2640,10 +2731,12 @@ static void DrawBootFloppy(HDC dc, const BootDisk& disk, int back, int shine) {
 // 절반이 죽어 있었다. 소실점으로 모이는 격자를 깔면 기계가 어딘가에 놓인
 // 물건이 되고, 모니터가 켜질 때 그 빛이 떨어질 자리도 생긴다.
 // glow 0~1000 = 모니터가 뿜는 빛의 세기.
-static void DrawBootFloor(HDC dc, int width, int height, int dy, int glow) {
-    int floorY = BOOT_FLOOR_Y + dy;
+// area는 이 바닥이 덮어야 하는 세상의 범위다. 카메라가 물러나면 캔버스보다
+// 넓어지므로 폭을 받아야 한다. 소실점은 언제나 기계가 선 자리(BASE_WIDTH/2)다.
+static void DrawBootFloor(HDC dc, const RECT& area, int dy, int glow) {
+    int floorY = BOOT_FLOOR_Y + dy, height = area.bottom;
     if (floorY >= height) return;
-    Fill(dc, MakeRect(0, floorY, width, height), RGB(5, 8, 11));
+    Fill(dc, MakeRect(area.left, floorY, area.right, height), RGB(5, 8, 11));
     // 모니터에서 쏟아지는 빛기둥. 기계보다 먼저 그려 본체 뒤로 지나간다.
     if (glow > 0) {
         RECT screen = BootScreenRect(dy);
@@ -2658,21 +2751,21 @@ static void DrawBootFloor(HDC dc, int width, int height, int dy, int glow) {
         SelectObject(dc, oldPen); SelectObject(dc, oldBrush); DeleteObject(brush);
     }
     // 소실점으로 모이는 세로선. 가운데가 밝고 바깥으로 갈수록 사라진다.
-    for (int i = -7; i <= 7; ++i) {
+    for (int i = -11; i <= 11; ++i) {
         int away = i < 0 ? -i : i;
         int tone = 13 + glow * 9 / 1000 - away;
         if (tone < 3) tone = 3;
-        DrawLine(dc, width / 2 + i * 44, floorY, width / 2 + i * 230, height,
+        DrawLine(dc, BASE_WIDTH / 2 + i * 44, floorY, BASE_WIDTH / 2 + i * 230, height,
                  MixColor(RGB(5, 8, 11), C_GREEN, tone), 1);
     }
     // 가로선. 앞으로 올수록 간격이 벌어져 바닥이 눕는다.
     for (int j = 1; j <= 6; ++j) {
         int p = j * 1000 / 6;
         int y = floorY + (height - floorY) * (p * p / 1000) / 1000;
-        DrawLine(dc, 0, y, width, y, MixColor(RGB(5, 8, 11), C_GREEN, 8 + glow * 6 / 1000), 1);
+        DrawLine(dc, area.left, y, area.right, y, MixColor(RGB(5, 8, 11), C_GREEN, 8 + glow * 6 / 1000), 1);
     }
     // 책상 앞모서리와 기계 발치의 빛 웅덩이.
-    Fill(dc, MakeRect(0, floorY, width, floorY + 2), MixColor(RGB(5, 8, 11), C_GREEN, 16 + glow * 22 / 1000));
+    Fill(dc, MakeRect(area.left, floorY, area.right, floorY + 2), MixColor(RGB(5, 8, 11), C_GREEN, 16 + glow * 22 / 1000));
     RECT machine = BootCaseRect(dy);
     for (int i = 0; i < 5; ++i) {
         int spread = 30 + i * 46;
@@ -2721,13 +2814,55 @@ static void DrawBootMachine(HDC dc, int dy, int inserted, int t, int glow) {
     Fill(dc, MakeRect(slot.left + 5, slot.top + 3, slot.right - 5, slot.top + 7), RGB(15, 21, 28));
     // 꺼냄 단추는 디스크가 물리는 순간 튀어나온다.
     Fill(dc, MakeRect(slot.right + 10, slot.top + 7, slot.right + 34 + (inserted ? 7 : 0), slot.bottom - 7), RGB(56, 71, 84));
+
+    // 디스크가 오기 전의 드라이브는 꺼진 것이 아니라 기다리는 중이다. 대기등이
+    // 호박색으로 숨 쉬고, 판이 가까워질수록 빨라진다. 예전에는 물릴 때까지 이
+    // 앞판이 통째로 죽어 있어서, 판이 내려오는 700ms 동안 화면에서 빛나는 것이
+    // 하나도 없었다 - 이 연출에서 가장 조용한 구간이 거기였던 이유다.
+    int waiting = !inserted && t >= BOOT_FLIP_AT;
+    int ready = Track(t, BOOT_FLY_AT, BOOT_CLUNK_AT);
+    int beat = waiting && ((t / (250 - ready * 150 / 1000)) & 1);
+    if (waiting) {
+        int lit = 6 + ready * 13 / 1000 + (beat ? 4 : 0);
+        Outline(dc, MakeRect(slot.left - 4, slot.top - 4, slot.right + 4, slot.bottom + 4),
+                MixColor(RGB(28, 36, 45), C_YELLOW, lit), 2);
+        // 꺼진 브라운관 유리에 그 빛이 아래쪽만 비친다. 큰 검은 사각형에 방향이 생긴다.
+        Fill(dc, MakeRect(screen.left + 30, screen.bottom - 6, screen.right - 30, screen.bottom - 3),
+             MixColor(RGB(5, 9, 12), C_YELLOW, 4 + ready * 7 / 1000));
+    }
     int led = inserted && ((t / 80) & 1);
-    Fill(dc, MakeRect(slot.left + 8, slot.bottom + 14, slot.left + 30, slot.bottom + 26), led ? C_GREEN : RGB(26, 40, 36));
-    if (led) Outline(dc, MakeRect(slot.left + 5, slot.bottom + 11, slot.left + 33, slot.bottom + 29), MixColor(C_BG, C_GREEN, 40), 1);
-    Text(dc, slot.left + 40, slot.bottom + 10, L"A:", led ? C_GREEN : C_DIM, gFontSmall);
+    COLORREF lamp = led ? C_GREEN : beat ? C_YELLOW : RGB(26, 40, 36);
+    Fill(dc, MakeRect(slot.left + 8, slot.bottom + 14, slot.left + 30, slot.bottom + 26), lamp);
+    if (led || beat)
+        Outline(dc, MakeRect(slot.left + 5, slot.bottom + 11, slot.left + 33, slot.bottom + 29),
+                MixColor(C_BG, led ? C_GREEN : C_YELLOW, 40), 1);
+    Text(dc, slot.left + 40, slot.bottom + 10, L"A:", led ? C_GREEN : beat ? C_YELLOW : C_DIM, gFontSmall);
 }
 
-// 디스크가 물린 뒤의 모니터. 판독이 진행될수록 노이즈가 걷히고 줄이 하나씩 는다.
+// 브라운관은 한꺼번에 켜지지 않는다. 가로 한 줄이 먼저 서고, 그 줄이 위아래로
+// 열리면서 화면이 된다. 열리는 동안 한가운데에 과하게 밝은 심지가 남는다.
+// 예전에는 디스크가 물리자마자 글자가 떠 있었다 - 그러면 켜진 것이 아니라
+// 처음부터 켜져 있던 것이 된다.
+static void DrawBootPowerOn(HDC dc, const RECT& screen, int p) {
+    int cy = (screen.top + screen.bottom) / 2, half = (screen.bottom - screen.top) / 2;
+    Fill(dc, screen, RGB(3, 6, 8));
+    int open = EaseOutCubic(p);
+    int h = half * open / 1000; if (h < 1) h = 1;
+    Fill(dc, MakeRect(screen.left, cy - h, screen.right, cy + h),
+         MixColor(RGB(6, 13, 11), C_GREEN, 34 - p * 24 / 1000));
+    int core = 3 + (1000 - p) * 6 / 1000;
+    Fill(dc, MakeRect(screen.left, cy - core, screen.right, cy + core),
+         MixColor(RGB(6, 13, 11), RGB(214, 255, 240), 96 - p * 84 / 1000));
+    // 가로로도 눌려 있다 펴진다. 전자총이 자리를 잡는 동안의 찌그러짐이다.
+    int pinch = (1000 - open) * (screen.right - screen.left) * 3 / 10000;
+    if (pinch > 0) {
+        Fill(dc, MakeRect(screen.left, screen.top, screen.left + pinch, screen.bottom), RGB(3, 6, 8));
+        Fill(dc, MakeRect(screen.right - pinch, screen.top, screen.right, screen.bottom), RGB(3, 6, 8));
+    }
+    DrawScanlines(dc, screen);
+}
+
+// 브라운관이 켜진 뒤의 모니터. 판독이 진행될수록 노이즈가 걷히고 줄이 하나씩 는다.
 static void DrawBootScreenText(HDC dc, const RECT& screen, int t) {
     static const wchar_t* const BOOT_LINES[6] = {
         L"A:\\> DIR",
@@ -2738,18 +2873,35 @@ static void DrawBootScreenText(HDC dc, const RECT& screen, int t) {
         L"제어권 이양 · A:\\ROGUE.EXE"
     };
     static const wchar_t SPIN[4] = {L'|', L'/', L'-', L'\\'};
-    int seek = Track(t, BOOT_CLUNK_AT, BOOT_SEEK_END);
+    int power = Track(t, BOOT_CLUNK_AT, BOOT_CLUNK_AT + BOOT_POWER_MS);
+    if (power < 1000) { DrawBootPowerOn(dc, screen, power); return; }
+    int seek = Track(t, BOOT_CLUNK_AT + BOOT_POWER_MS, BOOT_SEEK_END);
     Fill(dc, screen, RGB(6, 13, 11));
     DrawSectorStatic(dc, screen, 7, t / NOISE_CHURN_MS, 380 - seek * 330 / 1000);
     int shown = seek * 7 / 1000;
     if (shown > 6) shown = 6;
     for (int i = 0; i < shown; ++i)
-        Text(dc, screen.left + 16, screen.top + 16 + i * 24, BOOT_LINES[i], i >= 4 ? C_GREEN : C_TEXT, gFontSmall);
+        Text(dc, screen.left + 16, screen.top + 12 + i * 22, BOOT_LINES[i], i >= 4 ? C_GREEN : C_TEXT, gFontSmall);
     // 헤드가 트랙을 옮길 때마다 화면이 한 번씩 튄다.
     if (FxDecorOn() && (seek / 140) % 3 == 0) {
         int band = screen.top + (int)(Hash3(seek / 140, 3, 1) % (uint32_t)(screen.bottom - screen.top - 10));
         Fill(dc, MakeRect(screen.left, band, screen.right, band + 3), MixColor(RGB(6, 13, 11), C_GREEN, 30));
     }
+    // 18개 섹터가 왼쪽부터 잠긴다. 타이틀 화면의 복구 진행도와 같은 눈금이라,
+    // 지금 읽히고 있는 것이 그 판이라는 것을 한 줄로 말한다.
+    int cell = (screen.right - screen.left - 32 - 17 * 3) / 18;
+    int rowY = screen.bottom - 88;
+    for (int i = 0; i < 18; ++i) {
+        int x = screen.left + 16 + i * (cell + 3);
+        int age = seek - i * 44;
+        Fill(dc, MakeRect(x, rowY, x + cell, rowY + 8),
+             MixColor(RGB(6, 13, 11), C_GREEN, age > 0 ? 72 : 10));
+        // 막 잠긴 칸만 한 번 크게 뜬다. 없으면 18칸이 동시에 채워지는 것처럼 보인다.
+        if (age > 0 && age < 150)
+            Fill(dc, MakeRect(x, rowY - 2, x + cell, rowY + 10),
+                 MixColor(RGB(6, 13, 11), RGB(214, 255, 240), 80 * (150 - age) / 150));
+    }
+
     // 메모리 검사는 숫자가 올라가는 동안이 재미다.
     wchar_t line[64];
     wsprintfW(line, L"메모리 %dK  %c", 640 * seek / 1000, SPIN[(t / 80) % 4]);
@@ -2758,12 +2910,114 @@ static void DrawBootScreenText(HDC dc, const RECT& screen, int t) {
     DrawScanlines(dc, screen);
 }
 
+// 사건이 식어 가는 색. 0 = 흰 열, 500 = 호박, 1000 = 이 게임의 인광 녹색.
+// 큰 사건 넷(과전압·벼림·철컥·삼킴)만 이 축을 쓴다. 새 색을 들이는 것이 아니라
+// 전투가 이미 쓰는 노랑을 온도로 한 번 더 쓰는 것이다 - 전부 같은 밝기의 녹색
+// 하나로만 그리면 무엇이 큰 사건인지 색으로는 구별되지 않는다.
+static COLORREF BootHeat(int p) {
+    if (p < 0) p = 0; else if (p > 1000) p = 1000;
+    return p < 500 ? MixColor(RGB(255, 244, 214), C_YELLOW, p * 100 / 500)
+                   : MixColor(C_YELLOW, C_GREEN, (p - 500) * 100 / 500);
+}
+
+// 중심으로 빨려 드는 불티. p(0~1000)가 커질수록 안쪽으로 모이고 꼬리는 바깥에
+// 남는다. DrawPixelBurst의 반대다 - 그쪽은 터져 나가고 이쪽은 모여든다.
+static void DrawBootSparks(HDC dc, int cx, int cy, int p, int count, int seed, int reach, COLORREF color) {
+    HPEN pen = CreatePen(PS_SOLID, 2, color);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    for (int i = 0; i < count; ++i) {
+        uint32_t h = Hash3(i, seed, 29);
+        int local = p + (int)(h % 420u);          // 불티마다 시차를 준다
+        if (local >= 1000) continue;
+        int e = EaseInCubic(local);
+        int radius = 40 + reach * (1000 - e) / 1000;
+        int deg = (int)((h >> 8) % 3600u);
+        int tail = radius + 60 + (int)(h % 90u);
+        // 세로는 3/4로 눌러 둔다. 소용돌이·고리와 같은 원근이라야 한 사건으로 읽힌다.
+        MoveToEx(dc, cx + tail * CosMille(deg) / 1000, cy + tail * SinMille(deg) * 3 / 4000, 0);
+        LineTo(dc, cx + radius * CosMille(deg) / 1000, cy + radius * SinMille(deg) * 3 / 4000);
+    }
+    SelectObject(dc, oldPen); DeleteObject(pen);
+}
+
+// 벼려지는 순간 튀는 파편. 사방으로 뻗다가 중력에 눌려 아래로 휜다. 점이 아니라
+// 옆으로 긴 조각이라 무엇이 어느 쪽으로 날고 있는지가 보인다.
+static void DrawBootShards(HDC dc, int cx, int cy, int t, int life, int count, int seed, COLORREF color) {
+    if (t < 0 || t >= life) return;
+    int p = t * 1000 / life;
+    for (int i = 0; i < count; ++i) {
+        uint32_t h = Hash3(i, seed, 47);
+        int deg = (int)(h % 3600u);
+        int dist = (320 + (int)((h >> 9) % 420u)) * EaseOutCubic(p) / 1000;
+        int x = cx + dist * CosMille(deg) / 1000;
+        int y = cy + dist * SinMille(deg) * 3 / 4000 + p * p / 1000 * 210 / 1000;
+        int size = 7 - p * 5 / 1000; if (size < 2) size = 2;
+        Fill(dc, MakeRect(x, y, x + size + (int)(h & 3u) * 2, y + size), MixColor(color, C_BG, p / 11));
+    }
+}
+
+// 덮쳐 오는 브라운관의 안쪽. 카메라 안에서 세상 좌표로 그리므로 화면이 커지는
+// 만큼 글자도 주사선도 같이 커진다. 예전에는 이 자리만 배율 밖에서 캔버스 좌표로
+// 그렸다 - 화면은 덮쳐 오는데 그 안의 "A:\ROGUE"만 제자리 크기로 남아 가운데로
+// 옮겨 다녔고, 그래서 다가오는 것이 아니라 큰 사진 위에 글자를 얹은 것으로 보였다.
+static void DrawBootDive(HDC dc, const RECT& screen, int t, int zoom) {
+    Fill(dc, screen, RGB(6, 13, 11));
+    DrawSectorStatic(dc, screen, 9, t / NOISE_CHURN_MS, 90 + zoom * 320 / 1000);
+    // 지나쳐 흐르는 가로 조각. 바깥의 사각 테두리만으로는 화면 가장자리만 빠르고
+    // 한가운데는 정지해 있다 - 속도는 안쪽에도 있어야 한다.
+    if (FxDecorOn()) {
+        int cx = (screen.left + screen.right) / 2, cy = (screen.top + screen.bottom) / 2;
+        int half = (screen.bottom - screen.top) / 2;
+        for (int i = 0; i < 28; ++i) {
+            uint32_t h = Hash3(i, 77, 5);
+            int p = (zoom * 2 + (int)(h % 1000u)) % 1000;
+            int reach = 30 + EaseInCubic(p) * 260 / 1000;
+            int y = cy - half + (int)((h >> 7) % (uint32_t)(half * 2));
+            int w = 6 + p * 30 / 1000;
+            int x = cx + ((h & 1u) ? reach : -reach - w);
+            Fill(dc, MakeRect(x, y, x + w, y + 2),
+                 MixColor(RGB(6, 13, 11), C_GREEN, 54 - p * 42 / 1000));
+        }
+    }
+    // 18개 섹터가 위에서부터 한 줄씩 기록된다. 잠기는 순간 그 줄이 옆으로 어긋난
+    // 채 밝게 떴다가 제자리에 앉고, 다 앉으면 화면이 가로줄로 가득 찬다.
+    //
+    // 예전에는 이 18칸을 브라운관 테두리에 점으로 둘렀는데, 사각형 둘레에 같은
+    // 간격으로 놓인 밝은 점은 섹터가 아니라 극장 간판 전구로 읽혔다. 판이 기록되는
+    // 것은 화면 둘레가 아니라 화면 안에서 일어나야 하고, 그래야 다가오는 그림을
+    // 가리지도 않는다. 칸 사이는 44ms에서 12ms로 좁아지며 SFX_BOOT_LOCK의 딸깍이
+    // 같은 식을 쓰므로, 한 줄이 앉는 순간과 그 소리가 같은 프레임에 있다.
+    int lockMs = t - BOOT_SEEK_END, tall = screen.bottom - screen.top;
+    for (int i = 0; i < 18; ++i) {
+        int age = lockMs - (44 * i - i * (i - 1));
+        if (age <= 0) continue;
+        int y = screen.top + tall * (i * 2 + 1) / 36;
+        // 막 앉은 줄만 옆으로 어긋나 있다가 120ms에 걸쳐 제자리로 온다.
+        int slip = age < 120 ? (120 - age) * 24 / 120 : 0;
+        if (i & 1) slip = -slip;
+        int left = screen.left + slip, right = screen.right + slip;
+        if (left < screen.left) left = screen.left;
+        if (right > screen.right) right = screen.right;
+        int lit = age < 120 ? 58 + (120 - age) * 38 / 120 : 30;
+        Fill(dc, MakeRect(left, y, right, y + 2),
+             MixColor(RGB(6, 13, 11), age < 120 ? BootHeat(age * 1000 / 120) : C_GREEN, lit));
+        // 앉는 순간의 잔광. 위아래로 한 겹 번졌다 사라진다.
+        if (age < 120)
+            Fill(dc, MakeRect(left, y - 3, right, y + 5),
+                 MixColor(RGB(6, 13, 11), BootHeat(age * 1000 / 120), 22 * (120 - age) / 120));
+    }
+    TextRect(dc, screen, L"A:\\ROGUE", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawScanlines(dc, screen);
+}
+
 // 화면을 감아 삼키는 소용돌이. 조각을 점이 아니라 선으로 그으면 어느 쪽으로
 // 얼마나 빨리 빨려 드는지가 한눈에 보인다. 펜을 한 번만 만들어 전부 긋는다.
 static void DrawBootVortex(HDC dc, int cx, int cy, int suck) {
-    HPEN pen = CreatePen(PS_SOLID, 2, MixColor(C_BG, C_GREEN, 40));
+    // 감길수록 밝아진다. 고정 밝기로 두면 판이 커서 아무것도 안 보이는 앞 절반과
+    // 판이 작아 배경이 다 드러나는 뒤 절반이 똑같이 흐리다.
+    HPEN pen = CreatePen(PS_SOLID, 2, MixColor(C_BG, C_GREEN, 46 + suck * 54 / 1000));
     HPEN oldPen = (HPEN)SelectObject(dc, pen);
-    for (int i = 0; i < 40; ++i) {
+    for (int i = 0; i < 56; ++i) {
         uint32_t h = Hash3(i, 21, 7);
         int local = suck + (int)(h % 300u);          // 조각마다 시차를 준다
         if (local >= 1000) continue;
@@ -2781,7 +3035,7 @@ static void DrawBootVortex(HDC dc, int cx, int cy, int suck) {
     }
     SelectObject(dc, oldPen); DeleteObject(pen);
     // 선 사이를 메우는 작은 조각들.
-    for (int i = 0; i < 34; ++i) {
+    for (int i = 0; i < 48; ++i) {
         uint32_t h = Hash3(i, 55, 13);
         int local = suck + (int)(h % 360u);
         if (local >= 1000) continue;
@@ -2819,40 +3073,36 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
     int shrink = (EaseOutCubic(suck) + suck) / 2;
     int spin = EaseInCubic(suck);
 
-    // 기계는 판이 빨려 들어가는 동안 아래에서 올라와 자리를 잡는다.
-    int rise = EaseOutCubic(Track(t, BOOT_SUCK_AT + 90, BOOT_FLIP_AT - 60));
-    int dy = Lerp(230, 0, rise);
-    int glow = inserted ? 240 + Track(t, BOOT_CLUNK_AT, BOOT_SEEK_END) * 760 / 1000 : 0;
+    // 기계는 처음부터 제자리에 있다. 드러내는 일은 카메라 후퇴가 맡는다.
+    // (예전에는 기계가 아래에서 밀려 올라왔는데, 그동안 화면에는 그것 말고
+    //  아무 일도 없었고 정작 다 올라온 뒤로는 계속 같은 자리에 서 있었다.)
+    const int dy = 0;
+    int rise = t >= BOOT_SUCK_AT;
+    // 방의 밝기는 브라운관을 따라간다. 점등 300ms 동안 대부분이 오르고, 판독
+    // 동안 남은 몫이 천천히 찬다 - 켜지는 사건과 읽는 사건의 크기가 다르다.
+    int glow = inserted ? 80 + Track(t, BOOT_CLUNK_AT, BOOT_CLUNK_AT + BOOT_POWER_MS) * 620 / 1000
+                             + Track(t, BOOT_CLUNK_AT + BOOT_POWER_MS, BOOT_SEEK_END) * 300 / 1000 : 0;
 
     // 마지막 구간에서는 기계 전체가 다가온다. 캔버스 좌표계에 통째로 배율을 걸어
     // 두고 평소대로 그리면, 모니터·본체·바닥이 한 덩어리로 밀려오며 가장자리부터
     // 화면 밖으로 흘러나가고 브라운관만 남는다. 그림 쪽은 아무것도 몰라도 된다.
     int zoom = Track(t, BOOT_SEEK_END, BOOT_INSERT_MS);
-    int rush = BootRushScale(zoom);
     RECT screen0 = BootScreenRect(0);
-    int rushCx = (screen0.left + screen0.right) / 2;
-    int rushCy = (screen0.top + screen0.bottom) / 2;
-    // 다가오는 동안 브라운관 한가운데가 캔버스 한가운데로 옮겨 온다. 다 삼킨
-    // 순간의 자리가 런의 첫 화면과 맞아야 넘어가는 지점이 튀지 않는다.
-    int rushAimY = Lerp(rushCy, height / 2, EaseInCubic(zoom));
 
-    if (rise > 0) {
-        int stageSaved = 0;
-        if (zoom > 0) {
-            stageSaved = SaveDC(dc);
-            SetWindowOrgEx(dc, rushCx, rushCy, 0);
-            SetViewportOrgEx(dc, rushCx * deviceW / BASE_WIDTH, rushAimY * deviceH / BASE_HEIGHT, 0);
-            SetViewportExtEx(dc, deviceW * rush / 1000, deviceH * rush / 1000, 0);
-        }
-        DrawBootFloor(dc, width, height, dy, glow);
+    // 여기서부터 무대 전체가 카메라 안이다. 바닥·기계·모니터 속·디스크·파열이
+    // 한 좌표계에 있으므로, 카메라가 움직이면 전부 같이 움직인다.
+    BootCamera cam = BootCameraAt(t);
+    int stageSaved = BootCameraPush(dc, deviceW, deviceH, cam);
+    // 카메라가 물러나면 캔버스보다 넓은 세상이 필요하다. 넉넉히 두 배로 덮는다.
+    RECT world = MakeRect(cam.cx - width, cam.cy - height, cam.cx + width, cam.cy + height);
+    if (rise) {
+        if (cam.scale < 1000) Fill(dc, world, RGB(4, 7, 10));
+        DrawBootFloor(dc, world, dy, glow);
         DrawBootMachine(dc, dy, inserted, t, glow);
-        // 다가오는 동안의 화면 속은 배율 밖에서 그린다. 여기서 그리면 잔글씨와
-        // 노이즈 칸까지 배율만큼 부풀어 읽을 수 없는 덩어리가 된다.
         if (inserted) {
-            if (zoom > 0) Fill(dc, BootScreenRect(dy), RGB(6, 13, 11));
+            if (zoom > 0) DrawBootDive(dc, BootScreenRect(dy), t, zoom);
             else DrawBootScreenText(dc, BootScreenRect(dy), t);
         }
-        if (stageSaved) RestoreDC(dc, stageSaved);
     }
     RECT screen = BootScreenRect(dy), drive = BootDriveRect(dy), slot = BootSlotRect(dy);
 
@@ -2860,15 +3110,22 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
     // 배율을 보므로 다 줄어든 순간 판은 라벨에 정확히 얹힌다.
     int grow = Track(t, BOOT_SUCK_AT + BOOT_SUCK_MS * 52 / 100, BOOT_FLIP_AT);
     int diskScale = grow <= 0 ? 240 : Lerp(240, 1000, EaseOutBack(grow));
+    // 벼려질 때 디스크는 카메라 바로 앞에 있고, 그 뒤로 기계 쪽으로 물러난다.
+    // 멀어지는 만큼 작아져야 손에 들린 판이 아니라 공간 속의 물건이 된다.
+    diskScale = diskScale * Lerp(1000, 820, EaseOutCubic(Track(t, BOOT_FLY_AT, BOOT_PUSH_AT))) / 1000;
     // 뒤집기는 세로축을 중심으로 한 바퀴 돈다. 가로 배율이 코사인을 따라가고,
     // 코사인이 음수인 동안은 라벨이 없는 뒷면이 보인다.
     int flipTrack = Track(t, BOOT_FLIP_AT, BOOT_FLY_AT);
-    int flipAngle = t < BOOT_FLIP_AT ? 0 : EaseOutCubic(flipTrack) * 3600 / 1000;
+    int flipSpin = (EaseOutCubic(flipTrack) + flipTrack) / 2;
+    int flipAngle = t < BOOT_FLIP_AT ? 0 : flipSpin * 3600 / 1000;
     int facing = CosMille(flipAngle), back = facing < 0;
     int squeeze = facing < 0 ? -facing : facing;
     if (squeeze < 70) squeeze = 70;
-    // 뒤집는 동안만 몸통에 반사광이 지나간다.
-    int shine = (t >= BOOT_FLIP_AT && t < BOOT_FLY_AT) ? (flipTrack * 2) % 1000 : -1;
+    // 뒤집는 동안에는 빠르게 두 번, 떨어지는 동안에는 느리게 한 번 지나간다.
+    // 내려오는 700ms 내내 판이 무광 회색 덩어리였는데, 빛이 한 번 훑고 지나가면
+    // 그것만으로 플라스틱이 되고 움직이고 있다는 것도 같이 읽힌다.
+    int shine = (t >= BOOT_FLIP_AT && t < BOOT_FLY_AT) ? (flipTrack * 2) % 1000
+              : (t >= BOOT_FLY_AT && t < BOOT_CLUNK_AT) ? Track(t, BOOT_FLY_AT, BOOT_CLUNK_AT) : -1;
 
     int cx = width / 2, cy;
     if (t < BOOT_FLY_AT) {
@@ -2904,12 +3161,59 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
                 DrawGlowRing(dc, width / 2, height / 2, r, r * 3 / 4,
                              MixColor(C_BG, C_GREEN, 12 + glitch * 34 / 1000), 2);
             }
-        DrawTornValue(dc, MakeRect(0, height / 2 - 170, width, height / 2 - 80), L"A:\\ROGUE", C_GREEN, 0, step, glitch);
+        // 과전압이 오르는 동안 주사선 사이가 달아오른다. 불티와 제목보다 먼저
+        // 깔아야 그 위의 것들이 씻겨 나가지 않는다.
+        int surge = Track(t, BOOT_SURGE_AT, BOOT_SUCK_AT);
+        if (surge > 0) {
+            // 과전압은 녹색이 아니라 열이다. 오를수록 호박에서 흰 열로 간다.
+            // 과전압만 예외다. 최대 13%라 탁해지기 전에 멈추고, 그 옅은 온기가
+            // 뒤이어 터지는 흰 열의 예고가 된다.
+            COLORREF hot = MixColor(C_BG, BootHeat(620 - surge * 620 / 1000), 3 + surge * 10 / 1000);
+            for (int y = (t / 30) & 1; y < height; y += 3) Fill(dc, MakeRect(0, y, width, y + 1), hot);
+            // 판이 실제로 어긋난다. 덧칠이 아니라 그려진 픽셀을 옮기는 것이라
+            // 무늬가 아니라 신호가 끊긴 것으로 읽힌다.
+            if (FxDecorOn())
+                for (int k = 0; k < 3; ++k) {
+                    int slipY = height / 2 - 210 + k * 170 + (int)(Hash3(t / 60, k, 5) % 40u);
+                    int shift = FxScale(6 + surge * 46 / 1000) * (k & 1 ? -1 : 1);
+                    DrawSignalSlip(dc, full, slipY, 22 + k * 12, shift, surge * 22 / 1000,
+                                   MixColor(C_BG, C_GREEN, 18));
+                }
+        }
+        // 화면에 남은 빛이 가운데로 끌려간다. 고리만으로는 조이는 것인지 퍼지는
+        // 것인지 알 수 없었다 - 방향을 말해 주는 것은 이 불티들이다.
+        if (FxDecorOn())
+            DrawBootSparks(dc, width / 2, height / 2, glitch, 30, 12, 760,
+                           MixColor(C_BG, C_GREEN, 34 + glitch * 56 / 1000));
+        // 제목이 신호로 갈라진다. 같은 글자를 색을 나눠 어긋나게 세 번 찍으면
+        // 한 번 찍고 흔드는 것보다 훨씬 "전기가 새고 있다"로 읽힌다.
+        RECT titleBox = MakeRect(0, height / 2 - 170, width, height / 2 - 80);
+        if (FxDecorOn()) {
+            int split = FxScale(2 + glitch * 12 / 1000);
+            RECT lag = titleBox; OffsetRect(&lag, -split, 0);
+            DrawTornValue(dc, lag, L"A:\\ROGUE", MixColor(C_BG, C_BLUE, 62), 0, step + 5, glitch);
+            RECT lead = titleBox; OffsetRect(&lead, split, 0);
+            DrawTornValue(dc, lead, L"A:\\ROGUE", MixColor(C_BG, C_RED, 48), 0, step + 9, glitch);
+        }
+        DrawTornValue(dc, titleBox, L"A:\\ROGUE", C_GREEN, 0, step, glitch);
+        // 갈라지는 자리. 가로 한 줄이 화면 한가운데를 가르고 벌어진다. 무너짐에도
+        // 예비 동작이 있어야 하고, 그 예비 동작이 곧 소용돌이의 입이 된다.
+        if (surge > 0) {
+            int seam = 2 + surge * 14 / 1000;
+            Fill(dc, MakeRect(0, height / 2 - seam, width, height / 2 + seam),
+                 MixColor(C_BG, BootHeat(140 - surge * 140 / 1000), 34 + surge * 62 / 1000));
+            for (int k = 1; k <= 3; ++k) {
+                int spread = seam + k * (6 + surge * 20 / 1000);
+                COLORREF edge = MixColor(C_BG, BootHeat(300 + k * 210), (44 + surge * 34 / 1000) * (4 - k) / 5);
+                Fill(dc, MakeRect(0, height / 2 - spread, width, height / 2 - spread + 2), edge);
+                Fill(dc, MakeRect(0, height / 2 + spread - 2, width, height / 2 + spread), edge);
+            }
+        }
     }
     else if (!inserted) {
         SaveDC(dc);
         // 슬롯에 들어간 부분은 기계 앞판 뒤로 사라진다.
-        if (t >= BOOT_PUSH_AT) IntersectClipRect(dc, 0, 0, width, slot.top + 5);
+        if (t >= BOOT_PUSH_AT) IntersectClipRect(dc, world.left, world.top, world.right, slot.top + 5);
         // 내려오는 동안 지나온 자리에 윗모서리만 얇게 남는다. 예전처럼 사각형을
         // 통째로 그리면 모니터를 가로지르는 글리치 띠로 읽혔다.
         if (FxDecorOn() && t >= BOOT_FLY_AT && t < BOOT_PUSH_AT)
@@ -2918,6 +3222,18 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
                 if (ty < 74) continue;
                 Fill(dc, MakeRect(disk.body.left + k * 7, ty, disk.body.right - k * 7, ty + 2),
                      MixColor(C_BG, C_GREEN, 34 - k * 7));
+            }
+        // 뒤집는 동안의 잔상. 조금 전 각도의 윤곽만 남긴다 - 몸통을 통째로 다시
+        // 그리면 디스크가 세 장으로 보인다.
+        if (FxDecorOn() && t >= BOOT_FLIP_AT && t < BOOT_FLY_AT)
+            for (int k = 3; k >= 1; --k) {
+                int lead = flipTrack - k * 55;
+                if (lead <= 0) continue;
+                int facingLead = CosMille((EaseOutCubic(lead) + lead) / 2 * 3600 / 1000);
+                int squeezeLead = facingLead < 0 ? -facingLead : facingLead;
+                if (squeezeLead < 70) squeezeLead = 70;
+                Outline(dc, BootDiskAt(cx, cy, diskScale, squeezeLead).body,
+                        MixColor(C_BG, C_GREEN, 32 - k * 8), 2);
             }
         if (grow > 0) DrawBootFloppy(dc, disk, back, shine);
         if (!back) {
@@ -2941,13 +3257,16 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
                     int lead = suck + ghost * 42;
                     if (lead >= 1000) continue;
                     int gs = Lerp(1000, target, (EaseOutCubic(lead) + lead) / 2);
-                    FxSnapshotSpin(dc, deviceW, deviceH,
-                                   Lerp(width / 2, labelCx, (EaseOutCubic(lead) + lead) / 2),
-                                   Lerp(height / 2, labelCy, (EaseOutCubic(lead) + lead) / 2),
-                                   gs * squeeze / 1000, gs, EaseInCubic(lead) * 10800 / 1000, 2);
+                    int gx = Lerp(width / 2, labelCx, (EaseOutCubic(lead) + lead) / 2);
+                    int gy = Lerp(height / 2, labelCy, (EaseOutCubic(lead) + lead) / 2);
+                    FxSnapshotSpin(dc, deviceW, deviceH, BootCamX(cam, gx), BootCamY(cam, gy),
+                                   gs * squeeze / 1000 * cam.scale / 1000, gs * cam.scale / 1000,
+                                   EaseInCubic(lead) * 10800 / 1000, 2);
                 }
-            FxSnapshotSpin(dc, deviceW, deviceH, Lerp(width / 2, labelCx, shrink), Lerp(height / 2, labelCy, shrink),
-                           scale * squeeze / 1000, scale, spin * 10800 / 1000, 0);
+            int spinX = Lerp(width / 2, labelCx, shrink), spinY = Lerp(height / 2, labelCy, shrink);
+            FxSnapshotSpin(dc, deviceW, deviceH, BootCamX(cam, spinX), BootCamY(cam, spinY),
+                           scale * squeeze / 1000 * cam.scale / 1000, scale * cam.scale / 1000,
+                           spin * 10800 / 1000, 0);
             RestoreDC(dc, -1);
         }
         RestoreDC(dc, -1);
@@ -2964,11 +3283,28 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
     }
 
     // 빨려 들어가는 소용돌이. 화면 밖에서 라벨 쪽으로 감기며 사라진다.
-    if (FxDecorOn() && suck > 0 && suck < 1000) DrawBootVortex(dc, labelCx, labelCy, suck);
+    if (FxDecorOn() && suck > 0 && suck < 1000) {
+        DrawBootVortex(dc, labelCx, labelCy, suck);
+        // 판 둘레로 계속 끌려 들어오는 것들. 소용돌이 선만 있으면 가장 긴 이
+        // 구간의 화면 바깥이 통째로 빈 검정으로 남는다.
+        DrawBootSparks(dc, labelCx, labelCy, suck, 34, 33, 620,
+                       MixColor(C_BG, C_GREEN, 52 + suck * 46 / 1000));
+        // 소용돌이의 목. 모이는 자리가 밝아야 화면이 어디로 사라지는지 보인다.
+        int throat = EaseInCubic(suck);
+        for (int i = 0; i < 4; ++i) {
+            int r = 130 - i * 30 + (1000 - throat) * 90 / 1000;
+            if (r <= 4) continue;
+            DrawGlowRing(dc, labelCx, labelCy, r, r * 3 / 5,
+                         MixColor(C_BG, C_GREEN, 34 + throat * (22 + i * 12) / 1000), 2);
+        }
+    }
 
     // 디스크 한 장이 완성되는 순간의 파열. 고리가 캔버스 밖으로 퍼지고 화면이
     // 한 번 하얗게 뜬다 - 이 연출에서 가장 큰 사건이라 가장 크게 친다.
-    int pop = t - (BOOT_FLIP_AT - 150);
+    // 정확히 BOOT_FLIP_AT에서 친다. 소리(BOOT_STINGER)도 카메라도 흔들림도 같은
+    // 값을 보므로 넷이 한 프레임에 떨어진다 - 예전에는 이 섬광만 150ms 앞서
+    // 터져서, 가장 큰 사건의 그림과 소리가 따로 도착했다.
+    int pop = t - BOOT_FLIP_AT;
     if (FxDecorOn() && pop >= 0 && pop < 380) {
         int p = pop * 1000 / 380;
         for (int i = 0; i < 3; ++i) {
@@ -2976,22 +3312,38 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
             if (rp <= 0) continue;
             int r = rp * 620 / 1000;
             DrawGlowRing(dc, labelCx, labelCy, r, r * 3 / 5,
-                         MixColor(C_BG, C_GREEN, 74 * (1000 - rp) / 1000), 3);
+                         MixColor(C_BG, BootHeat(rp), 74 * (1000 - rp) / 1000), 3);
         }
-        DrawPulseFrame(dc, disk.body, 5 + pop / 24, 3, C_GREEN);
-        DrawPixelBurst(dc, labelCx, labelCy, pop, 380, 34, 5, C_GREEN);
+        // 벼려진 것은 달아올랐다가 식는다. 380ms 동안 흰 열 → 호박 → 인광으로
+        // 내려오므로, 이 연출에서 가장 큰 사건이 색으로도 가장 크다.
+        DrawPulseFrame(dc, disk.body, 5 + pop / 24, 3, BootHeat(p));
+        DrawPixelBurst(dc, labelCx, labelCy, pop, 380, 34, 5, BootHeat(p));
+        // 벼려지고 남은 찌꺼기. 사방으로 뻗다가 아래로 휘어 떨어진다. 파열이
+        // 고리와 섬광뿐이면 빛일 뿐이고, 떨어지는 것이 있어야 물건이 된다.
+        DrawBootShards(dc, labelCx, labelCy, pop, 380, 22, 613, BootHeat(p + 180));
         // 브라운관이 한 번 크게 튀는 섬광. 판을 통째로 덮으면 그 순간 장면이
         // 사라지므로 주사선 사이로만 밝힌다 - 뒤가 계속 보이면서도 확 튄다.
         if (pop < 150) {
-            COLORREF surge = MixColor(RGB(4, 7, 10), C_GREEN, (150 - pop) * 30 / 150);
-            for (int y = (pop & 1); y < height; y += 3) Fill(dc, MakeRect(0, y, width, y + 1), surge);
+            COLORREF surge = MixColor(RGB(4, 7, 10), BootHeat(pop * 1000 / 150), (150 - pop) * 34 / 150);
+            // 카메라 안이라 캔버스가 아니라 세상을 덮는다. full로 덮으면 배율만큼
+            // 작아져 화면 한가운데에 밝은 네모 하나가 생긴다.
+            for (int y = world.top; y < world.bottom; y += 3 * cam.scale / 1000 + 3)
+                Fill(dc, MakeRect(world.left, y, world.right, y + 1), surge);
         }
     }
 
     // 슬롯 입구는 디스크가 다가오는 동안 점점 밝아진다.
     if (t >= BOOT_FLY_AT && !inserted) {
         int mouth = Track(t, BOOT_FLY_AT, BOOT_CLUNK_AT);
-        Fill(dc, MakeRect(slot.left + 2, slot.top, slot.right - 2, slot.top + 4), MixColor(C_BG, C_GREEN, 16 + mouth * 74 / 1000));
+        // 입구의 빛. 얇은 심지 하나가 밝고 그 위아래로 옅게 번진다 - 띠를 통째로
+        // 칠하면 빛나는 틈이 아니라 노란 막대 하나가 붙어 있는 것으로 보인다.
+        Fill(dc, MakeRect(slot.left + 6, slot.top + 1, slot.right - 6, slot.top + 3),
+             MixColor(C_BG, C_YELLOW, 22 + mouth * 40 / 1000));
+        for (int k = 1; k <= 4; ++k) {
+            int fade = (12 + mouth * 26 / 1000) * (5 - k) / 6;
+            Fill(dc, MakeRect(slot.left + 6 + k * 12, slot.top - k * 4, slot.right - 6 - k * 12, slot.top - k * 4 + 2),
+                 MixColor(C_BG, C_YELLOW, fade));
+        }
     }
 
     // 철컥. 드라이브가 물리는 순간 고리가 퍼지고 파편이 튀고 먼지가 인다.
@@ -3003,10 +3355,11 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
             int rp = p - i * 190;
             if (rp <= 0) continue;
             int r = rp * 340 / 1000;
-            DrawGlowRing(dc, mouthX, slot.top, r, r * 2 / 5, MixColor(C_BG, C_GREEN, 70 * (1000 - rp) / 1000), 3);
+            DrawGlowRing(dc, mouthX, slot.top, r, r * 2 / 5,
+                         MixColor(C_BG, BootHeat(240 + rp * 500 / 1000), 70 * (1000 - rp) / 1000), 3);
         }
-        DrawPulseFrame(dc, drive, 4 + clunk / 18, 3, C_GREEN);
-        DrawPixelBurst(dc, mouthX, slot.top, clunk, 300, 30, 9, C_GREEN);
+        DrawPulseFrame(dc, drive, 4 + clunk / 18, 3, BootHeat(260 + p * 460 / 1000));
+        DrawPixelBurst(dc, mouthX, slot.top, clunk, 300, 30, 9, BootHeat(300 + p * 500 / 1000));
     }
 
     // 판독 중에는 드라이브에서 모니터로 신호가 올라간다.
@@ -3015,10 +3368,14 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
         DrawSignalPath(dc, from, to, screen.bottom + 46, Track(t, BOOT_CLUNK_AT + 100, BOOT_SEEK_END), 3, C_GREEN, 12, 0);
     }
 
+    // 무대를 닫는다. 아래의 자막·가장자리·섬광은 카메라와 무관하게 캔버스에 붙는다.
+    if (stageSaved) RestoreDC(dc, stageSaved);
+
     // 상태 줄은 화면 위쪽에 둔다. 아래는 이제 책상과 바닥이 쓴다.
     const wchar_t* caption =
         t < BOOT_SUCK_AT ? L"현재 세션을 봉인합니다" :
         t < BOOT_FLIP_AT ? L"화면을 디스크에 기록하는 중" :
+        t < BOOT_FLY_AT ? L"기록 완료  ·  1,440,000 바이트" :
         t < BOOT_CLUNK_AT ? L"A: 드라이브에 디스크 삽입" :
         t < BOOT_SEEK_END ? L"부팅 중  ·  A:\\ROGUE.EXE" : L"";
     if (caption[0]) {
@@ -3034,11 +3391,8 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
     // 넘어서고, 다 넘어선 순간 화면 속에 들어와 있다.
     if (zoom > 0) {
         int e = EaseInCubic(zoom);
-        RECT proj;
-        proj.left   = rushCx + (screen0.left  - rushCx) * rush / 1000;
-        proj.right  = rushCx + (screen0.right - rushCx) * rush / 1000;
-        proj.top    = rushAimY + (screen0.top    - rushCy) * rush / 1000;
-        proj.bottom = rushAimY + (screen0.bottom - rushCy) * rush / 1000;
+        RECT proj = MakeRect(BootCamX(cam, screen0.left), BootCamY(cam, screen0.top),
+                             BootCamX(cam, screen0.right), BootCamY(cam, screen0.bottom));
         // 속도감은 지나쳐 흐르는 사각 테두리로 낸다. 중심에서 사방으로 뻗는
         // 방사선은 쓰지 않는다 - 배경이 어둡고 선이 밝으면 그 자체로 다른 깃발을
         // 연상시켜서, 게임과 아무 상관 없는 것을 화면에 들이게 된다.
@@ -3050,23 +3404,13 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
                 int halfW = 170 + p * 1500 / 1000, halfH = halfW * 246 / 336;
                 int fade = 44 * (1000 - p) / 1000;
                 if (fade <= 0) continue;
-                Outline(dc, MakeRect(rushCx - halfW, rushAimY - halfH, rushCx + halfW, rushAimY + halfH),
-                        MixColor(RGB(6, 13, 11), C_GREEN, fade), 2);
+                Outline(dc, MakeRect(width / 2 - halfW, height / 2 - halfH,
+                                     width / 2 + halfW, height / 2 + halfH),
+                        MixColor(RGB(6, 13, 11), BootHeat(420 + i * 190), fade), 2);
             }
-        // 노이즈와 주사선은 캔버스에 걸리는 만큼만 그린다. 이 자리는 곧 캔버스보다
-        // 커지므로, 잘라 두지 않으면 보이지도 않을 칸을 계속 세게 된다.
-        RECT inner = proj;
-        if (inner.left < 0) inner.left = 0;
-        if (inner.top < 0) inner.top = 0;
-        if (inner.right > width) inner.right = width;
-        if (inner.bottom > height) inner.bottom = height;
-        if (inner.right > inner.left && inner.bottom > inner.top) {
-            Fill(dc, inner, RGB(6, 13, 11));
-            DrawSectorStatic(dc, inner, 9, t / NOISE_CHURN_MS, 120 + zoom * 420 / 1000);
-            DrawScanlines(dc, inner);
-        }
+        // 화면 속은 카메라 안에서 이미 그렸다 (DrawBootDive). 여기 남는 것은
+        // 그 위를 지나가는 테두리·눈금·가장자리뿐이다.
         Outline(dc, proj, MixColor(RGB(6, 13, 11), C_GREEN, 44), 2);
-        TextRect(dc, proj, L"A:\\ROGUE", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (FxDecorOn()) DrawPulseFrame(dc, proj, 6 + zoom / 90, 3, C_GREEN);
         // 빨려 드는 동안 가장자리가 조여든다. 남는 것이 화면뿐이 되도록.
         DrawEdgeGlow(dc, full, RGB(2, 5, 4), 1000, 16 + e * 96 / 1000);
@@ -3074,13 +3418,15 @@ void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
         // 판을 통째로 덮는다 - 2%만 섞어도 화면에 남는 색이 하나뿐이 된다.
         // 그래서 달아오르는 구간은 주사선 사이로만 밝히고(뒤가 계속 보인다),
         // 판 전체를 덮는 것은 정말 마지막 순간뿐이다.
-        int flash = Track(t, BOOT_INSERT_MS - 170, BOOT_INSERT_MS);
+        int flash = Track(t, BOOT_INSERT_MS - 120, BOOT_INSERT_MS);
         if (flash > 0) {
-            COLORREF surge = MixColor(RGB(6, 13, 11), RGB(224, 255, 244), 16 + flash * 64 / 1000);
+            COLORREF surge = MixColor(RGB(6, 13, 11), RGB(224, 255, 244), 10 + flash * 62 / 1000);
             for (int y = (t / 40) & 1; y < height; y += 3) Fill(dc, MakeRect(0, y, width, y + 1), surge);
         }
-        int punch = Track(t, BOOT_INSERT_MS - 60, BOOT_INSERT_MS);
-        if (punch > 0) Fill(dc, full, MixColor(RGB(6, 13, 11), RGB(224, 255, 244), 20 + punch * 75 / 1000));
+        // 판 전체를 덮는 것은 정말 마지막 30ms뿐이다. 회색 사각형이 화면에 서
+        // 있는 시간이 길면 그것은 섬광이 아니라 로딩 화면으로 보인다.
+        int punch = Track(t, BOOT_INSERT_MS - 30, BOOT_INSERT_MS);
+        if (punch > 0) Fill(dc, full, MixColor(RGB(6, 13, 11), RGB(236, 255, 248), 30 + punch * 68 / 1000));
     }
 }
 
