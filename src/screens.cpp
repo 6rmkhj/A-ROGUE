@@ -2933,9 +2933,17 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
 // 읽히는 값은 새로 만든 것이 아니라 방금 카드에 적혀 있던 것들이다 - 손상 섹터
 // 둘이 트랙 위의 갈린 자리로 드러나고, 볼륨 법칙이 다 읽은 매체에 박힌다.
 //
-// 그리고 그 매체가 볼륨마다 다르다(ui.h의 MediaKind). 트랙이 고리인 볼륨도 있고
-// 가로줄인 볼륨도 있으므로, 아래 그리기는 고리도 줄도 모른다 - 매체에게 "트랙 t의
-// 진행 p가 놓이는 점"만 물어보고, 판독·손상·지시선이 전부 그 점 하나를 같이 쓴다.
+// 그리고 그 매체가 볼륨마다 다르다(ui.h의 MediaKind). 처음에는 일곱 중 넷이 같은
+// 원판에 장식만 달랐고, 결국 색으로만 구분됐다. 다른 물건으로 보이게 하는 것은
+// 장식이 아니라 **실루엣과 트랙의 생김새**다 - 그래서 넷을 각각 갈랐다.
+//
+//   C:\  판이 셋인데 세로로 쌓여 있다. 트랙 하나가 판 하나다 (고리 셋이 아니다)
+//   E:\  고리가 없다. 안으로 감기는 나선 하나가 트랙 셋을 이룬다
+//   X:\  판이 통째가 아니다. 쐐기 여섯으로 갈라 각각 물려 두었다
+//   A:\  자켓 안이다. 판도 판독도 셔터 창 안에서만 보인다 (사각형에 뚫린 가로창)
+//
+// 아래 그리기는 고리도 줄도 나선도 모른다 - 매체에게 "트랙 t의 진행 p가 놓이는
+// 점"만 물어보고, 판독·손상·지시선이 전부 그 점 하나를 같이 쓴다.
 //
 // 모든 값은 경과 ms의 순수 함수다 (같은 시각이면 같은 프레임). 구간 경계는
 // ui.h의 MountBeats가 쥐고 있고 소리(main.cpp)도 같은 표를 본다.
@@ -2949,9 +2957,19 @@ static void DrawDirectoryEnter(HDC dc, int width, int height) {
 #define TAPE_REEL        126
 #define CELL_SPAN        300   // 셀 격자의 반폭
 #define CELL_ROW          96   // 행 간격
+#define STACK_R          196   // 쌓인 판 한 장의 반지름
+#define STACK_GAP         98   // 판 사이 높이
+#define STACK_SQUASH     300   // 스택은 훨씬 눕혀 본다 - 세 장이 다 보여야 한다
+#define OPTIC_IN         108   // 나선이 끝나는 안쪽
+#define OPTIC_OUT        228   // 나선이 시작하는 바깥
+#define CAGE_WEDGES        6
+#define FLOPPY_HALF      288   // 자켓 반폭
+#define FLOPPY_WIN_X     232   // 셔터 창 반폭
+#define FLOPPY_WIN_TOP   176   // 창 위쪽 (중심에서)
+#define FLOPPY_WIN_BOT   146   // 창 아래쪽
 
-// 트랙 반지름. 0이 바깥이고 안으로 갈수록 층이 깊다 - 층 하강이 "더 파고든다"로
-// 읽히려면 이 순서가 층 번호와 같아야 한다.
+// 고리 매체의 트랙 반지름. 0이 바깥이고 안으로 갈수록 층이 깊다 - 층 하강이
+// "더 파고든다"로 읽히려면 이 순서가 층 번호와 같아야 한다.
 static int PlatterTrackR(int track) {
     static const int RADIUS[MOUNT_TRACKS] = {208, 158, 108};
     return RADIUS[track < 0 ? 0 : track >= MOUNT_TRACKS ? MOUNT_TRACKS - 1 : track];
@@ -2962,10 +2980,17 @@ static POINT PlatterAt(int cx, int cy, int rx, int ry, int angle) {
     return p;
 }
 
-// 이 연출의 유일한 기하 규약. 매체마다 트랙의 모양이 다르지만(고리 · 가로줄),
-// 판독 진행도도 손상 섹터도 지시선 앵커도 전부 이 한 함수만 보고 그려진다.
-// off는 트랙에 수직인 오프셋(px)이라, 고리에서는 반지름이 되고 줄에서는 높이가 된다.
+// 다 열렸을 때의 눌림. 스택만 크게 눕혀 본다 - 정면에서 보면 세 장이 완전히
+// 겹쳐 한 장과 구별되지 않는다. 나머지는 정면이다.
+static int MediaSquash(int media) { return media == MEDIA_STACK ? STACK_SQUASH : 1000; }
+
+// 이 연출의 유일한 기하 규약. 매체마다 트랙의 모양이 다르지만(고리 · 가로줄 ·
+// 나선 · 판 한 장), 판독 진행도도 손상 섹터도 지시선 앵커도 전부 이 한 함수만
+// 보고 그려진다. off는 트랙에 수직인 오프셋(px)이라 고리에서는 반지름이 되고
+// 줄에서는 높이가 된다.
 static POINT MediaTrackPoint(int media, int cx, int cy, int track, int p, int squash, int off) {
+    if (track < 0) track = 0;
+    if (track >= MOUNT_TRACKS) track = MOUNT_TRACKS - 1;
     if (media == MEDIA_TAPE) {
         POINT q = {Lerp(cx - TAPE_SPAN, cx + TAPE_SPAN, p), cy + (track - 1) * 34 + off};
         return q;
@@ -2974,7 +2999,21 @@ static POINT MediaTrackPoint(int media, int cx, int cy, int track, int p, int sq
         POINT q = {Lerp(cx - CELL_SPAN, cx + CELL_SPAN, p), cy + (track - 1) * CELL_ROW + off};
         return q;
     }
-    int r = PlatterTrackR(track) + off;
+    if (media == MEDIA_STACK) {
+        // 트랙 하나가 판 하나다. 안으로 파고드는 것이 아니라 아래로 내려간다.
+        int r = STACK_R + off, y = cy + (track - 1) * STACK_GAP;
+        return PlatterAt(cx, y, r, r * squash / 1000, PLATTER_ENTRY + 3600 * p / 1000);
+    }
+    if (media == MEDIA_OPTICAL) {
+        // 광매체의 트랙은 고리가 아니라 이어진 나선 하나다. 트랙 셋은 그 나선을
+        // 세 바퀴로 나눈 것이고, 바깥에서 시작해 안으로 감긴다.
+        int turn = track * 1000 + p;
+        int r = OPTIC_OUT - (OPTIC_OUT - OPTIC_IN) * turn / (MOUNT_TRACKS * 1000) + off;
+        return PlatterAt(cx, cy, r, r * squash / 1000, PLATTER_ENTRY + 3600 * p / 1000);
+    }
+    // 플로피의 판은 창보다 작다. 트랙이 창 밖으로 나가면 잘린 고리 몇 개만
+    // 남아, 사각형 안에 둥근 것이 들어 있다는 것이 보이지 않는다.
+    int r = PlatterTrackR(track) * (media == MEDIA_FLOPPY ? 76 : 100) / 100 + off;
     return PlatterAt(cx, cy, r, r * squash / 1000, PLATTER_ENTRY + 3600 * p / 1000);
 }
 
@@ -2987,16 +3026,32 @@ static int MediaHeadProgress(int media, int read) {
     return 0;
 }
 
-// 볼륨 문자가 앉는 자리. 마지막에 카메라가 파고드는 곳이기도 하다.
+// 이름표가 매체 밖에 붙는가. 스택은 눕혀 봐서 허브에 글자가 앉지 않고, 셀 격자와
+// 플로피에는 애초에 허브가 없다 - 셋 다 기계에 붙은 이름표가 그 자리를 대신한다.
+static int MediaHubIsPlate(int media) {
+    return media == MEDIA_STACK || media == MEDIA_CELL || media == MEDIA_FLOPPY;
+}
+
+// 볼륨 문자가 앉는 자리.
 static POINT MediaHub(int media, int cx, int cy) {
     if (media == MEDIA_TAPE) { POINT q = {cx - TAPE_SPAN - TAPE_REEL + 8, cy}; return q; }
     if (media == MEDIA_CELL) { POINT q = {cx, cy - CELL_ROW - 66}; return q; }
+    if (media == MEDIA_STACK) { POINT q = {cx, cy - STACK_GAP - 118}; return q; }
+    if (media == MEDIA_FLOPPY) { POINT q = {cx, cy + FLOPPY_WIN_BOT + 66}; return q; }
+    POINT q = {cx, cy};
+    return q;
+}
+
+// 마지막에 카메라가 파고드는 자리. 이름표가 매체 밖에 붙는 볼륨에서는 이름표가
+// 아니라 매체 한가운데로 들어가야 한다.
+static POINT MediaCore(int media, int cx, int cy) {
+    if (media == MEDIA_TAPE) return MediaHub(media, cx, cy);
     POINT q = {cx, cy};
     return q;
 }
 
 // 매체가 실제로 차지하는 자리. 베이의 꺾쇠가 이것을 문다 - 테이프는 옆으로 넓고
-// 셀 격자는 납작한데 꺾쇠만 늘 원판 크기로 서 있으면, 무는 시늉만 하는 것이 된다.
+// 스택은 납작한데 꺾쇠만 늘 원판 크기로 서 있으면, 무는 시늉만 하는 것이 된다.
 static RECT MediaFrame(int media, int cx, int cy) {
     if (media == MEDIA_TAPE)
         return MakeRect(cx - TAPE_SPAN - TAPE_REEL * 2 - 28, cy - TAPE_REEL - 46,
@@ -3004,8 +3059,24 @@ static RECT MediaFrame(int media, int cx, int cy) {
     if (media == MEDIA_CELL)
         return MakeRect(cx - CELL_SPAN - 62, cy - CELL_ROW - 82,
                         cx + CELL_SPAN + 62, cy + CELL_ROW + 82);
+    if (media == MEDIA_STACK) {
+        int half = STACK_GAP + STACK_R * STACK_SQUASH / 1000 + 44;
+        return MakeRect(cx - STACK_R - 54, cy - half, cx + STACK_R + 54, cy + half);
+    }
+    if (media == MEDIA_FLOPPY)
+        return MakeRect(cx - FLOPPY_HALF - 26, cy - FLOPPY_HALF - 26,
+                        cx + FLOPPY_HALF + 26, cy + FLOPPY_HALF + 26);
+    if (media == MEDIA_OPTICAL)
+        return MakeRect(cx - OPTIC_OUT - 52, cy - OPTIC_OUT - 52,
+                        cx + OPTIC_OUT + 52, cy + OPTIC_OUT + 52);
     return MakeRect(cx - PLATTER_R - 46, cy - PLATTER_R - 46,
                     cx + PLATTER_R + 46, cy + PLATTER_R + 46);
+}
+
+// A:\ 의 셔터 창. 이 사각형이 이 볼륨의 실루엣을 만든다 - 판도 트랙도 판독도
+// 여기 안에서만 보이고, 나머지는 자켓이 덮는다.
+static RECT FloppyWindow(int cx, int cy) {
+    return MakeRect(cx - FLOPPY_WIN_X, cy - FLOPPY_WIN_TOP, cx + FLOPPY_WIN_X, cy + FLOPPY_WIN_BOT);
 }
 
 static void FillDisc(HDC dc, int cx, int cy, int rx, int ry, COLORREF color) {
@@ -3019,7 +3090,26 @@ static void FillDisc(HDC dc, int cx, int cy, int rx, int ry, COLORREF color) {
     SelectObject(dc, oldBrush); DeleteObject(brush);
 }
 
-// 트랙 위의 한 구간. 고리면 호가 되고 줄이면 선분이 된다.
+// 고리를 자른 부채꼴 하나. 바깥 호와 안쪽 호를 이어 닫아 한 번에 칠한다
+// (반지름 선을 촘촘히 긋는 것보다 훨씬 싸고, 테두리가 한 줄로 깔끔하다).
+static void FillWedge(HDC dc, int cx, int cy, int inR, int outR, int squash,
+                      int from, int sweep, COLORREF fill, COLORREF edge) {
+    POINT p[34];
+    int n = 0, steps = 15;
+    for (int i = 0; i <= steps; ++i)
+        p[n++] = PlatterAt(cx, cy, outR, outR * squash / 1000, from + sweep * i / steps);
+    for (int i = steps; i >= 0; --i)
+        p[n++] = PlatterAt(cx, cy, inR, inR * squash / 1000, from + sweep * i / steps);
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 2, edge);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(dc, brush);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    Polygon(dc, p, n);
+    SelectObject(dc, oldPen); DeleteObject(pen);
+    SelectObject(dc, oldBrush); DeleteObject(brush);
+}
+
+// 트랙 위의 한 구간. 고리면 호, 줄이면 선분, 나선이면 감기는 곡선이 된다.
 static void DrawTrackRun(HDC dc, int media, int cx, int cy, int track, int from, int to,
                          int squash, int off, COLORREF tone, int thickness) {
     if (to <= from) return;
@@ -3083,7 +3173,8 @@ static int MediaDropout(int media, int elapsed) {
 
 // 도는 판의 앞면. 매끈한 원은 돌아도 가만히 있는 것으로 보이므로, 도는 것을
 // 말하는 일은 눈금과 한자리에 머무는 빛 반사가 맡는다.
-static void DrawPlatterFace(HDC dc, int cx, int cy, int rx, int ry, int spin, COLORREF tone, COLORREF body) {
+static void DrawPlatterFace(HDC dc, int cx, int cy, int rx, int ry, int spin, int hubR,
+                            COLORREF tone, COLORREF body) {
     FillDisc(dc, cx, cy, rx + 3, ry + 3, MixColor(C_BG, tone, 16));
     FillDisc(dc, cx, cy, rx, ry, body);
     for (int i = 0; i < 24; ++i) {
@@ -3093,28 +3184,34 @@ static void DrawPlatterFace(HDC dc, int cx, int cy, int rx, int ry, int spin, CO
         DrawLine(dc, from.x, from.y, to.x, to.y, MixColor(C_BG, tone, lit ? 52 : 22), lit ? 2 : 1);
     }
     for (int i = 0; i < 3; ++i) {
-        int hubX = PLATTER_HUB * rx / PLATTER_R, hubY = PLATTER_HUB * ry / PLATTER_R;
-        POINT from = PlatterAt(cx, cy, hubX, hubY, spin + i * 1200);
+        POINT from = PlatterAt(cx, cy, hubR, hubR * ry / rx, spin + i * 1200);
         POINT to = PlatterAt(cx, cy, rx * 94 / 100, ry * 94 / 100, spin + i * 1200);
         DrawLine(dc, from.x, from.y, to.x, to.y, MixColor(C_BG, tone, 18), 1);
     }
-    DrawTrackRun(dc, MEDIA_STACK, cx, cy, 0, 0, 1000, ry * 1000 / rx, rx * 97 / 100 - 208, MixColor(C_BG, tone, 9), 1);
     DrawCraftArc(dc, cx, cy, rx * 97 / 100, ry * 97 / 100, 2450, 700, MixColor(C_BG, tone, 30), 2);
     DrawGlowRing(dc, cx, cy, rx, ry, MixColor(C_BG, tone, 46), 2);
 }
 
 // ---- 매체 일곱 ------------------------------------------------------------
-// 각각이 무엇으로 만들어졌는지가 한눈에 갈려야 한다. 공유하는 것은 트랙 기하와
-// 판독 규칙뿐이고, 아래 몸통은 볼륨마다 따로 그린다.
+// 각각이 무엇으로 만들어졌는지가 실루엣만으로 갈려야 한다. 공유하는 것은 트랙
+// 기하와 판독 규칙뿐이고, 아래 몸통은 볼륨마다 따로 그린다.
 
-// C:\ 플래터 3장. 아래 두 장은 가장자리만 보여 두께가 생긴다 - 한 장짜리 판과
-// 달리 "묵직한 기본형"으로 읽히고, 이 볼륨의 안정성이 형태로 먼저 온다.
-static void DrawMediaStack(HDC dc, int cx, int cy, int rx, int ry, int spin, COLORREF tone) {
-    for (int i = 2; i >= 1; --i) {
-        FillDisc(dc, cx, cy + i * 16, rx, ry, RGB(9, 13, 18));
-        DrawGlowRing(dc, cx, cy + i * 16, rx, ry, MixColor(C_BG, tone, 26 - i * 7), 2);
+// C:\ 판이 셋인데 세로로 쌓여 있다. 정면에서 보면 세 장이 완전히 겹쳐 한 장과
+// 구별되지 않으므로 크게 눕혀 본다 - 이 볼륨만 원이 아니라 기둥으로 보인다.
+// 트랙 하나가 판 하나라, 층을 내려가는 것이 아래 판으로 내려가는 것이 된다.
+static void DrawMediaStack(HDC dc, int cx, int cy, int squash, int spin, COLORREF tone) {
+    int ry = STACK_R * squash / 1000;
+    // 스핀들 축이 세 장을 꿴다. 축이 없으면 세 장이 따로 떠 있는 것으로 보인다.
+    Fill(dc, MakeRect(cx - 13, cy - STACK_GAP - ry, cx + 13, cy + STACK_GAP + ry),
+         MixColor(C_BG, tone, 22));
+    for (int t = MOUNT_TRACKS - 1; t >= 0; --t) {
+        int y = cy + (t - 1) * STACK_GAP;
+        // 두께. 판 하나가 종이가 아니라 금속판이라는 것은 이 아랫면이 말한다.
+        FillDisc(dc, cx, y + 7, STACK_R, ry, MixColor(C_BG, tone, 10));
+        DrawPlatterFace(dc, cx, y, STACK_R, ry, spin, 36, tone, RGB(18, 25, 33));
+        FillDisc(dc, cx, y, 34, 34 * squash / 1000, RGB(9, 13, 18));
+        DrawGlowRing(dc, cx, y, 34, 34 * squash / 1000, MixColor(C_BG, tone, 44), 2);
     }
-    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(18, 25, 33));
 }
 
 // D:\ 오픈릴 테이프. 릴 둘 사이로 띠가 지나가고, 읽을수록 왼쪽 릴이 풀리고
@@ -3136,31 +3233,52 @@ static void DrawMediaTape(HDC dc, int cx, int cy, int open, int read, int elapse
         }
         DrawGlowRing(dc, rx, cy, 28, 28, MixColor(C_BG, tone, 52), 2);
     }
-    // 띠. 기동 구간에 릴에서 릴로 걸린다.
     int left = cx - TAPE_SPAN, right = Lerp(cx - TAPE_SPAN, cx + TAPE_SPAN, thread);
     Fill(dc, MakeRect(left, cy - 52, right, cy + 52), RGB(14, 19, 25));
     DrawLine(dc, left, cy - 52, right, cy - 52, MixColor(C_BG, tone, 40), 2);
     DrawLine(dc, left, cy + 52, right, cy + 52, MixColor(C_BG, tone, 40), 2);
 }
 
-// E:\ 광 디스크. 피벗 암이 아니라 직선 레일 위의 슬레드가 읽는다. 표면이 거울이라
-// 무지개 띠가 한자리에 서 있고, 접촉이 끊길 때마다 그 띠가 통째로 사라진다.
-static void DrawMediaOptical(HDC dc, int cx, int cy, int rx, int ry, int spin, int elapsed,
+// E:\ 광 디스크. 트랙이 고리가 아니라 이어진 나선 하나고, 읽는 것도 피벗 암이
+// 아니라 직선 레일 위의 슬레드다. 표면이 거울이라 무지개 띠가 한자리에 서 있고,
+// 접촉이 끊길 때마다 그 띠가 통째로 사라진다.
+// 촘촘한 나선 한 줄. 펜을 한 번만 만들어 Polyline으로 긋는다 - 마디마다
+// DrawLine을 부르면 프레임마다 펜이 이백 개 넘게 만들어졌다 없어진다.
+static void DrawSpiralGuide(HDC dc, int cx, int cy, int outR, int inR, int squash,
+                            int turns, COLORREF tone) {
+    POINT p[241];
+    for (int i = 0; i < 241; ++i) {
+        int r = outR - (outR - inR) * i / 240;
+        p[i] = PlatterAt(cx, cy, r, r * squash / 1000, PLATTER_ENTRY + 3600 * turns * i / 240);
+    }
+    HPEN pen = CreatePen(PS_SOLID, 1, tone);
+    HPEN oldPen = (HPEN)SelectObject(dc, pen);
+    Polyline(dc, p, 241);
+    SelectObject(dc, oldPen); DeleteObject(pen);
+}
+
+static void DrawMediaOptical(HDC dc, int cx, int cy, int squash, int spin, int elapsed,
                              int drop, COLORREF tone) {
-    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(14, 20, 27));
+    int rx = OPTIC_OUT + 14, ry = rx * squash / 1000;
+    DrawPlatterFace(dc, cx, cy, rx, ry, spin, 56, tone, RGB(14, 20, 27));
+    // 판독이 밟는 세 바퀴는 이 나선의 일부다. 밑에 촘촘한 나선이 깔려 있어야
+    // 트랙 셋이 "고리 셋"이 아니라 "이어진 한 줄"로 읽힌다.
+    DrawSpiralGuide(dc, cx, cy, OPTIC_OUT, 60, squash, 15, MixColor(C_BG, tone, 12));
     if (drop && FxDecorOn())
         DrawBandGlitch(dc, MakeRect(cx - rx, cy - ry, cx + rx, cy + ry), elapsed, FxScale(14), 91, 9);
     if (!drop) for (int i = 0; i < 5; ++i) {
-        // 거울면의 반사. 각 띠가 조금씩 다른 색이라 판이 금속이 아니라 광매체다.
         static const COLORREF SHEEN[5] = {C_BLUE, C_GREEN, C_YELLOW, C_RED, C_BLUE};
         int r = rx * (72 + i * 5) / 100;
         DrawCraftArc(dc, cx, cy, r, r * ry / rx, 2280 + i * 40, 560, MixColor(C_BG, SHEEN[i], 26), 3);
     }
-    // 가운데의 큰 투명 구멍. 광 디스크를 광 디스크로 만드는 것의 절반이다.
-    FillDisc(dc, cx, cy, 40, 40 * ry / rx, RGB(6, 9, 13));
-    DrawGlowRing(dc, cx, cy, 40, 40 * ry / rx, MixColor(C_BG, tone, 44), 2);
-    // 슬레드가 달리는 레일.
-    Fill(dc, MakeRect(cx + 30, cy + ry + 28, cx + rx + 96, cy + ry + 34), MixColor(C_BG, tone, 18));
+    // 가운데의 큰 투명 구멍과 클램프 링. 광 디스크를 광 디스크로 만드는 것의 절반이다.
+    DrawGlowRing(dc, cx, cy, 76, 76 * squash / 1000, MixColor(C_BG, tone, 26), 1);
+    FillDisc(dc, cx, cy, 52, 52 * squash / 1000, RGB(6, 9, 13));
+    DrawGlowRing(dc, cx, cy, 52, 52 * squash / 1000, MixColor(C_BG, tone, 48), 2);
+    // 슬레드가 달리는 레일. 판 아래를 곧게 가로지른다.
+    Fill(dc, MakeRect(cx - 10, cy + ry + 26, cx + rx + 104, cy + ry + 34), MixColor(C_BG, tone, 18));
+    for (int x = cx; x < cx + rx + 96; x += 26)
+        Fill(dc, MakeRect(x, cy + ry + 22, x + 3, cy + ry + 38), MixColor(C_BG, tone, 26));
 }
 
 // N:\ 실체가 없다. 고리는 끊긴 점선이고, 화면 밖 링크에서 온 패킷이 그것을
@@ -3175,13 +3293,10 @@ static void DrawMediaLink(HDC dc, int cx, int cy, int rx, int ry, int open, int 
             DrawCraftArc(dc, cx, cy, r, er, a, 78, MixColor(C_BG, tone, 12 + 22 * lit / 1000), 2);
         }
     }
-    // 링크. 화면 밖에서 들어와 노드에 닿고, 그 위를 패킷이 흐른다.
-    POINT node = {cx, cy};
-    DrawLine(dc, BASE_WIDTH, cy - 176, node.x + 96, cy - 52, MixColor(C_BG, tone, 22), 1);
+    DrawLine(dc, BASE_WIDTH, cy - 176, cx + 96, cy - 52, MixColor(C_BG, tone, 22), 1);
     for (int i = 0; i < 5; ++i) {
-        int at = (elapsed * 2 + i * 400) % 2000;
-        int p = at * 1000 / 2000;
-        int x = Lerp(BASE_WIDTH, node.x + 96, p), y = Lerp(cy - 176, cy - 52, p);
+        int p = ((elapsed * 2 + i * 400) % 2000) * 1000 / 2000;
+        int x = Lerp(BASE_WIDTH, cx + 96, p), y = Lerp(cy - 176, cy - 52, p);
         Fill(dc, MakeRect(x - 4, y - 2, x + 4, y + 3), MixColor(C_BG, tone, 30 + 40 * lit / 1000));
     }
     for (int i = 0; i < 6; ++i) {   // 육각 노드. 판이 아니라 주소 하나다
@@ -3191,7 +3306,7 @@ static void DrawMediaLink(HDC dc, int cx, int cy, int rx, int ry, int open, int 
     }
 }
 
-// R:\ 셀 격자. 도는 것이 하나도 없다. 행을 훑어 읽고, 읽힌 자리는 곧 증발한다 -
+// R:\ 셀 격자. 도는 것이 하나도 없다. 행을 훑어 읽고, 칸은 계속 되쓰인다 -
 // 휘발성 램디스크가 형태와 동작 양쪽으로 온다.
 static void DrawMediaCell(HDC dc, int cx, int cy, int open, int elapsed, COLORREF tone) {
     int powered = EaseOutCubic(open);
@@ -3204,20 +3319,28 @@ static void DrawMediaCell(HDC dc, int cx, int cy, int open, int elapsed, COLORRE
             int x = cx - CELL_SPAN - 4 + col * (CELL_SPAN * 2 + 8) / 24;
             // 칸마다 다른 주기로 새로 고쳐진다. 램은 가만히 있어도 계속 되쓰인다.
             int refresh = (elapsed / 90 + col * 5 + row * 11) % 7;
-            Fill(dc, MakeRect(x, y - 22, x + 16, y + 22),
-                 MixColor(C_BG, tone, refresh < 2 ? 30 : 13));
+            Fill(dc, MakeRect(x, y - 22, x + 16, y + 22), MixColor(C_BG, tone, refresh < 2 ? 30 : 13));
         }
     }
-    // 버스. 격자 왼쪽에 세로로 서서 세 행을 모두 문다.
     Fill(dc, MakeRect(cx - CELL_SPAN - 46, cy - CELL_ROW - 40, cx - CELL_SPAN - 30, cy + CELL_ROW + 40),
          MixColor(C_BG, tone, 20));
 }
 
-// X:\ 격리 캐비닛. 판은 우리에 물려 있고 잠금쇠 넷이 가장자리를 쥐고 있다.
-// 위아래로 경고 띠가 지나간다 - 여기 있는 것은 복구 대상이 아니라 압수품이다.
+// X:\ 판이 통째가 아니다. 압수된 판은 쐐기 여섯으로 갈라 각각 물려 두었고, 갈린
+// 틈이 그대로 보인다 - 이 볼륨만 원이 아니라 톱니바퀴 같은 실루엣이 된다.
 static void DrawMediaCage(HDC dc, int cx, int cy, int rx, int ry, int spin, int open, COLORREF tone) {
-    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(20, 15, 17));
-    int release = EaseOutCubic(open);
+    int release = EaseOutCubic(open), hub = PLATTER_HUB + 10;
+    for (int i = 0; i < CAGE_WEDGES; ++i) {
+        int from = spin + i * (3600 / CAGE_WEDGES) + 52, sweep = 3600 / CAGE_WEDGES - 104;
+        FillWedge(dc, cx, cy, hub, rx, ry * 1000 / rx, from, sweep,
+                  RGB(26, 15, 17), MixColor(C_BG, tone, 44));
+        // 쐐기마다 한 줄. 조각이 각각 다른 방향을 보고 있어야 갈라진 것으로 읽힌다.
+        POINT a = PlatterAt(cx, cy, hub + 16, (hub + 16) * ry / rx, from + sweep / 2);
+        POINT b = PlatterAt(cx, cy, rx - 16, (rx - 16) * ry / rx, from + sweep / 2);
+        DrawLine(dc, a.x, a.y, b.x, b.y, MixColor(C_BG, tone, 22), 1);
+    }
+    FillDisc(dc, cx, cy, hub, hub * ry / rx, RGB(12, 9, 11));
+    DrawGlowRing(dc, cx, cy, hub, hub * ry / rx, MixColor(C_BG, tone, 44), 2);
     for (int i = 0; i < 4; ++i) {   // 잠금쇠. 기동과 함께 바깥으로 물러난다
         int a = 450 + i * 900, reach = rx + 10 + release * 34 / 1000;
         POINT grip = PlatterAt(cx, cy, reach, reach * ry / rx, a);
@@ -3239,31 +3362,37 @@ static void DrawMediaCage(HDC dc, int cx, int cy, int rx, int ry, int spin, int 
 }
 
 // A:\ 플로피 한 장. 복구 도구 자신의 마지막 기록이고, 타이틀과 삽입 연출이 내내
-// 보여 준 바로 그 물건이다. 셔터가 열려 안의 자기면이 드러나고, 헤드가 위아래
-// 양쪽에서 둘이다 - 자기 자신을 읽는 유일한 볼륨이다.
-static void DrawMediaFloppy(HDC dc, int cx, int cy, int rx, int ry, int spin, int open, COLORREF tone) {
-    int jacket = rx + 46, shutter = EaseOutCubic(open);
-    RECT shell = MakeRect(cx - jacket, cy - jacket, cx + jacket, cy + jacket);
-    Fill(dc, shell, RGB(11, 16, 22));
-    Outline(dc, shell, MixColor(C_BG, tone, 40), 2);
-    Fill(dc, MakeRect(shell.right - 34, shell.top, shell.right, shell.top + 34), C_BG);   // 모서리 홈
-    DrawLine(dc, shell.right - 34, shell.top, shell.right, shell.top + 34, MixColor(C_BG, tone, 40), 2);
-    Outline(dc, MakeRect(shell.left + 18, shell.bottom - 48, shell.left + 40, shell.bottom - 26),
-            MixColor(C_BG, tone, 34), 2);                                                 // 쓰기 방지 창
-    DrawPlatterFace(dc, cx, cy, rx, ry, spin, tone, RGB(16, 22, 29));
-    // 금속 셔터. 기동 구간에 옆으로 밀려 자기면을 연다.
-    int slide = jacket * 2 * shutter / 1000;
-    RECT metal = MakeRect(shell.left + 20 + slide, shell.top + 14, shell.left + 20 + slide + 150, shell.top + 76);
-    if (metal.left < shell.right - 24) {
-        Fill(dc, metal, RGB(26, 33, 41));
-        Outline(dc, metal, MixColor(C_BG, tone, 50), 2);
-        Fill(dc, MakeRect(metal.left + 22, metal.top + 12, metal.left + 34, metal.bottom - 12), C_BG);
-    }
+// 보여 준 바로 그 물건이다. 이 볼륨만 원이 아니라 사각형이다 - 판은 자켓에 덮여
+// 셔터 창으로만 보인다. 자켓은 판보다 먼저, 셔터는 판보다 나중에 그린다.
+static void DrawFloppyJacket(HDC dc, int cx, int cy, COLORREF tone) {
+    RECT shell = MakeRect(cx - FLOPPY_HALF, cy - FLOPPY_HALF, cx + FLOPPY_HALF, cy + FLOPPY_HALF);
+    Fill(dc, shell, RGB(13, 18, 25));
+    Outline(dc, shell, MixColor(C_BG, tone, 42), 2);
+    Fill(dc, MakeRect(shell.right - 38, shell.top, shell.right, shell.top + 38), RGB(6, 9, 13));
+    DrawLine(dc, shell.right - 38, shell.top, shell.right, shell.top + 38, MixColor(C_BG, tone, 42), 2);
+    Outline(dc, MakeRect(shell.left + 20, shell.top + 16, shell.left + 44, shell.top + 40),
+            MixColor(C_BG, tone, 32), 2);                      // 쓰기 방지 창
+    RECT win = FloppyWindow(cx, cy);
+    Fill(dc, MakeRect(win.left - 6, win.top - 6, win.right + 6, win.bottom + 6), RGB(6, 9, 13));
+    Outline(dc, MakeRect(win.left - 6, win.top - 6, win.right + 6, win.bottom + 6), MixColor(C_BG, tone, 34), 2);
 }
 
-// 액추에이터 · 슬레드 · 테이프 헤드 · 버스 프로브. 무엇이 읽고 있는지도 볼륨마다
-// 다르다 - 같은 팔이 일곱 번 나오면 매체를 갈라 둔 것이 형태에서만 끝난다.
-static void DrawReadHead(HDC dc, int media, int cx, int cy, POINT head, int lifted, COLORREF tone) {
+static void DrawFloppyShutter(HDC dc, int cx, int cy, int open, COLORREF tone) {
+    RECT win = FloppyWindow(cx, cy);
+    int slide = (win.right - win.left + 24) * EaseOutCubic(open) / 1000;
+    RECT metal = MakeRect(win.left - 8 + slide, win.top - 8, win.right + 8 + slide, win.bottom + 8);
+    if (metal.left >= cx + FLOPPY_HALF) return;
+    if (metal.right > cx + FLOPPY_HALF) metal.right = cx + FLOPPY_HALF;
+    Fill(dc, metal, RGB(28, 35, 44));
+    Outline(dc, metal, MixColor(C_BG, tone, 52), 2);
+    for (int y = metal.top + 20; y < metal.bottom - 14; y += 26)
+        Fill(dc, MakeRect(metal.left + 10, y, metal.left + 30, y + 6), MixColor(C_BG, tone, 30));
+}
+
+// 액추에이터 · 슬레드 · 테이프 헤드 · 버스 프로브 · 헤드 콤. 무엇이 읽고 있는지도
+// 볼륨마다 다르다 - 같은 팔이 일곱 번 나오면 매체를 갈라 둔 것이 몸통에서 끝난다.
+static void DrawReadHead(HDC dc, int media, int cx, int cy, POINT head, int lifted,
+                         int squash, COLORREF tone) {
     int lift = lifted * 26 / 1000;
     POINT seat = head;
     head.y -= lift;
@@ -3274,48 +3403,72 @@ static void DrawReadHead(HDC dc, int media, int cx, int cy, POINT head, int lift
         return;
     }
     if (media == MEDIA_CELL) {
-        // 버스 프로브. 격자의 한 칸을 위아래로 물어 잡는다.
         Fill(dc, MakeRect(head.x - 12, cy - CELL_ROW - 52, head.x + 12, cy + CELL_ROW + 52),
              MixColor(C_BG, tone, 16));
         Fill(dc, MakeRect(head.x - 12, head.y - 30, head.x + 12, head.y + 30), MixColor(C_BG, tone, 54));
         return;
     }
     if (media == MEDIA_TAPE) {
-        // 고정 헤드. 띠가 이 아래를 지나간다. 좌우의 가이드 롤러가 띠를 누른다.
-        for (int side = 0; side < 2; ++side) {
-            int x = cx + (side ? 92 : -92);
-            DrawGlowRing(dc, x, cy + 70, 22, 22, MixColor(C_BG, tone, 34), 2);
-        }
+        for (int side = 0; side < 2; ++side)
+            DrawGlowRing(dc, cx + (side ? 92 : -92), cy + 70, 22, 22, MixColor(C_BG, tone, 34), 2);
         Panel(dc, MakeRect(cx - 30, cy + 66, cx + 30, cy + 118), RGB(10, 15, 21), MixColor(C_BG, tone, 40));
         Fill(dc, MakeRect(cx - 5, cy + 4, cx + 5, cy + 70), MixColor(C_BG, tone, 34));
         Fill(dc, MakeRect(cx - 16, head.y - 5, cx + 16, head.y + 5), MixColor(C_BG, tone, 70));
         return;
     }
+    if (media == MEDIA_STACK) {
+        // 헤드 콤. 판마다 팔이 하나씩이고 기둥 하나에 묶여 함께 오르내린다 -
+        // 이 볼륨에서 층을 내려가는 것은 안으로 파고드는 것이 아니라 아래 판으로
+        // 내려가는 것이므로, 읽는 물건도 세로로 서 있어야 한다.
+        int postX = cx + STACK_R + 132, ry = STACK_R * squash / 1000;
+        RECT post = MakeRect(postX - 14, cy - STACK_GAP - ry - 20, postX + 14, cy + STACK_GAP + ry + 20);
+        Panel(dc, post, RGB(10, 15, 21), MixColor(C_BG, tone, 40));
+        for (int t = 0; t < MOUNT_TRACKS; ++t) {
+            POINT on = PlatterAt(cx, cy + (t - 1) * STACK_GAP, STACK_R, ry, PLATTER_ENTRY);
+            int active = head.y > on.y - STACK_GAP / 2 && head.y <= on.y + STACK_GAP / 2;
+            DrawLine(dc, post.left, on.y, active ? head.x : on.x + 58, on.y,
+                     MixColor(C_BG, tone, active ? 62 : 26), active ? 5 : 3);
+            if (active) Fill(dc, MakeRect(head.x - 9, head.y - 6, head.x + 9, head.y + 6), MixColor(C_BG, tone, 78));
+        }
+        return;
+    }
     if (media == MEDIA_OPTICAL) {
         // 직선 레일 위의 슬레드. 피벗이 없으므로 아래에서 곧게 밀려 올라온다.
-        Fill(dc, MakeRect(head.x - 26, cy + PLATTER_R + 22, head.x + 26, cy + PLATTER_R + 40),
-             MixColor(C_BG, tone, 40));
-        DrawLine(dc, head.x, cy + PLATTER_R + 22, head.x, head.y, MixColor(C_BG, tone, 46), 5);
+        int railY = cy + OPTIC_OUT + 44;
+        Fill(dc, MakeRect(head.x - 28, railY - 12, head.x + 28, railY + 10), MixColor(C_BG, tone, 40));
+        DrawLine(dc, head.x, railY - 12, head.x, head.y, MixColor(C_BG, tone, 46), 5);
         Fill(dc, MakeRect(head.x - 10, head.y - 7, head.x + 10, head.y + 7), MixColor(C_BG, tone, 78));
         if (lift > 0) DrawLine(dc, head.x, head.y + 7, seat.x, seat.y, MixColor(C_BG, tone, 20), 1);
         return;
     }
-    // 피벗 암. A:\ 는 자기 자신을 읽으므로 반대쪽에서 하나 더 온다.
-    for (int arm = 0; arm < (media == MEDIA_FLOPPY ? 2 : 1); ++arm) {
-        int flip = arm ? -1 : 1;
-        POINT tip = {cx + (head.x - cx) * flip, cy + (head.y - cy) * flip};
-        POINT pivot = {cx + PLATTER_PIVOT_DX * flip, cy + PLATTER_PIVOT_DY * flip - lift / 2};
-        Panel(dc, MakeRect(pivot.x - 22, pivot.y - 22, pivot.x + 22, pivot.y + 22),
-              MixColor(C_BG, tone, 14), MixColor(C_BG, tone, 44));
-        Fill(dc, MakeRect(pivot.x - 7, pivot.y - 7, pivot.x + 7, pivot.y + 7), MixColor(C_BG, tone, 56));
-        // 축 반대쪽의 균형추. 팔 하나만 뻗어 있으면 막대기이고, 축을 사이에 두고
-        // 짧은 쪽이 있어야 도는 물건으로 보인다.
-        DrawLine(dc, pivot.x, pivot.y, pivot.x + (pivot.x - tip.x) / 6, pivot.y + (pivot.y - tip.y) / 6,
-                 MixColor(C_BG, tone, 34), 11);
-        DrawLine(dc, pivot.x, pivot.y, tip.x, tip.y, MixColor(C_BG, tone, 40), 7);
-        DrawLine(dc, pivot.x, pivot.y, tip.x, tip.y, MixColor(C_BG, tone, 62), 3);
-        Fill(dc, MakeRect(tip.x - 9, tip.y - 6, tip.x + 9, tip.y + 6), MixColor(C_BG, tone, 74));
+    if (media == MEDIA_FLOPPY) {
+        // 헤드 둘. 창의 위아래 레일을 타고 같은 자리를 위에서 한 번, 아래에서 한
+        // 번 읽는다 - 자기 자신을 읽는 유일한 볼륨이라 양면이 동시에 걸린다.
+        RECT win = FloppyWindow(cx, cy);
+        for (int side = 0; side < 2; ++side) {
+            int railY = side ? win.bottom - 10 : win.top + 10, reach = side ? -18 : 18;
+            Fill(dc, MakeRect(win.left, railY - 3, win.right, railY + 3), MixColor(C_BG, tone, 22));
+            int x = head.x < win.left + 14 ? win.left + 14 : head.x > win.right - 14 ? win.right - 14 : head.x;
+            Fill(dc, MakeRect(x - 13, railY - 9, x + 13, railY + 9), MixColor(C_BG, tone, 58));
+            // 팔은 레일에서 짧게만 나온다. 헤드까지 줄을 그으면 판을 가로지르는
+            // 긴 선 하나가 남아, 양면을 읽는 것이 아니라 판이 갈라진 것으로 보인다.
+            DrawLine(dc, x, railY, x, railY + reach, MixColor(C_BG, tone, 46), 3);
+        }
+        Fill(dc, MakeRect(head.x - 9, head.y - 6, head.x + 9, head.y + 6), MixColor(C_BG, tone, 78));
+        return;
     }
+    // 피벗 암 (X:\ 격리 캐비닛).
+    POINT pivot = {cx + PLATTER_PIVOT_DX, cy + PLATTER_PIVOT_DY - lift / 2};
+    Panel(dc, MakeRect(pivot.x - 22, pivot.y - 22, pivot.x + 22, pivot.y + 22),
+          MixColor(C_BG, tone, 14), MixColor(C_BG, tone, 44));
+    Fill(dc, MakeRect(pivot.x - 7, pivot.y - 7, pivot.x + 7, pivot.y + 7), MixColor(C_BG, tone, 56));
+    // 축 반대쪽의 균형추. 팔 하나만 뻗어 있으면 막대기이고, 축을 사이에 두고
+    // 짧은 쪽이 있어야 도는 물건으로 보인다.
+    DrawLine(dc, pivot.x, pivot.y, pivot.x + (pivot.x - head.x) / 6, pivot.y + (pivot.y - head.y) / 6,
+             MixColor(C_BG, tone, 34), 11);
+    DrawLine(dc, pivot.x, pivot.y, head.x, head.y, MixColor(C_BG, tone, 40), 7);
+    DrawLine(dc, pivot.x, pivot.y, head.x, head.y, MixColor(C_BG, tone, 62), 3);
+    Fill(dc, MakeRect(head.x - 9, head.y - 6, head.x + 9, head.y + 6), MixColor(C_BG, tone, 74));
     if (lift > 0) DrawLine(dc, head.x, head.y + 6, seat.x, seat.y, MixColor(C_BG, tone, 20), 1);
 }
 
@@ -3326,10 +3479,11 @@ static void DrawMediaBody(HDC dc, int media, int cx, int cy, int squash, int spi
     if (media == MEDIA_TAPE) { DrawMediaTape(dc, cx, cy, open, read, elapsed, tone); return; }
     if (media == MEDIA_CELL) { DrawMediaCell(dc, cx, cy, open, elapsed, tone); return; }
     if (media == MEDIA_LINK) { DrawMediaLink(dc, cx, cy, rx, ry, open, elapsed, tone); return; }
-    if (media == MEDIA_STACK) { DrawMediaStack(dc, cx, cy, rx, ry, spin, tone); return; }
-    if (media == MEDIA_OPTICAL) { DrawMediaOptical(dc, cx, cy, rx, ry, spin, elapsed, drop, tone); return; }
+    if (media == MEDIA_STACK) { DrawMediaStack(dc, cx, cy, squash, spin, tone); return; }
+    if (media == MEDIA_OPTICAL) { DrawMediaOptical(dc, cx, cy, squash, spin, elapsed, drop, tone); return; }
     if (media == MEDIA_CAGE) { DrawMediaCage(dc, cx, cy, rx, ry, spin, open, tone); return; }
-    DrawMediaFloppy(dc, cx, cy, rx, ry, spin, open, tone);
+    DrawPlatterFace(dc, cx, cy, PLATTER_R * 76 / 100, PLATTER_R * 76 / 100 * squash / 1000,
+                    spin, PLATTER_HUB * 76 / 100, tone, RGB(16, 22, 29));
 }
 
 // 드라이브 베이. 매체 혼자 어둠에 떠 있으면 이 일이 어디에서 일어나는지 알 수 없다.
@@ -3402,13 +3556,16 @@ static void DrawDescent(HDC dc, int width, int height) {
     // ---- 안착. 잠긴 카드가 뽑혀 나와 매체 자리에 눕는다 --------------------
     // 카드가 눕는 마지막 모습(납작한 판)과 깨어나기 시작하는 매체의 첫 모습이
     // 같은 도형이라 그 사이에 이어 붙인 자리가 없다.
-    int squash = 1000;
+    int squash = MediaSquash(media);
     if (mount) {
         // 떨어지는 것이라 가속한다. EaseOutCubic으로 두면 카드가 처음부터
         // 납작해져 버려, 눕는 것이 아니라 미끄러지는 것으로 보였다.
         int seated = EaseInCubic(Track(elapsed, beats.seatAt, beats.spinAt));
+        // 다 열렸을 때의 눌림이 매체마다 다르다. 스택은 정면으로 서면 세 장이
+        // 겹쳐 한 장이 되므로 끝까지 눕혀 둔다.
+        int target = MediaSquash(media);
         if (MediaIsDisc(media))
-            squash = 55 + 945 * EaseOutCubic(Track(elapsed, beats.spinAt + 40, beats.readAt - 140)) / 1000;
+            squash = 55 + (target - 55) * EaseOutCubic(Track(elapsed, beats.spinAt + 40, beats.readAt - 140)) / 1000;
         if (seated < 1000) {
             RECT from = DriveCardRect(gDescentChoiceIndex >= 0 ? gDescentChoiceIndex : 0);
             RECT to = MakeRect(cx - PLATTER_R, cy - 13, cx + PLATTER_R, cy + 13);
@@ -3420,8 +3577,8 @@ static void DrawDescent(HDC dc, int width, int height) {
             if (FxDecorOn())
                 DrawSectorStatic(dc, slab, index + 31, elapsed / NOISE_CHURN_MS, FxScale(420 * seated / 1000));
             // 떨어지는 동안 받을 자리가 먼저 켜진다 - 카드가 어디로 가는지가 보인다.
-            POINT hub = MediaHub(media, cx, cy);
-            DrawGlowRing(dc, hub.x, hub.y, PLATTER_HUB, 6, MixColor(C_BG, tone, 20 + 40 * seated / 1000), 2);
+            POINT core = MediaCore(media, cx, cy);
+            DrawGlowRing(dc, core.x, core.y, PLATTER_HUB, 6, MixColor(C_BG, tone, 20 + 40 * seated / 1000), 2);
         }
     }
 
@@ -3438,6 +3595,16 @@ static void DrawDescent(HDC dc, int width, int height) {
     int firstTrack = mount ? 0 : (gDescentToFloor < 1 ? 0 : gDescentToFloor - 1);
     int headTrack = firstTrack, lastTrack = firstTrack, headRead = 0, settleEase = 1000;
 
+    // A:\ 는 자켓 안에 있다. 자켓을 먼저 세우고, 그 다음 그리는 것 - 판·트랙·
+    // 판독·손상 - 을 전부 셔터 창으로 잘라 낸다. 이 클립 하나가 이 볼륨의
+    // 실루엣이다: 사각형에 가로로 창이 하나 뚫려 있고 그 안에서만 판이 돈다.
+    int windowClip = 0;
+    if (visible && media == MEDIA_FLOPPY) {
+        DrawFloppyJacket(dc, cx, cy, tone);
+        RECT win = FloppyWindow(cx, cy);
+        windowClip = SaveDC(dc);
+        if (windowClip) IntersectClipRect(dc, win.left, win.top, win.right, win.bottom);
+    }
     if (visible)
         DrawMediaBody(dc, media, cx, cy, squash, spin, open,
                       elapsed >= beats.readAt ? Track(elapsed, beats.readAt, beats.lawAt) : 0,
@@ -3485,19 +3652,24 @@ static void DrawDescent(HDC dc, int width, int height) {
         }
     }
 
+    if (windowClip) RestoreDC(dc, windowClip);
+    if (visible && media == MEDIA_FLOPPY) DrawFloppyShutter(dc, cx, cy, open, tone);
+
     // 볼륨 문자. 매체마다 허브가 다른 자리에 있다.
-    if (visible && (!MediaIsDisc(media) || squash > 420)) {
+    if (visible && (MediaHubIsPlate(media) || !MediaIsDisc(media) || squash > 420)) {
         POINT hub = MediaHub(media, cx, cy);
-        if (media == MEDIA_CELL) {
-            // 셀 격자에는 허브가 없다. 모듈에 붙은 이름표가 그 자리를 대신한다.
-            Panel(dc, MakeRect(hub.x - 118, hub.y - 30, hub.x + 118, hub.y + 30),
+        if (MediaHubIsPlate(media)) {
+            // 글자가 앉을 허브가 없는 매체들. 기계에 붙은 이름표가 그 자리를
+            // 대신한다 - 눕혀 본 판이나 자켓 위에 글자를 얹으면 둘 다 망친다.
+            Panel(dc, MakeRect(hub.x - 124, hub.y - 32, hub.x + 124, hub.y + 32),
                   RGB(9, 13, 18), MixColor(C_BG, tone, 54));
+            Fill(dc, MakeRect(hub.x - 124, hub.y - 32, hub.x - 120, hub.y + 32), tone);
         } else if (media != MEDIA_LINK) {
             int hy = MediaIsDisc(media) ? PLATTER_HUB * squash / 1000 : PLATTER_HUB;
             FillDisc(dc, hub.x, hub.y, PLATTER_HUB, hy, RGB(9, 13, 18));
             DrawGlowRing(dc, hub.x, hub.y, PLATTER_HUB, hy, MixColor(C_BG, tone, 54), 2);
         }
-        TextRect(dc, MakeRect(hub.x - PLATTER_HUB, hub.y - 26, hub.x + PLATTER_HUB, hub.y + 26),
+        TextRect(dc, MakeRect(hub.x - 124, hub.y - 26, hub.x + 124, hub.y + 26),
                  drive->letter, tone, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
@@ -3512,7 +3684,7 @@ static void DrawDescent(HDC dc, int width, int height) {
         POINT park = MediaTrackPoint(media, cx, cy, 0, at, squash, 74);
         POINT head = {Lerp(park.x, seat.x, arrive), Lerp(park.y, seat.y, arrive)};
         if (drop) head.x += 3, head.y -= 2;   // 접촉이 튀는 순간에는 헤드도 흔들린다
-        DrawReadHead(dc, media, cx, cy, head, 1000 - arrive, tone);
+        DrawReadHead(dc, media, cx, cy, head, 1000 - arrive, squash, tone);
         if (arrive > 0 && arrive < 1000 && FxDecorOn())
             DrawPulseFrame(dc, MakeRect(seat.x - 10, seat.y - 10, seat.x + 10, seat.y + 10),
                            FxScale(3 + 16 * (1000 - arrive) / 1000), 2, MixColor(C_BG, tone, FxScale(60)));
@@ -3654,7 +3826,7 @@ static void DrawDescent(HDC dc, int width, int height) {
     // ---- 마운트 확정. 걸쇠가 물리고 허브가 화면을 삼킨다 --------------------
     int seal = Track(elapsed, beats.sealAt, beats.total);
     if (seal > 0) {
-        POINT hub = MediaHub(media, cx, cy);
+        POINT hub = MediaCore(media, cx, cy);
         // 바깥에서 안으로 트랙이 차례로 잠긴다. 잠긴 순서가 판독 순서의 반대라
         // 읽던 일이 여기서 되감겨 닫히는 것으로 보인다.
         for (int t = 0; t < MOUNT_TRACKS; ++t) {
