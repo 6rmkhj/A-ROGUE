@@ -379,7 +379,13 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
         MOUNT_HOLD_AT + 300, MOUNT_SEAL_AT + 300};
     static const int diveAges[] = {120, DIVE_READ_AT + 200, DIVE_READ_AT + DIVE_READ_MS - 120,
         DIVE_HOLD_AT + 200, DIVE_SEAL_AT + 260};
-    static const int directoryAges[] = {180, DIR_SELECT_LOCK_MS + 130, DIR_SELECT_LOCK_MS + 660};
+    // 진입 연출의 구간마다 한 장씩: 카드 잠금, 목록이 서는 중, 헤드가 앉기 직전,
+    // 고른 줄을 읽는 시간, 문이 열리는 중, 겹을 지나치는 중, 마지막 겹, 도착 섬광,
+    // 다 선 도착 판, 읽는 시간, 확정. 읽으라고 세워 둔 구간도 한 장씩 밟는다.
+    static const int directoryAges[] = {180, DIR_SEEK_AT + 140, DIR_OPEN_AT - 260,
+        DIR_OPEN_AT - 60, DIR_OPEN_AT + 170, DIR_DIVE_AT + DIR_DIVE_STEP_MS + 40,
+        DIR_DIVE_AT + DIR_DIVE_STEP_MS * 3 - 20, DIR_LAND_AT + 120,
+        DIR_LAND_AT + 420, DIR_LAND_AT + 900, DIR_SEAL_AT + 150};
     static const char* const kindName[3] = {"mount", "dive", "directory"};
     for (int mode = 0; mode < FX_LEVEL_COUNT && ok; ++mode) {
         ResetPresentation(); NewRun(&gGame, 12345u, 0); AdvanceStory(&gGame);

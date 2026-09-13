@@ -2366,17 +2366,17 @@ static void DrawDirectorySelectionExit(HDC dc, int width, int height, int elapse
     if (!info) return;
     COLORREF accent = (COLORREF)info->color;
     for (int i = 0; i < DirectoryChoiceCount(&gGame); ++i)
-        DrawSelectionCardExit(dc, DirectoryChoiceRect(i), i == chosen, elapsed, DIR_SELECT_LOCK_MS,
+        DrawSelectionCardExit(dc, DirectoryChoiceRect(i), i == chosen, elapsed, DIR_LOCK_MS,
                               accent, L"PATH LOCKED");
 
     RECT selected = DirectoryChoiceRect(chosen);
     POINT from = {(selected.left + selected.right) / 2, selected.bottom + 2};
     POINT to = {width / 2, height - 48};
-    int route = EaseOutCubic(Track(elapsed, 90, DIR_SELECT_LOCK_MS));
+    int route = EaseOutCubic(Track(elapsed, 90, DIR_LOCK_MS));
     DrawSignalPath(dc, from, to, height - 96, route, 4, accent, 13, 1);
-    if (elapsed > DIR_SELECT_LOCK_MS * 2 / 3)
+    if (elapsed > DIR_LOCK_MS * 2 / 3)
         DrawBandGlitch(dc, selected, elapsed, FxScale(7), gDirEnterKind + 43, 11);
-    int dissolve = Track(elapsed, DIR_SELECT_LOCK_MS - 100, DIR_SELECT_LOCK_MS);
+    int dissolve = Track(elapsed, DIR_LOCK_MS - 100, DIR_LOCK_MS);
     if (dissolve > 0)
         DrawScreenStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
                          820 * dissolve / 1000);
@@ -2385,113 +2385,543 @@ static void DrawDirectorySelectionExit(HDC dc, int width, int height, int elapse
              accent, gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
 
-// 디렉터리 진입 연출. 값이 전부 경과 시간의 함수라 리페인트와 겹쳐도 안전하다.
-#define DIR_BRANCH_MS 320   // 갈래를 보여 주고 나서 경로 타이핑이 시작된다
+// ---- 사각형 보간 -----------------------------------------------------------
+// 원래는 아래 플로피 삽입 연출 옆에 있었지만, 마운트 패널이 고른 카드에서 열려
+// 나오게 되고 디렉터리 도착 패널도 같은 식으로 열리면서 그보다 먼저 필요해져
+// 여기로 올렸다 (사본은 두지 않는다).
+static RECT LerpRect(const RECT& a, const RECT& b, int p) {
+    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
+                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
+}
+
+// ---------------------------------------------------------------------------
+// 디렉터리 진입 연출
+//
+// 예전에는 고른 카드가 잠기고 나면 패널 한 장이 열리고, 그 안에서 갈래 두 줄과
+// 경로 한 줄이 타이핑됐다. 런에서 여섯 번 있는 "어디로 들어갈 것인가"의 대답이
+// 글자 한 줄이었다는 뜻이다 - 진입한다고 적혀 있을 뿐 아무 데도 가지 않았다.
+//
+// 이제 판이 부모 디렉터리의 목록이 되고, 헤드가 고른 줄을 찾아 내려앉고, 그 줄이
+// 문처럼 열리고, 시점이 그 문 안으로 파고든다. 지나치는 겹에 적히는 것은 새로
+// 지어낸 글자가 아니라 지금 서 있는 자리다 - 볼륨 이름 · 상위 조각 · 고른 노드
+// 순서로 스쳐 가고, 마지막 겹이 화면을 삼키는 자리가 곧 도착이다.
+//
+//   잠금 0.36s  고른 카드가 경로로 잠기고 탈락한 카드가 닫힌다
+//   탐색 0.30s  판이 목록으로 갈리고 헤드가 고른 줄로 내려앉는다
+//   개방 0.28s  걸쇠가 풀리고 그 줄이 문처럼 열린다. 위아래 줄이 밀려난다
+//   통과 0.56s  문 → 겹 셋. 겹 하나에 0.14초씩 쓰고 배율이 같은 비율로 오른다
+//   안착 0.62s  도착한 디렉터리의 이름·효과·비용·대상이 한 줄씩 선다
+//   확정 0.24s  작업 디렉터리가 박히고 그 아래 전투판이 가운데부터 드러난다
+//
+// 시점에 DC 변환(마운트·삽입 연출의 카메라)을 쓰지 않는 이유는 하나다. 마지막
+// 겹에서 배율이 서른 배까지 오르는데 GDI의 테두리와 펜은 논리 단위라, 그 순간
+// 선 한 줄이 서른 px이 되고 글자는 화면보다 커진다. 굵기와 글꼴은 화면에 실리는
+// 크기로 골라야 하므로 여기서는 세계 좌표를 직접 옮긴다 (DirView).
+//
+// 모든 값은 경과 ms의 순수 함수이고 구간 경계는 ui.h가 쥐고 있다 (소리도 같은
+// 표를 본다). 판은 연출이 시작되기 전에 이미 전투 상태라 언제 건너뛰어도 같다.
+// ---------------------------------------------------------------------------
+
+#define DIR_TABLE_ROWS 7       // 목록에 서는 줄 수. 갈래 둘만 세우면 판이 아니라 버튼 두 개다
+#define DIR_ROW_H      38
+#define DIR_DOOR_H    176      // 다 열린 줄(문)의 높이
+#define DIR_WALL_STEP 2600     // 겹마다 좁아지는 비율 (천분율)
+#define DIR_WALL_FLAT  460     // 가장 안쪽 겹의 세로/가로 비. 납작한 슬롯이 통로로 펴진다
+
+// 배율이 붙으면 사각형이 캔버스의 수십 배로 커진다. 그리기 전에 물려 둔다 -
+// GDI가 알아서 잘라 주기는 하지만, 잘릴 것이 뻔한 자리를 계속 칠할 이유가 없다.
+static RECT DirClamp(const RECT& r) {
+    return MakeRect(r.left < -320 ? -320 : r.left, r.top < -320 ? -320 : r.top,
+                    r.right > BASE_WIDTH + 320 ? BASE_WIDTH + 320 : r.right,
+                    r.bottom > BASE_HEIGHT + 320 ? BASE_HEIGHT + 320 : r.bottom);
+}
+
+// ---- 경로 조각 -------------------------------------------------------------
+// 통과 구간의 겹마다 이름이 하나씩 적힌다. 그 이름은 지금 경로에서 온다.
+#define DIR_SEGMENT_MAX 8
+#define DIR_SEGMENT_CAP 24
+struct DirPath { wchar_t part[DIR_SEGMENT_MAX][DIR_SEGMENT_CAP]; int count; };
+
+static DirPath DirSplitPath(const wchar_t* path) {
+    DirPath out;
+    out.count = 0;
+    out.part[0][0] = 0;
+    int length = 0;
+    for (const wchar_t* p = path; ; ++p) {
+        if (*p && *p != L'\\') {
+            if (length < DIR_SEGMENT_CAP - 1) out.part[out.count][length++] = *p;
+            continue;
+        }
+        out.part[out.count][length] = 0;
+        // "C:\"가 남기는 빈 조각은 세지 않는다. 겹 하나가 비면 통과가 한 번 헛돈다.
+        if (length > 0 && out.count < DIR_SEGMENT_MAX - 1) {
+            ++out.count;
+            out.part[out.count][0] = 0;
+        }
+        length = 0;
+        if (!*p) break;
+    }
+    return out;
+}
+
+// ---- 시점 -----------------------------------------------------------------
+// 세계 좌표(선택 화면과 같은 캔버스 좌표)를 화면으로 옮긴다.
+struct DirView { int scale, cx, cy; };
+static int DirViewX(const DirView& v, int x) { return BASE_WIDTH / 2 + (x - v.cx) * v.scale / 1000; }
+static int DirViewY(const DirView& v, int y) { return BASE_HEIGHT / 2 + (y - v.cy) * v.scale / 1000; }
+static RECT DirViewRect(const DirView& v, const RECT& r) {
+    return MakeRect(DirViewX(v, r.left), DirViewY(v, r.top), DirViewX(v, r.right), DirViewY(v, r.bottom));
+}
+
+// ---- 목록 판의 자리 --------------------------------------------------------
+// 선택 화면의 카드 두 장이 차지하던 폭을 그대로 쓴다. 카드가 닫힌 자리에서
+// 목록이 서야 판이 바뀐 것이 아니라 같은 판이 갈린 것으로 읽힌다.
+static RECT DirTableRect() {
+    int top = 150, height = 46 + DIR_TABLE_ROWS * DIR_ROW_H + 16;
+    return MakeRect(LEGACY_X + 120, top, LEGACY_X + 1000, top + height);
+}
+
+// 고른 갈래가 앉는 줄. 목록 가운데에 흩어 두어야 판이 목록으로 읽힌다.
+static int DirChoiceRow(int index) {
+    int row = 1 + index * 3;
+    return row >= DIR_TABLE_ROWS ? DIR_TABLE_ROWS - 1 : row;
+}
+
+// 열림 정도(0~1000)에 따라 벌어진 줄. 고른 줄은 문이 되고 나머지는 위아래로 밀린다.
+static RECT DirRowRect(int row, int chosenRow, int open) {
+    RECT table = DirTableRect();
+    int grow = (DIR_DOOR_H - DIR_ROW_H) * open / 1000;
+    int top = table.top + 46 + row * DIR_ROW_H, height = DIR_ROW_H;
+    if (row < chosenRow) top -= grow / 2 + (chosenRow - row) * grow / 10;
+    else if (row > chosenRow) top += grow / 2 + (row - chosenRow) * grow / 10;
+    else { top -= grow / 2; height += grow; }
+    return MakeRect(table.left + 14, top, table.right - 14, top + height);
+}
+
+// ---- 통과 구간의 겹 --------------------------------------------------------
+// 겹 i의 세계 반폭. 문 안쪽으로 일정 비율씩 좁아진다.
+static int DirWallHalf(int doorHalf, int index) {
+    int half = doorHalf < 3 ? 3 : doorHalf;
+    for (int i = 0; i <= index; ++i) half = half * 1000 / DIR_WALL_STEP;
+    return half < 3 ? 3 : half;
+}
+
+// 세로는 덜 좁아진다. 문은 납작한 슬롯인데 같은 비율로 줄이면 안쪽 겹이 실보다
+// 가늘어진다 - 안으로 갈수록 네모꼴로 펴지면서 슬롯이 통로가 된다.
+static int DirWallHalfH(int doorHalfW, int doorHalfH, int index) {
+    if (doorHalfW < 1) return 3;
+    int flat = 1000 * doorHalfH / doorHalfW;
+    flat += (DIR_WALL_FLAT - flat) * (index + 1) / DIR_TUNNEL_DEPTH;
+    int half = DirWallHalf(doorHalfW, index) * flat / 1000;
+    return half < 3 ? 3 : half;
+}
+
+// 그 겹이 화면을 가득 채우는 배율. index < 0이면 문 자신이다. 통과 구간의 배율이
+// 전부 이 함수에서 나오므로, 겹의 비율을 바꿔도 마지막 겹은 언제나 도착에 맞는다.
+static int DirFillScale(int doorHalf, int index) {
+    int half = index < 0 ? (doorHalf < 3 ? 3 : doorHalf) : DirWallHalf(doorHalf, index);
+    return (BASE_WIDTH / 2 + 48) * 1000 / half;
+}
+
+static DirView DirViewAt(int t, const RECT& door) {
+    DirView view = {1000, BASE_WIDTH / 2, BASE_HEIGHT / 2};
+    if (t < DIR_DIVE_AT) return view;      // 탐색과 개방은 제자리에서 본다
+    int doorHalf = (door.right - door.left) / 2;
+    view.cx = (door.left + door.right) / 2;
+    view.cy = (door.top + door.bottom) / 2;
+    if (t >= DIR_LAND_AT) { view.scale = DirFillScale(doorHalf, DIR_TUNNEL_DEPTH - 1); return view; }
+    // 문과 겹 셋에 같은 시간을 쓰고, 구간마다 배율이 같은 비율로 오른다. 로그로
+    // 등속이라 속도가 일정하게 느껴지고, 겹을 지나치는 순간이 소리의 자리와 맞는다.
+    int p = Track(t, DIR_DIVE_AT, DIR_LAND_AT) * (DIR_TUNNEL_DEPTH + 1);
+    int step = p / 1000;
+    if (step > DIR_TUNNEL_DEPTH) step = DIR_TUNNEL_DEPTH;
+    int from = step == 0 ? 1000 : DirFillScale(doorHalf, step - 2);
+    view.scale = Lerp(from, DirFillScale(doorHalf, step - 1), p - step * 1000);
+    return view;
+}
+
+// ---- 목록 ------------------------------------------------------------------
+// 아직 판독하지 않은 항목. 이름이 헥스로 갈려 있고 칸마다 다른 주기로 튄다.
+static void DirNoiseEntry(int seed, wchar_t* out) {
+    static const wchar_t* const EXT[4] = {L"SYS", L"TMP", L"DAT", L"BIN"};
+    static const wchar_t* const HEX = L"0123456789ABCDEF";
+    wchar_t name[9];
+    for (int i = 0; i < 8; ++i) name[i] = HEX[Hash3(seed, i, 0x5A17) % 16u];
+    name[8] = 0;
+    wsprintfW(out, L"%s.%s", name, EXT[Hash3(seed, 3, 0x2B09) % 4u]);
+}
+
+// 부모 디렉터리의 목록. 고른 갈래 둘은 이름·위험도가 그대로 적히고 나머지 자리는
+// 판독하지 않은 항목이라 갈려 있다. 위로 가는 `..`은 잠겨 있다 - 되돌아갈 수
+// 없다는 규칙이 안내 문구가 아니라 목록에 적혀 있는 편이 낫다.
+static void DirDrawTable(HDC dc, const DirView& view, int t, int chosenRow, int open,
+                         COLORREF accent, uint32_t tick) {
+    RECT table = DirTableRect();
+    // 판의 위아래는 실제로 밀려난 줄에서 뽑는다. 여는 만큼만 늘리면 멀리 밀린
+    // 줄이 판 밖으로 흘러나온다 - 목록이 판을 뚫고 나온 것으로 보인다.
+    table.top = DirRowRect(0, chosenRow, open).top - 46;
+    table.bottom = DirRowRect(DIR_TABLE_ROWS - 1, chosenRow, open).bottom + 16;
+    RECT shown = DirClamp(DirViewRect(view, table));
+    if (shown.right - shown.left < 8 || shown.bottom - shown.top < 8) return;
+    Panel(dc, shown, RGB(10, 15, 21), MixColor(C_LINE, accent, 30));
+    int choiceCount = DirectoryChoiceCount(&gGame);
+    int plain = view.scale <= 1000;   // 글자는 제자리에서 볼 때만. 배율이 붙으면 줄은 띠가 된다
+    if (plain) {
+        wchar_t head[96];
+        Text(dc, table.left + 16, table.top + 12, L"DIRECTORY", C_GREEN, gFontSmall);
+        // 읽히지 않는 항목 수는 세어서 적는다. 갈래가 둘이 아닌 판에서도 머리글과
+        // 실제 줄이 어긋나지 않는다 (`..` 한 줄과 갈래를 뺀 나머지가 미판독이다).
+        wsprintfW(head, L"%d ENTRIES  ·  %d UNREAD", DIR_TABLE_ROWS, DIR_TABLE_ROWS - 1 - choiceCount);
+        TextRect(dc, MakeRect(table.left + 16, table.top + 12, table.right - 16, table.top + 34),
+                 head, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        Fill(dc, MakeRect(table.left + 14, table.top + 40, table.right - 14, table.top + 41), C_LINE);
+    }
+
+    int doorOpen = t >= DIR_OPEN_AT;
+    for (int row = 0; row < DIR_TABLE_ROWS; ++row) {
+        if (row == chosenRow && doorOpen) continue;    // 열린 뒤로는 문이 대신 선다
+        RECT world = DirRowRect(row, chosenRow, open);
+        RECT r = DirClamp(DirViewRect(view, world));
+        if (r.bottom <= 68 || r.top >= BASE_HEIGHT || r.right - r.left < 4) continue;
+        int appear = EaseOutCubic(Track(t, DIR_SEEK_AT + row * 22, DIR_SEEK_AT + row * 22 + 150));
+        if (appear <= 0) continue;
+        RECT bar = r;
+        bar.right = Lerp(r.left, r.right, appear);
+        int chosen = row == chosenRow;
+        Fill(dc, bar, chosen ? MixColor(RGB(13, 19, 26), accent, 14) : RGB(13, 19, 26));
+        Fill(dc, MakeRect(bar.left, bar.bottom - 1, bar.right, bar.bottom), RGB(20, 29, 38));
+        if (chosen && t > DIR_SEEK_AT + 100 + DIR_SEEK_TRAVEL_MS) Outline(dc, bar, accent, 2);
+        if (!plain) continue;
+        int saved = SaveDC(dc);
+        if (!saved) continue;
+        IntersectClipRect(dc, bar.left, bar.top, bar.right, bar.bottom);
+        int choice = -1;
+        for (int i = 0; i < choiceCount && i < DIRECTORY_CHOICE_COUNT; ++i)
+            if (DirChoiceRow(i) == row) choice = i;
+        wchar_t cell[128];
+        if (row == 0 && choice < 0) {
+            Text(dc, r.left + 16, r.top + 9, L"..", C_DIM, gFontSmall);
+            Text(dc, r.left + 300, r.top + 9, L"<UP>", C_DIM, gFontSmall);
+            TextRect(dc, MakeRect(r.left + 420, r.top + 9, r.right - 16, r.bottom),
+                     L"LOCKED · 되돌아갈 수 없습니다", RGB(122, 74, 74), gFontSmall, DT_LEFT | DT_SINGLELINE);
+        } else if (choice >= 0) {
+            const DirectoryNodeInfo* branch = DirectoryNodeInfoOrNull(gGame.directory.choices[choice].kind);
+            COLORREF tone = branch ? (COLORREF)branch->color : C_DIM;
+            wsprintfW(cell, L"<%s>", branch ? branch->segment : L"?");
+            Text(dc, r.left + 16, r.top + 9, cell, chosen ? tone : MixColor(C_DIM, tone, 45), gFontSmall);
+            Text(dc, r.left + 300, r.top + 9, L"<DIR>", chosen ? C_TEXT : C_DIM, gFontSmall);
+            if (branch) {
+                wsprintfW(cell, L"RISK %s", DIRECTORY_RISK_NAMES[branch->risk]);
+                Text(dc, r.left + 420, r.top + 9, cell, chosen ? tone : MixColor(C_DIM, tone, 35), gFontSmall);
+            }
+            // 헤드가 앉고 나면 ENTER가 깜빡인다. 이 구간은 읽으라고 세워 둔 시간이라
+            // 화면이 통째로 멎는데, 깜빡이는 자리가 하나는 있어야 판이 살아 있다.
+            int blink = !chosen || t < DIR_SEEK_AT + 100 + DIR_SEEK_TRAVEL_MS || ((t / 240) & 1);
+            TextRect(dc, MakeRect(r.left + 560, r.top + 9, r.right - 16, r.bottom),
+                     chosen ? L"ENTER" : L"NOT TAKEN",
+                     chosen ? (blink ? accent : MixColor(C_BG, accent, 38)) : C_DIM, gFontSmall,
+                     DT_RIGHT | DT_SINGLELINE);
+        } else {
+            DirNoiseEntry(row * 37 + gGame.floor * 11 + gGame.encounter, cell);
+            DrawGlitchLine(dc, r.left + 16, r.top + 9, cell, RGB(46, 58, 66), MixColor(C_BG, accent, 40),
+                           gFontSmall, row * 13 + 5, tick);
+            Text(dc, r.left + 300, r.top + 9, L"<DIR>", RGB(46, 58, 66), gFontSmall);
+            wsprintfW(cell, L"%5u B", (unsigned)(Hash3(row, 9, 0x33) % 4096u + 512u));
+            TextRect(dc, MakeRect(r.left + 560, r.top + 9, r.right - 16, r.bottom),
+                     cell, RGB(46, 58, 66), gFontSmall, DT_RIGHT | DT_SINGLELINE);
+        }
+        RestoreDC(dc, saved);
+    }
+}
+
+// ---- 헤드 -----------------------------------------------------------------
+// 목록을 훑고 고른 줄에 내려앉는다. 어느 줄이 열릴 것인지를 문이 열리기 전에
+// 손가락으로 짚어 주는 일이라, 개방이 시작되면 곧바로 사라진다.
+static void DirDrawHead(HDC dc, const DirView& view, int t, int chosenRow, COLORREF accent) {
+    if (t >= DIR_OPEN_AT) return;
+    RECT first = DirRowRect(0, chosenRow, 0), target = DirRowRect(chosenRow, chosenRow, 0);
+    // 목록이 다 찍힌 뒤에 움직이기 시작해서 DIR_SEEK_TRAVEL_MS 안에 앉는다.
+    // 탐색 구간의 남은 시간은 통째로 고른 줄을 읽는 시간이다.
+    int seek = EaseOutBack(Track(t, DIR_SEEK_AT + 160, DIR_SEEK_AT + 160 + DIR_SEEK_TRAVEL_MS));
+    // 줄의 윗변에 앉는다. 가운데로 지나가면 헤드가 이름을 그어 버려서, 무엇을
+    // 짚었는지 읽으라고 세워 둔 줄을 정작 헤드가 가린다.
+    int y = Lerp(first.top - 1, target.top - 1, seek);
+    RECT table = DirTableRect();
+    RECT band = DirClamp(DirViewRect(view, MakeRect(table.left + 6, y - 2, table.right - 6, y + 2)));
+    Fill(dc, band, MixColor(C_BG, accent, 70));
+    for (int i = 0; i < 4; ++i) {
+        int x = band.left - 14 - i * 9, x2 = band.right + 14 + i * 9;
+        COLORREF tone = MixColor(C_BG, accent, 60 - i * 12);
+        Fill(dc, MakeRect(x - 4, band.top - 3 + i, x, band.bottom + 3 - i), tone);
+        Fill(dc, MakeRect(x2, band.top - 3 + i, x2 + 4, band.bottom + 3 - i), tone);
+    }
+}
+
+// ---- 문 -------------------------------------------------------------------
+static void DirDrawDoor(HDC dc, const DirView& view, int t, int chosenRow, int open,
+                        COLORREF accent, const wchar_t* segment) {
+    RECT world = DirRowRect(chosenRow, chosenRow, open);
+    RECT frame = DirClamp(DirViewRect(view, world));
+    if (frame.right - frame.left < 4 || frame.bottom - frame.top < 4) return;
+    Fill(dc, frame, RGB(4, 6, 9));          // 문 안쪽. 통과 구간의 겹이 여기에 선다
+    int lip = view.scale > 3000 ? 6 : view.scale > 1400 ? 4 : 2;
+    Fill(dc, MakeRect(frame.left, frame.top, frame.right, frame.top + lip), MixColor(C_BG, accent, 80));
+    Fill(dc, MakeRect(frame.left, frame.bottom - lip, frame.right, frame.bottom), MixColor(C_BG, accent, 80));
+    if (view.scale > 1000) return;
+    // 걸쇠. 문짝이 벌어지기 시작하면 위아래로 빠진다
+    int latch = EaseOutCubic(Track(t, DIR_OPEN_AT, DIR_OPEN_AT + 130));
+    int cy = (frame.top + frame.bottom) / 2;
+    for (int i = 0; i < 2; ++i) {
+        int x = i ? frame.right - 26 : frame.left + 10, dy = 13 * latch / 1000;
+        COLORREF tone = MixColor(C_LINE, accent, 60 * (1000 - latch) / 1000);
+        Fill(dc, MakeRect(x, cy - 9 - dy, x + 16, cy - 2 - dy), tone);
+        Fill(dc, MakeRect(x, cy + 2 + dy, x + 16, cy + 9 + dy), tone);
+    }
+    // 문짝이 절반쯤 벌어질 때까지 줄에 적혀 있던 이름이 남는다. 열리자마자 지우면
+    // 방금 고른 줄이 무엇이었는지가 한 프레임 만에 사라진다.
+    if (open < 850) {
+        wchar_t label[64];
+        wsprintfW(label, L"<%s>", segment);
+        int fade = 100 - 76 * open / 850;
+        RECT line = MakeRect(frame.left + 16, frame.top, frame.right - 16, frame.top + DIR_ROW_H);
+        TextRect(dc, line, label, MixColor(C_BG, accent, fade), gFontSmall, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        TextRect(dc, line, L"OPEN", MixColor(C_BG, accent, fade * 7 / 10), gFontSmall,
+                 DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+// ---- 통과 -----------------------------------------------------------------
+// 문 안쪽에 겹 셋이 서고 벽선이 그 사이를 잇는다. 겹마다 지금 서 있는 자리의
+// 이름이 하나씩 적혀 있어, 통과가 곧 경로를 읽는 일이 된다.
+static void DirDrawTunnel(HDC dc, const DirView& view, int t, int chosenRow, int open,
+                          const wchar_t* const* wall, COLORREF accent) {
+    RECT world = DirRowRect(chosenRow, chosenRow, open);
+    RECT mouth = DirClamp(DirViewRect(view, world));
+    if (mouth.right - mouth.left < 8 || mouth.bottom - mouth.top < 8) return;
+    int saved = SaveDC(dc);
+    if (!saved) return;
+    IntersectClipRect(dc, mouth.left, mouth.top < 68 ? 68 : mouth.top, mouth.right, mouth.bottom);
+    int doorHalfW = (world.right - world.left) / 2, doorHalfH = (world.bottom - world.top) / 2;
+    int cx = DirViewX(view, (world.left + world.right) / 2);
+    int cy = DirViewY(view, (world.top + world.bottom) / 2);
+    // 소실점의 빛. 겹이 다 지나간 뒤에도 안쪽이 비어 보이지 않게 한다
+    int glow = 8 + 26 * Track(t, DIR_OPEN_AT, DIR_LAND_AT) / 1000;
+    int glowW = DirWallHalf(doorHalfW, DIR_TUNNEL_DEPTH - 1) * view.scale / 1000;
+    int glowH = DirWallHalfH(doorHalfW, doorHalfH, DIR_TUNNEL_DEPTH - 1) * view.scale / 1000;
+    for (int i = 3; i >= 0; --i)
+        Fill(dc, DirClamp(MakeRect(cx - glowW * (4 - i) / 5, cy - glowH * (4 - i) / 5,
+                                   cx + glowW * (4 - i) / 5, cy + glowH * (4 - i) / 5)),
+             MixColor(RGB(4, 6, 9), accent, glow * (4 - i) / 8));
+    RECT outer = MakeRect(cx - doorHalfW * view.scale / 1000, cy - doorHalfH * view.scale / 1000,
+                          cx + doorHalfW * view.scale / 1000, cy + doorHalfH * view.scale / 1000);
+    for (int i = 0; i < DIR_TUNNEL_DEPTH; ++i) {
+        int halfW = DirWallHalf(doorHalfW, i) * view.scale / 1000;
+        int halfH = DirWallHalfH(doorHalfW, doorHalfH, i) * view.scale / 1000;
+        RECT frame = MakeRect(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
+        COLORREF wallTone = MixColor(RGB(4, 6, 9), accent, 12 + 16 * (DIR_TUNNEL_DEPTH - i) / DIR_TUNNEL_DEPTH);
+        DrawLine(dc, outer.left, outer.top, frame.left, frame.top, wallTone, 1);
+        DrawLine(dc, outer.right, outer.top, frame.right, frame.top, wallTone, 1);
+        DrawLine(dc, outer.left, outer.bottom, frame.left, frame.bottom, wallTone, 1);
+        DrawLine(dc, outer.right, outer.bottom, frame.right, frame.bottom, wallTone, 1);
+        // 벽의 이음매. 통로가 지나가는 속도는 이 눈금이 말한다
+        for (int k = 1; k < 4; ++k) {
+            RECT seam = LerpRect(outer, frame, k * 1000 / 4);
+            COLORREF seamTone = MixColor(RGB(4, 6, 9), accent, 10 + 8 * k);
+            Fill(dc, DirClamp(MakeRect(seam.left, seam.top, seam.left + 2, seam.bottom)), seamTone);
+            Fill(dc, DirClamp(MakeRect(seam.right - 2, seam.top, seam.right, seam.bottom)), seamTone);
+        }
+        if (halfW < BASE_WIDTH * 2) {
+            int thick = halfW > 620 ? 4 : halfW > 240 ? 3 : halfW > 90 ? 2 : 1;
+            Outline(dc, DirClamp(frame), MixColor(RGB(4, 6, 9), accent, 34 + i * 12), thick);
+        }
+        // 이름. 겹이 읽을 만한 크기일 때만, 그 크기에 맞는 글꼴로 선다
+        if (halfW >= 86 && halfW < BASE_WIDTH) {
+            HFONT font = halfW < 200 ? gFontSmall : halfW < 420 ? gFontMedium
+                       : halfW < 900 ? gFontLarge : gFontHuge;
+            int line = halfW < 200 ? 22 : halfW < 420 ? 30 : halfW < 900 ? 44 : 74;
+            int fade = halfW > 900 ? 100 - 60 * (halfW - 900) / (BASE_WIDTH - 900) : 100;
+            TextRect(dc, MakeRect(frame.left, frame.top + line / 3, frame.right, frame.top + line / 3 + line),
+                     wall[i], MixColor(RGB(4, 6, 9), accent, fade), font, DT_CENTER | DT_SINGLELINE);
+        }
+        outer = frame;
+    }
+    // 지나쳐 흐르는 데이터. 통과하는 동안에만 나오고 연출 강도를 따른다
+    if (FxDecorOn() && t >= DIR_DIVE_AT) {
+        int count = FxScale(16), run = Track(t, DIR_DIVE_AT, DIR_LAND_AT);
+        for (int i = 0; i < count; ++i) {
+            uint32_t h = Hash3(i, 7, 0x5109);
+            int angle = (int)(h % 3600u), p = (run * 3 + (int)((h >> 12) % 1000u)) % 1000;
+            int r0 = 30 + 1180 * p / 1000, r1 = r0 + 26 + 150 * p / 1000;
+            COLORREF tone = MixColor(RGB(4, 6, 9), accent, 18 + 46 * (1000 - p) / 1000);
+            DrawLine(dc, cx + CosMille(angle) * r0 / 1000, cy + SinMille(angle) * r0 / 1000,
+                     cx + CosMille(angle) * r1 / 1000, cy + SinMille(angle) * r1 / 1000, tone, p > 600 ? 2 : 1);
+        }
+    }
+    RestoreDC(dc, saved);
+}
+
+// ---- 안착 -----------------------------------------------------------------
+// 도착한 디렉터리. 카드에 적혀 있던 것이 이번에는 작업 디렉터리의 내용으로 선다.
+static void DirDrawArrival(HDC dc, int t, const DirectoryNodeInfo* info, const wchar_t* path,
+                           COLORREF accent, uint32_t tick) {
+    int since = t - DIR_LAND_AT;
+    RECT panel = MakeRect(LEGACY_X + 120, 150, LEGACY_X + 1000, 578);
+    int mid = (panel.top + panel.bottom) / 2;
+    RECT slit = MakeRect(panel.left + 90, mid - 4, panel.right - 90, mid + 4);
+    RECT shown = LerpRect(slit, panel, EaseOutCubic(Track(since, 0, 200)));
+    Panel(dc, shown, RGB(11, 16, 22), accent);
+    int saved = SaveDC(dc);
+    if (!saved) return;
+    IntersectClipRect(dc, shown.left + 1, shown.top + 1, shown.right - 1, shown.bottom - 1);
+
+    wchar_t b[192];
+    wsprintfW(b, L"<%s>", info->segment);
+    Text(dc, panel.left + 28, panel.top + 18, b, accent, gFontLarge);
+    COLORREF riskColor = info->risk == DIR_RISK_LOW ? C_GREEN : info->risk == DIR_RISK_MEDIUM ? C_YELLOW : C_RED;
+    wsprintfW(b, L"RISK %s · 위험 %s · 분류 %s", DIRECTORY_RISK_NAMES[info->risk],
+              DIRECTORY_RISK_LABELS[info->risk], DIRECTORY_CATEGORY_NAMES[info->category]);
+    TextRect(dc, MakeRect(panel.left + 300, panel.top + 30, panel.right - 28, panel.top + 56),
+             b, riskColor, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    Fill(dc, MakeRect(panel.left + 26, panel.top + 74, panel.right - 26, panel.top + 75), C_LINE);
+
+    // 작업 디렉터리. 확정 구간에 도장이 박히는 자리도 이 줄이다
+    wchar_t prompt[128] = L"> ";
+    lstrcpynW(prompt + 2, path, 120);
+    if (t < DIR_SEAL_AT && ((since / 240) & 1)) lstrcatW(prompt, L"_");
+    TextRect(dc, MakeRect(panel.left + 28, panel.top + 86, panel.right - 28, panel.top + 126),
+             prompt, accent, gFontMedium, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // 세 줄. 하나씩 밀려들어와 앉고, 앉는 순간 앞의 칸이 채워진다
+    static const wchar_t* const LABEL[3] = {L"효과", L"비용", L"대상"};
+    wchar_t target[128];
+    int next = ScheduledMobKind(&gGame);
+    if (next >= 0) {
+        wchar_t code[32]; DirectoryCodeText(next, code, 32);
+        wsprintfW(target, L"%s  ·  보상 %s · 면 후보 %d개", code,
+                  info->rewardTier ? L"강화 TUNED" : L"표준 STANDARD", info->rewardChoices);
+    } else lstrcpynW(target, L"이번 구역의 프로세스", 128);
+    const wchar_t* value[3] = {info->effect, info->cost, target};
+    COLORREF valueColor[3] = {C_TEXT, C_DIM, C_BLUE};
+    for (int i = 0; i < 3; ++i) {
+        int at = 90 + i * 75, land = EaseOutCubic(Track(since, at, at + 150));
+        if (land <= 0) continue;
+        int y = panel.top + 140 + i * 66, slide = 22 * (1000 - land) / 1000;
+        RECT mark = MakeRect(panel.left + 30, y + 6, panel.left + 44, y + 20);
+        Fill(dc, mark, MixColor(RGB(11, 16, 22), accent, 30 + 70 * land / 1000));
+        Outline(dc, MakeRect(mark.left - 3, mark.top - 3, mark.right + 3, mark.bottom + 3),
+                MixColor(C_LINE, accent, 60), 1);
+        Text(dc, panel.left + 60 + slide, y + 4, LABEL[i],
+             MixColor(RGB(11, 16, 22), i == 1 ? C_RED : C_GREEN, 40 + 60 * land / 1000), gFontSmall);
+        TextRect(dc, MakeRect(panel.left + 150 + slide, y, panel.right - 28, y + 56), value[i],
+                 MixColor(RGB(11, 16, 22), valueColor[i], 30 + 70 * land / 1000), gFontSmall, DT_WORDBREAK);
+        if (land < 1000 && FxDecorOn())
+            DrawPulseFrame(dc, mark, FxScale(2 + 10 * (1000 - land) / 1000), 2, MixColor(C_BG, accent, 60));
+    }
+
+    // 판독 띠. 도착 직후에는 아직 갈려 있다가 전투 직전에 확정으로 선다
+    RECT band = MakeRect(panel.left + 28, panel.bottom - 96, panel.right - 28, panel.bottom - 56);
+    Panel(dc, band, RGB(8, 13, 19), C_LINE);
+    RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
+    int settle = Track(since, 140, 420);
+    DrawSectorStatic(dc, inner, gDirEnterKind + 3, (int)(tick / NOISE_CHURN_MS), 820 * (1000 - settle) / 1000);
+    DrawScanlines(dc, inner);
+    if (settle > 640)
+        TextRect(dc, inner, L"HANDLE RESOLVED  ·  다음 프로세스와 교전합니다",
+                 MixColor(RGB(8, 13, 19), accent, 100 * (settle - 640) / 360), gFontSmall,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(panel.left + 28, panel.bottom - 44, panel.right - 28, panel.bottom - 20),
+             L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기", C_DIM, gFontSmall,
+             DT_CENTER | DT_SINGLELINE);
+
+    // 확정. 작업 디렉터리가 박히고 테두리가 한 번 울린다
+    if (t >= DIR_SEAL_AT) {
+        int seal = Track(t, DIR_SEAL_AT, DIR_SEAL_AT + 150);
+        RECT stamp = MakeRect(panel.right - 176, panel.top + 86, panel.right - 28, panel.top + 120);
+        Fill(dc, stamp, RGB(6, 10, 15));
+        Outline(dc, stamp, accent, 2);
+        TextRect(dc, stamp, L"CWD SET", accent, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (seal < 1000)
+            DrawPulseFrame(dc, panel, FxScale(3 + 16 * (1000 - seal) / 1000), 3, MixColor(C_BG, accent, 70));
+    }
+    RestoreDC(dc, saved);
+}
 
 static void DrawDirectoryEnter(HDC dc, int width, int height) {
     const DirectoryNodeInfo* info = DirectoryNodeInfoOrNull(gDirEnterKind);
     if (!info) return;
-    int totalElapsed = (int)(GetTickCount() - gDirEnterStart);
-    if (totalElapsed < 0) totalElapsed = 0; if (totalElapsed > DIR_ENTER_MS) totalElapsed = DIR_ENTER_MS;
-    if (totalElapsed < DIR_SELECT_LOCK_MS) {
-        DrawDirectorySelectionExit(dc, width, height, totalElapsed);
+    uint32_t tick = GetTickCount();
+    int t = (int)(tick - gDirEnterStart);
+    if (t < 0) t = 0;
+    if (t > DIR_ENTER_MS) t = DIR_ENTER_MS;
+    if (t < DIR_LOCK_MS) { DrawDirectorySelectionExit(dc, width, height, t); return; }
+
+    COLORREF accent = (COLORREF)info->color;
+    RECT stage = MakeRect(0, 68, width, height);
+    int chosenRow = DirChoiceRow(gDirEnterChoiceIndex < 0 ? 0 : gDirEnterChoiceIndex);
+    int open = EaseOutCubic(Track(t, DIR_OPEN_AT, DIR_DIVE_AT));
+    DirView view = DirViewAt(t, DirRowRect(chosenRow, chosenRow, open));
+
+    wchar_t path[96];
+    FormatCurrentDirectory(&gGame, path, 96);
+
+    if (t < DIR_LAND_AT) {
+        DirPath split = DirSplitPath(path);
+        const DriveInfo* drive = &DRIVE_INFO[gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive];
+        // 겹에 적히는 이름. 밖에서 안으로 볼륨 · 상위 조각 · 고른 노드다. 경로가
+        // 짧은 1층에서도 겹 수가 흔들리지 않도록 가장 바깥은 볼륨 이름이 맡는다.
+        const wchar_t* wall[DIR_TUNNEL_DEPTH];
+        wall[0] = drive->label;
+        wall[1] = split.count >= 2 ? split.part[split.count - 2] : drive->letter;
+        wall[2] = split.count >= 1 ? split.part[split.count - 1] : info->segment;
+
+        // 배율이 붙으면 목록도 문도 캔버스보다 커진다. 판 위쪽의 머리글(체력·용량)은
+        // 어느 연출에서도 덮이지 않아야 하므로 무대에 물려 두고 그린다.
+        int stageSaved = SaveDC(dc);
+        if (!stageSaved) return;
+        IntersectClipRect(dc, stage.left, stage.top, stage.right, stage.bottom);
+        Fill(dc, stage, RGB(6, 9, 13));
+        DirDrawTable(dc, view, t, chosenRow, open, accent, tick);
+        if (t >= DIR_OPEN_AT) {
+            DirDrawDoor(dc, view, t, chosenRow, open, accent, info->segment);
+            DirDrawTunnel(dc, view, t, chosenRow, open, wall, accent);
+        }
+        DirDrawHead(dc, view, t, chosenRow, accent);
+        // 잠금 구간의 노이즈가 남아 있다가 목록이 서면서 걷힌다
+        int tail = 1000 - Track(t, DIR_SEEK_AT, DIR_SEEK_AT + 160);
+        if (tail > 0) DrawScreenStatic(dc, stage, (int)(tick / NOISE_CHURN_MS), 820 * tail / 1000);
+        if (t < DIR_OPEN_AT) {
+            wchar_t parent[96];
+            lstrcpynW(parent, path, 96);
+            for (int i = lstrlenW(parent) - 1; i > 0; --i)
+                if (parent[i] == L'\\') { parent[i] = 0; break; }
+            RECT table = DirTableRect();
+            Text(dc, table.left, table.top - 34, L"상위 목록 판독", C_GREEN, gFontSmall);
+            TextRect(dc, MakeRect(table.left + 170, table.top - 36, table.right, table.top - 12),
+                     parent, C_DIM, gFontSmall, DT_LEFT | DT_SINGLELINE);
+        }
+        RestoreDC(dc, stageSaved);
         return;
     }
-    int elapsed = totalElapsed - DIR_SELECT_LOCK_MS;
-    int enterMs = DIR_ENTER_MS - DIR_SELECT_LOCK_MS;
-    Fill(dc, MakeRect(0, 68, width, height), RGB(6, 9, 13));
-    RECT panel = MakeRect(200, 206, width - 200, height - 206);
-    Panel(dc, panel, C_PANEL, (COLORREF)info->color);
-    Text(dc, panel.left + 24, panel.top + 16, L"디렉터리 진입", C_GREEN, gFontMedium);
 
-    // 어느 갈래를 골랐는지 먼저 보여 준다. 고르지 않은 쪽은 어두워지고,
-    // 작은 패킷이 고른 경로로 건너간 뒤에야 경로가 타이핑되기 시작한다.
-    wchar_t base[96];
-    FormatCurrentDirectory(&gGame, base, 96);
-    // 선택은 이미 확정된 뒤라 현재 경로에 고른 조각이 들어 있다. 갈래를 보여
-    // 주는 줄에는 그 조각을 떼어 낸 부모 경로를 적어야 트리가 성립한다.
-    wchar_t parent[96];
-    lstrcpynW(parent, base, 96);
-    for (int i = lstrlenW(parent) - 1; i > 0; --i)
-        if (parent[i] == L'\\') { parent[i + 1] = 0; break; }
-    Text(dc, panel.left + 24, panel.top + 48, parent, C_DIM, gFontSmall);
-    int count = gGame.directory.choiceCount;
-    if (count > DIRECTORY_CHOICE_COUNT) count = DIRECTORY_CHOICE_COUNT;
-    int rowTop = panel.top + 72;
-    for (int i = 0; i < count; ++i) {
-        int kind = gGame.directory.choices[i].kind;
-        const DirectoryNodeInfo* branch = DirectoryNodeInfoOrNull(kind);
-        if (!branch) continue;
-        int chosen = kind == gDirEnterKind;
-        RECT row = MakeRect(panel.left + 44, rowTop + i * 30, panel.left + 300, rowTop + i * 30 + 26);
-        COLORREF tone = chosen ? (COLORREF)branch->color : RGB(52, 62, 70);
-        Text(dc, panel.left + 24, row.top + 4, i + 1 == count ? L"└" : L"├", tone, gFontSmall);
-        TextRect(dc, row, branch->name, tone, gFontSmall, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (!chosen) continue;
-        Outline(dc, MakeRect(row.left - 6, row.top - 2, row.right, row.bottom + 2), tone, 1);
-        // 패킷이 고른 갈래를 따라 들어갔다가 도착과 함께 사라진다. 도착한 뒤에도
-        // 남아 있으면 아무 데도 가지 않는 점 하나가 화면에 붙어 있게 된다.
-        if (elapsed >= DIR_BRANCH_MS) continue;
-        int travel = elapsed * 1000 / DIR_BRANCH_MS;
-        int x = row.left - 24 + (row.right + 16 - (row.left - 24)) * travel / 1000;
-        Fill(dc, MakeRect(x - 6, (row.top + row.bottom) / 2 - 3, x + 6, (row.top + row.bottom) / 2 + 3), tone);
+    // 마지막 겹이 화면을 삼킨 자리에서 도착 판이 열린다. 확정 구간에는 그 판이
+    // 가운데부터 걷히고, 아래에 이미 그려져 있는 전투판이 그대로 드러난다.
+    int wipe = t >= DIR_SEAL_AT ? EaseOutCubic(Track(t, DIR_SEAL_AT, DIR_ENTER_MS)) : 0;
+    int mid = (stage.top + stage.bottom) / 2, gap = (stage.bottom - stage.top) * wipe / 2000;
+    int saved = SaveDC(dc);
+    if (!saved) return;
+    if (gap > 0) ExcludeClipRect(dc, stage.left, mid - gap, stage.right, mid + gap);
+    // 마지막 겹이 화면을 삼킨 자리의 섬광. 덮개가 아니라 바탕색 자체를 밝게
+    // 깔았다가 제곱으로 식힌다 - 알파가 없는 덮개로 옅게 깔면 그 순간 화면이
+    // 가로줄 무늬가 되고, 도착 판까지 같이 갈린다.
+    int flash = 1000 - Track(t, DIR_LAND_AT, DIR_LAND_AT + 150);
+    Fill(dc, stage, flash > 0 ? MixColor(RGB(6, 9, 13), MixColor(accent, C_TEXT, 55), flash * flash / 10000)
+                              : RGB(6, 9, 13));
+    DirDrawArrival(dc, t, info, path, accent, tick);
+    RestoreDC(dc, saved);
+    if (gap > 0 && wipe < 1000) {
+        Fill(dc, MakeRect(stage.left, mid - gap - 2, stage.right, mid - gap + 1), MixColor(C_BG, accent, 78));
+        Fill(dc, MakeRect(stage.left, mid + gap - 1, stage.right, mid + gap + 2), MixColor(C_BG, accent, 78));
     }
-
-    wchar_t here[96];
-    lstrcpynW(here, base, 96);
-    int length = lstrlenW(here);
-    int typing = elapsed - DIR_BRANCH_MS;
-    int typed = typing <= 0 ? 0 : typing * length / (enterMs * 2 / 5);
-    if (typed > length) typed = length;
-    wchar_t typedText[104] = L"> ";
-    lstrcpynW(typedText + 2, here, typed + 1);
-    if (typed < length && ((elapsed / 200) & 1)) lstrcatW(typedText, L"_");
-    TextRect(dc, MakeRect(panel.left + 24, panel.top + 142, panel.right - 24, panel.top + 190),
-        typedText, (COLORREF)info->color, gFontLarge, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    RECT band = MakeRect(panel.left + 24, panel.top + 196, panel.right - 24, panel.top + 236);
-    Panel(dc, band, RGB(8, 13, 19), C_LINE);
-    RECT inner = MakeRect(band.left + 2, band.top + 2, band.right - 2, band.bottom - 2);
-    DrawSectorStatic(dc, inner, gDirEnterKind + 3, elapsed / NOISE_CHURN_MS, 200 + 700 - elapsed * 700 / enterMs);
-    DrawScanlines(dc, inner);
-
-    // 고른 갈래가 실제 핸들로 연결되는 순간. 카드 잠금 뒤에도 신호의 방향이
-    // 이어져 선택 → 경로 → 전투의 관계가 한 동작으로 보인다.
-    int chosenRow = gDirEnterChoiceIndex;
-    if (chosenRow < 0 || chosenRow >= count) chosenRow = 0;
-    POINT routeFrom = {panel.left + 304, rowTop + chosenRow * 30 + 13};
-    POINT routeTo = {panel.right - 34, band.top + 20};
-    int routeProgress = EaseOutCubic(Track(elapsed, 80, DIR_BRANCH_MS + 170));
-    DrawSignalPath(dc, routeFrom, routeTo, panel.top + 132, routeProgress, 5,
-                   (COLORREF)info->color, 12, 1);
-    int impact = Track(elapsed, DIR_BRANCH_MS, DIR_BRANCH_MS + 170);
-    if (impact > 0) {
-        DrawPulseFrame(dc, band, FxScale(3 + 14 * (1000 - impact) / 1000), 3, (COLORREF)info->color);
-        if (elapsed < DIR_BRANCH_MS + 260)
-            DrawPixelBurst(dc, routeTo.x, routeTo.y, elapsed - DIR_BRANCH_MS, 260,
-                           FxScale(20), gDirEnterKind * 9 + 5, (COLORREF)info->color);
-    }
-
-    int sweep = Track(elapsed, 0, 260);
-    if (sweep < 1000) {
-        int y = Lerp(panel.top + 2, panel.bottom - 2, EaseOutCubic(sweep));
-        DrawScreenStatic(dc, MakeRect(0, 68, width, height), elapsed / NOISE_CHURN_MS,
-                         820 * (1000 - sweep) / 1000);
-        Fill(dc, MakeRect(panel.left + 2, y - 2, panel.right - 2, y + 2), (COLORREF)info->color);
-    }
-
-    wchar_t b[160];
-    wsprintfW(b, L"%s  ·  %s", info->effect, info->cost);
-    TextRect(dc, MakeRect(panel.left + 24, panel.top + 246, panel.right - 24, panel.bottom - 44), b, C_TEXT, gFontSmall, DT_WORDBREAK);
-    TextRect(dc, MakeRect(panel.left + 24, panel.bottom - 38, panel.right - 24, panel.bottom - 16),
-        L"잠시 후 전투가 시작됩니다 · 클릭이나 키로 바로 넘기기", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-}
-
-// 사각형 보간. 원래는 아래 플로피 삽입 연출 옆에 있었지만, 마운트 패널이 고른
-// 카드에서 열려 나오게 되면서 그보다 먼저 필요해져 여기로 올렸다 (사본은 두지 않는다).
-static RECT LerpRect(const RECT& a, const RECT& b, int p) {
-    return MakeRect(Lerp(a.left, b.left, p), Lerp(a.top, b.top, p),
-                    Lerp(a.right, b.right, p), Lerp(a.bottom, b.bottom, p));
 }
 
 // ---- 볼륨 마운트 / 층 하강 연출 --------------------------------------------

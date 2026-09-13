@@ -1004,3 +1004,9 @@ KEYB 재굴림 (상주 프로그램 설치 시)	KEYB reroll (when installed)
 이번 실행 · 가한 피해	DAMAGE DEALT THIS TURN
 이번 실행 · 받은 피해	DAMAGE TAKEN THIS TURN
 남은 체력	HP REMAINING
+상위 목록 판독	Reading parent listing
+LOCKED · 되돌아갈 수 없습니다	LOCKED · no way back
+RISK %s · 위험 %s · 분류 %s	RISK %s · THREAT %s · CLASS %s
+HANDLE RESOLVED · 다음 프로세스와 교전합니다	HANDLE RESOLVED · engaging the next process
+%s  ·  보상 %s · 면 후보 %d개	%s  ·  REWARD %s · %d face candidates
+이번 구역의 프로세스	The process in this sector

@@ -20,9 +20,51 @@ static const int SCALE_OPTIONS[SETTINGS_SCALE_COUNT] = {75, 100, 125, 150, 200};
 #define REWARD_REPAIR 3
 
 #define COMBAT_CLEAR_MS 1900
-#define DIR_SELECT_LOCK_MS 360 // 고른 디렉터리 카드가 경로로 수렴하는 구간
-#define DIR_ENTER_MS 1460      // 카드 잠금 + 디렉터리 라우팅/진입 전체 길이
 #define NOISE_CHURN_MS 45      // 노이즈가 다시 섞이는 주기
+
+// ---- 디렉터리 진입 연출 ----------------------------------------------------
+// 예전에는 고른 카드가 잠기고(0.36초) 패널 한 장이 열려 경로 한 줄이 타이핑되면
+// 끝이었다(1.46초). 층마다 두 번, 런에서 여섯 번 있는 "어디로 들어갈 것인가"의
+// 대답이 글자 한 줄이었다는 뜻이다 - 진입한다고 적혀 있을 뿐 아무 데도 가지
+// 않았다. 이제 판이 부모 디렉터리의 목록이 되고, 헤드가 고른 줄을 찾아 앉고,
+// 그 줄이 문처럼 열리고, 시점이 그 문 안으로 파고들어 경로를 한 겹씩 지나친다.
+//
+//   잠금  고른 카드가 경로로 잠기고 탈락한 카드가 닫힌다
+//   탐색  판이 목록으로 갈리고 헤드가 고른 줄로 내려앉는다
+//   개방  걸쇠가 풀리고 그 줄이 문처럼 열린다
+//   통과  문과 겹 셋을 지난다. 겹 하나가 경로 조각 하나다
+//   안착  도착한 디렉터리의 이름·효과·비용·대상이 한 줄씩 선다
+//   확정  작업 디렉터리가 박히고 전투판이 가운데부터 드러난다
+//
+// 그리기(screens.cpp)와 소리(main.cpp)가 같은 경계를 봐야 한다. 통과 구간은
+// 문까지 넷으로 나뉘므로(DIR_TUNNEL_DEPTH + 1) 겹을 지나치는 순간과 그 소리가
+// 같은 식에서 나온다.
+//
+// 길이는 읽는 시간이 정한다 (마운트가 쓰는 규칙과 같다). 처음 짰을 때는 2.36초
+// 였는데, 목록이 다 찍히자마자 문이 열리고 겹의 이름이 0.14초 만에 지나가고
+// 도착한 줄이 다 앉기도 전에 판이 걷혔다 - 글자를 세워 놓고 읽을 틈을 주지
+// 않았다는 뜻이다. 그래서 세 구간에 읽는 시간을 세워 뒀다.
+//
+//   탐색  목록이 다 찍히고(0.28초) 헤드가 앉은 뒤(DIR_SEEK_TRAVEL_MS) 고른 줄이 선 채로 멎는다
+//   통과  겹 하나에 0.20초. 한 겹의 이름이 읽을 만한 크기로 머무는 시간이 그만큼 길어진다
+//   안착  줄이 0.09초 간격으로 빨리 앉고(0.39초에 끝난다) 나머지는 통째로 읽는 시간이다
+//
+// 전체 3.48초로 마운트(5.4초)보다 짧고, 어느 시점에나 클릭·아무 키로 건너뛸 수 있다.
+#define DIR_LOCK_MS  360       // 고른 디렉터리 카드가 경로로 수렴하는 구간
+#define DIR_SEEK_MS  700
+#define DIR_SEEK_TRAVEL_MS 360 // 헤드가 목록을 훑는 시간. 나머지가 고른 줄을 읽는 시간이다
+#define DIR_OPEN_MS  300
+#define DIR_DIVE_MS  780
+#define DIR_LAND_MS 1080
+#define DIR_SEAL_MS  260
+#define DIR_SEEK_AT  DIR_LOCK_MS
+#define DIR_OPEN_AT  (DIR_SEEK_AT + DIR_SEEK_MS)
+#define DIR_DIVE_AT  (DIR_OPEN_AT + DIR_OPEN_MS)
+#define DIR_LAND_AT  (DIR_DIVE_AT + DIR_DIVE_MS)
+#define DIR_SEAL_AT  (DIR_LAND_AT + DIR_LAND_MS)
+#define DIR_ENTER_MS (DIR_SEAL_AT + DIR_SEAL_MS)
+#define DIR_TUNNEL_DEPTH 3     // 문 안쪽에 서는 겹. 볼륨 · 상위 조각 · 고른 노드
+#define DIR_DIVE_STEP_MS (DIR_DIVE_MS / (DIR_TUNNEL_DEPTH + 1))
 
 // ---- 볼륨 마운트 연출 ------------------------------------------------------
 // 예전에는 고른 카드가 잠기고 나면 패널 한 장이 열려 진행 막대를 채웠다. 런에서

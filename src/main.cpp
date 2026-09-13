@@ -808,11 +808,41 @@ static void BeginDescent(int toFloor, int choiceIndex) {
 }
 
 // ---- 디렉터리 진입 연출 ----------------------------------------------------
-// 선택은 이미 game.cpp에서 확정됐고 전투도 시작된 뒤다. 여기서는 선택 카드를
-// 경로에 잠근 뒤 라우팅 신호와 타이핑으로 전투 화면까지 이어 준다.
+// 선택은 이미 game.cpp에서 확정됐고 전투도 시작된 뒤다. 여기서는 고른 카드를
+// 경로에 잠근 뒤, 부모 디렉터리의 목록에서 그 줄을 찾아 열고 그 안으로 들어가
+// 전투 화면까지 이어 준다.
+//
+// 소리는 그림과 같은 구간표(ui.h)를 본다. 새로 합성한 것은 하나도 없다 - 같은
+// 드라이브 안에서 일어나는 일이라 삽입·마운트 연출이 이미 갖춰 둔 어휘(헤드
+// 이동·걸쇠·채터·삼킴)를 그대로 쓴다. ★가 음이다. 통과 구간에서 겹을 하나씩
+// 지나칠 때마다 A3 · C4 · E4가 오르고, 도착한 자리에서 낮은 A가 그 셋을 받는다.
 int gDirEnterActive, gDirEnterKind, gDirEnterChoiceIndex;
 DWORD gDirEnterStart;
-static int gDirEnterCuePhase;
+struct DirCue { int at; int sfx; int pitch; };
+static const DirCue DIR_CUES[] = {
+    { 0,                                  SFX_BOOT_LATCH,   5 },   // 고른 카드가 레일에 물린다
+    { 120,                                SFX_BOOT_SLIDE,   2 },   // 탈락한 카드가 닫힌다
+    { DIR_SEEK_AT,                        SFX_BOOT_SEEK,    3 },   // 판이 목록으로 갈린다
+    { DIR_SEEK_AT + 110,                  SFX_BOOT_CHATTER, 4 },   // 줄이 한 칸씩 찍혀 나온다
+    { DIR_SEEK_AT + 160,                  SFX_BOOT_SEEK,    5 },   // 헤드가 목록을 훑기 시작한다
+    { DIR_SEEK_AT + 160 + DIR_SEEK_TRAVEL_MS, SFX_MOUNT_LAND, 2 }, // 헤드가 고른 줄에 앉는다
+    { DIR_OPEN_AT,                        SFX_BOOT_LATCH,   0 },   // 걸쇠가 풀린다
+    { DIR_OPEN_AT + 90,                   SFX_BOOT_SLIDE,   0 },   // 문짝이 벌어진다
+    { DIR_DIVE_AT,                        SFX_BOOT_SWALLOW, 4 },   // 문을 통과한다
+    { DIR_DIVE_AT + DIR_DIVE_STEP_MS,     SFX_BOOT_PULSE,   0 },   // ★ A3 - 첫 겹
+    { DIR_DIVE_AT + DIR_DIVE_STEP_MS,     SFX_BOOT_SEEK,    5 },
+    { DIR_DIVE_AT + DIR_DIVE_STEP_MS * 2, SFX_BOOT_PULSE,   3 },   // ★ C4
+    { DIR_DIVE_AT + DIR_DIVE_STEP_MS * 2, SFX_BOOT_SEEK,    6 },
+    { DIR_DIVE_AT + DIR_DIVE_STEP_MS * 3, SFX_BOOT_PULSE,   7 },   // ★ E4 - 마지막 겹
+    { DIR_LAND_AT,                        SFX_BOOT_TOLL,    0 },   // ★ 도착한 자리의 근음
+    { DIR_LAND_AT,                        SFX_MOUNT_LAND,   0 },   // 판이 걸린다
+    { DIR_LAND_AT + 90,                   SFX_BOOT_CHATTER, 2 },   // 내용이 한 줄씩 선다
+    { DIR_LAND_AT + 165,                  SFX_BOOT_CHATTER, 4 },
+    { DIR_LAND_AT + 240,                  SFX_BOOT_CHATTER, 6 },
+    { DIR_SEAL_AT,                        SFX_BOOT_LATCH,   2 },   // 작업 디렉터리가 박힌다
+    { DIR_SEAL_AT,                        SFX_BOOT_TOLL,    5 },   // ★
+};
+static int gDirEnterCue;
 
 static void FinishDirectoryEnter() {
     if (!gDirEnterActive) return;
@@ -826,11 +856,10 @@ static void FinishDirectoryEnter() {
 static void BeginDirectoryEnter(int kind, int choiceIndex) {
     gDirEnterKind = kind;
     gDirEnterChoiceIndex = choiceIndex;
-    gDirEnterCuePhase = 0;
+    gDirEnterCue = 0;
     gDirEnterStart = GetTickCount();
     gDirEnterActive = 1;
-    PlaySfx(SFX_READ_START);
-    SetTimer(gWindow, 9, FX_TIMER_MS, 0);
+    SetTimer(gWindow, 9, FX_TIMER_MS, 0);   // 첫 큐(0ms)가 곧바로 카드를 문다
 }
 
 // ---- 보스 조우 연출 --------------------------------------------------------
@@ -2163,9 +2192,15 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 9u) {
+            // 그림은 경과 시간만 보고 그려진다. 여기가 할 일은 소리와 리페인트뿐이다.
             int dirElapsed = (int)(GetTickCount() - gDirEnterStart);
-            if (gDirEnterCuePhase == 0 && dirElapsed >= DIR_SELECT_LOCK_MS) { ++gDirEnterCuePhase; PlaySfxPitched(SFX_DIE_LOCK, 2); }
-            else if (gDirEnterCuePhase == 1 && dirElapsed >= DIR_SELECT_LOCK_MS + 360) { ++gDirEnterCuePhase; PlaySfxPitched(SFX_DIE_LOCK, 5); }
+            int dirCues = (int)(sizeof(DIR_CUES) / sizeof(DIR_CUES[0]));
+            int dirMedia = DriveMedia(gGame.selectedDrive);
+            while (gDirEnterCue < dirCues && dirElapsed >= DIR_CUES[gDirEnterCue].at) {
+                int sfx = MountCueSfx(DIR_CUES[gDirEnterCue].sfx, dirMedia);
+                PlaySfxPitched(sfx, MountCuePitch(sfx, DIR_CUES[gDirEnterCue].pitch, dirMedia));
+                ++gDirEnterCue;
+            }
             if (dirElapsed >= DIR_ENTER_MS) FinishDirectoryEnter();
             else InvalidateRect(window, 0, FALSE);
         }
