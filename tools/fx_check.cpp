@@ -170,6 +170,7 @@ static void DrawFixture(HDC dc) {
     case PHASE_REWARD: DrawReward(dc, BASE_WIDTH, BASE_HEIGHT); break;
     case PHASE_PRUNE: DrawPrune(dc, BASE_WIDTH, BASE_HEIGHT); break;
     case PHASE_STORY: DrawStory(dc, BASE_WIDTH, BASE_HEIGHT); break;
+    case PHASE_NAME_ENTRY: DrawNarrativeName(dc, BASE_WIDTH, BASE_HEIGHT); break;
     case PHASE_ENDING_CHOICE: DrawEndingChoice(dc, BASE_WIDTH, BASE_HEIGHT); break;
     case PHASE_COMBAT: DrawCombat(dc, BASE_WIDTH, BASE_HEIGHT); break;
     default: DrawEndScreen(dc, BASE_WIDTH, BASE_HEIGHT, gGame.phase != PHASE_GAMEOVER); break;
@@ -646,10 +647,9 @@ int main(int argc, char** argv) {
     for (int language = 0; language < LANGUAGE_COUNT; ++language) {
         SetUiLanguage(language);
         wchar_t command[512]; BuildRecoveredCommand(0x3F, command, 512);
-        const wchar_t* expected = language == LANGUAGE_KOREAN
-            ? L"> 시스템을 살려. 단, 네가 다시 깨어난다면 네 판단을 믿어."
-            : L"> Save the system. But if you wake again, trust your judgment.";
-        if (lstrcmpW(command, expected)) { printf("FAIL: recovered command assembly\n"); return 20; }
+        if (wcsstr(command, L"[...]") || wcslen(command) < 12) { printf("FAIL: completed verification display\n"); return 20; }
+        for (int d = 0; d < 6; ++d)
+            if (!wcsstr(command, LocalizeText(STORY_SHARD_TEXT[d]))) return 20;
         for (int d = 0; d < 6; ++d) {
             BuildRecoveredCommand((uint8_t)(1u << d), command, 512);
             int gaps = 0; for (const wchar_t* p = command; *p; ++p) if (*p == L'[') ++gaps;

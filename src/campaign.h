@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "narrative_state.h"
 
 // Campaign lifetime is independent of GameState and NewRun's memory reset.
 struct CampaignState {
@@ -11,6 +12,7 @@ struct CampaignState {
     uint8_t endingSeen[3];
     // 0 = never mounted, 1..3 = highest reached floor. This survives failed runs.
     uint8_t bestFloor[6];
+    NarrativeProgress narrative;
     uint32_t checksum;
 };
 
@@ -24,6 +26,10 @@ uint8_t CampaignSeenEndingMask(const CampaignState* campaign);
 bool RecordCampaignEnding(CampaignState* campaign, int ending);
 // Records partial progress even when the run later fails. floor is zero-based.
 bool RecordCampaignReach(CampaignState* campaign, int drive, int floor);
+// Merge observed story flags without erasing earlier discoveries. A nonempty
+// name replaces the previous name after removing controls and limiting length.
+// Invalid flags are rejected without changing the campaign.
+bool RecordCampaignNarrative(CampaignState* campaign, const NarrativeProgress* progress);
 
 // Null path means AROGUE.SAV beside the executable, never the working directory.
 // Load failure resets to a fresh campaign. Failures are silent and return false.

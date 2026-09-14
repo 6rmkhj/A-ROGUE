@@ -32,6 +32,12 @@ static bool WriteCampaignFixture(const wchar_t* path, const uint8_t* bytes, DWOR
     return ok;
 }
 
+static void RefreshFixtureChecksum(uint8_t* bytes, int payloadSize) {
+    uint32_t checksum = 2166136261u;
+    for (int i = 0; i < payloadSize; ++i) checksum = (checksum ^ bytes[i]) * 16777619u;
+    for (int i = 0; i < 4; ++i) bytes[payloadSize + i] = (uint8_t)(checksum >> (8 * i));
+}
+
 // Preferences must survive a restart, must not be reset by wiping progress, and
 // must fall back to defaults rather than to garbage when the file is damaged.
 static int TestSettingsStorage() {
@@ -116,6 +122,15 @@ static int TestCampaignStorage() {
         for (int i = 0; i < 6; ++i) state.cleared[i] = (uint8_t)((mask >> i) & 1);
         state.finalCleared = (uint8_t)(mask & 1);
         for (int i = 0; i < 3; ++i) state.endingSeen[i] = (uint8_t)((mask >> i) & 1);
+        for (int i = 0; i < 6; ++i) state.bestFloor[i] = (uint8_t)((mask + i) % 4);
+        // Exercise the entire name field, including non-ASCII UTF-16 units.
+        for (int i = 0; i < NARRATIVE_NAME_MAX; ++i) state.narrative.playerName[i] = (wchar_t)(0xAC00 + i);
+        state.narrative.introSeen = (uint8_t)(mask & 1);
+        state.narrative.tutorialSeen = (uint8_t)((mask >> 1) & 1);
+        state.narrative.milestoneSeen = (uint8_t)mask;
+        state.narrative.shardSeen = (uint8_t)(63 - mask);
+        state.narrative.bossSeen = 1u << (mask % 21);
+        state.narrative.logsSeen = 0x1FFFFFu ^ state.narrative.bossSeen;
         if (CampaignClearedMask(&state) != mask || !SaveCampaign(&state, file.path)
             || !LoadCampaign(&loaded, file.path) || memcmp(&state, &loaded, sizeof(state)))
             return Fail("campaign save round trip");
@@ -143,43 +158,58 @@ static int TestCampaignStorage() {
             return Fail("the title snapshot must mask off bits that do not exist");
     }
     if (memcmp(&state, &before, sizeof(state))) return Fail("InitTitle must preserve campaign state");
-    uint8_t bytes[27] = {};
+    uint8_t bytes[73] = {};
     HANDLE handle = CreateFileW(file.path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     DWORD read = 0;
     bool readOk = handle != INVALID_HANDLE_VALUE && ReadFile(handle, bytes, sizeof(bytes), &read, 0);
     if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-    if (!readOk || read != 26 || memcmp(bytes, "AROG\x02\x00", 6)) return Fail("campaign stable 26-byte v2 format");
+    if (!readOk || read != 72 || memcmp(bytes, "AROG\x03\x00", 6)) return Fail("campaign stable 72-byte v3 format");
+    for (int i = 0; i < NARRATIVE_NAME_MAX; ++i)
+        if ((bytes[22 + i * 2] | ((uint16_t)bytes[23 + i * 2] << 8)) != 0xAC00 + i)
+            return Fail("campaign names must be explicitly UTF-16LE without struct padding");
+    if (bytes[54] || bytes[55] || bytes[56] != 1 || bytes[57] != 1 || bytes[58] != 63
+        || bytes[59] || bytes[60] != 1 || bytes[61] || bytes[62] || bytes[63]
+        || bytes[64] != 0xFE || bytes[65] != 0xFF || bytes[66] != 0x1F || bytes[67])
+        return Fail("campaign v3 narrative field offsets and 21-bit entry sets");
 
-    // Every v2 byte, including the new best-floor progress and checksum, fails closed.
-    for (int i = 0; i < 26; ++i) {
+    // Every byte, including names, reading progress and checksum, fails closed.
+    for (int i = 0; i < 72; ++i) {
         bytes[i] ^= 0x80;
-        if (!WriteCampaignFixture(file.path, bytes, 26)) return Fail("campaign v2 corruption fixture");
+        if (!WriteCampaignFixture(file.path, bytes, 72)) return Fail("campaign v3 corruption fixture");
         loaded = state;
         if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
-            return Fail("corrupt v2 campaign must reset safely");
+            return Fail("corrupt v3 campaign must reset safely");
         bytes[i] ^= 0x80;
     }
-    for (DWORD size = 0; size <= 27; ++size) {
-        if (size == 26) continue;
-        if (!WriteCampaignFixture(file.path, bytes, size)) return Fail("campaign v2 size fixture");
+    for (DWORD size = 0; size <= 73; ++size) {
+        if (size == 72) continue;
+        if (!WriteCampaignFixture(file.path, bytes, size)) return Fail("campaign v3 size fixture");
         loaded = state;
         if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
-            return Fail("truncated or oversized v2 campaign must reset safely");
+            return Fail("truncated or oversized v3 campaign must reset safely");
     }
 
-    // Recompute a valid v2 checksum while making individual fields invalid.
-    const int invalidOffsets[] = {0, 4, 6, 12, 13, 16};
-    const int invalidValues[]  = {2, 9, 2, 2, 2, 4};
-    for (int i = 0; i < 6; ++i) {
-        uint8_t invalid[26]; memcpy(invalid, bytes, 26);
+    // A valid checksum cannot legitimize invalid booleans, unknown story bits,
+    // a missing name terminator, or nonexistent recovered-volume evidence.
+    const int invalidOffsets[] = {0, 4, 6, 12, 13, 16, 54, 56, 57, 58, 59, 62, 66};
+    const int invalidValues[]  = {2, 9, 2,  2,  2,  4, 65,  2,  2, 64, 64, 32, 32};
+    for (int i = 0; i < (int)(sizeof(invalidOffsets) / sizeof(invalidOffsets[0])); ++i) {
+        uint8_t invalid[72]; memcpy(invalid, bytes, 72);
         invalid[invalidOffsets[i]] = (uint8_t)invalidValues[i];
-        uint32_t checksum = 2166136261u;
-        for (int b = 0; b < 22; ++b) checksum = (checksum ^ invalid[b]) * 16777619u;
-        for (int b = 0; b < 4; ++b) invalid[22 + b] = (uint8_t)(checksum >> (8 * b));
-        if (!WriteCampaignFixture(file.path, invalid, 26)) return Fail("campaign v2 invalid field fixture");
+        RefreshFixtureChecksum(invalid, 68);
+        if (!WriteCampaignFixture(file.path, invalid, 72)) return Fail("campaign v3 invalid field fixture");
         loaded = state;
         if (LoadCampaign(&loaded, file.path) || memcmp(&loaded, &fresh, sizeof(fresh)))
-            return Fail("invalid v2 campaign fields must reset even with a valid checksum");
+            return Fail("invalid v3 fields must reset even with a valid checksum");
+    }
+    const uint16_t invalidNameUnits[] = {9, 0x20, 0xD800, 0x202E, 0xFFFF};
+    for (int i = 0; i < 5; ++i) {
+        uint8_t invalid[72]; memcpy(invalid, bytes, 72);
+        invalid[22] = (uint8_t)invalidNameUnits[i]; invalid[23] = (uint8_t)(invalidNameUnits[i] >> 8);
+        RefreshFixtureChecksum(invalid, 68);
+        if (!WriteCampaignFixture(file.path, invalid, 72) || LoadCampaign(&loaded, file.path)
+            || memcmp(&loaded, &fresh, sizeof(fresh)))
+            return Fail("invalid saved names must reset even with a valid checksum");
     }
 
     // Existing 20-byte v1 saves migrate without losing cleared/final/ending state.
@@ -192,11 +222,39 @@ static int TestCampaignStorage() {
     if (CampaignClearedMask(&loaded) != 0x05 || !loaded.finalCleared
         || !loaded.endingSeen[0] || loaded.endingSeen[1] || !loaded.endingSeen[2]
         || loaded.bestFloor[0] != 3 || loaded.bestFloor[2] != 3
-        || loaded.bestFloor[1] != 0 || loaded.version != 2)
+        || loaded.bestFloor[1] != 0 || loaded.version != 3
+        || memcmp(&loaded.narrative, &fresh.narrative, sizeof(NarrativeProgress)))
         return Fail("v1 campaign migration must preserve legacy state and seed best-floor records");
 
-    // Restore the v2 snapshot before failed-write preservation checks below.
-    if (!SaveCampaign(&before, file.path)) return Fail("restore v2 campaign fixture");
+    // v2 also keeps unfinished floor records. Legacy players must still meet
+    // ROGUE and read every newly introduced relationship conversation.
+    uint8_t v2[27] = {'A','R','O','G',2,0, 1,0,1,0,0,0, 1, 1,0,1, 3,2,3,1,0,2, 0,0,0,0,0};
+    RefreshFixtureChecksum(v2, 22);
+    if (!WriteCampaignFixture(file.path, v2, 26) || !LoadCampaign(&loaded, file.path)
+        || CampaignClearedMask(&loaded) != 0x05 || !loaded.finalCleared
+        || CampaignSeenEndingMask(&loaded) != 0x05 || loaded.version != 3
+        || loaded.bestFloor[1] != 2 || loaded.bestFloor[3] != 1 || loaded.bestFloor[5] != 2
+        || memcmp(&loaded.narrative, &fresh.narrative, sizeof(NarrativeProgress)))
+        return Fail("v2 migration must preserve campaign and leave new narrative pending");
+    if (!SaveCampaign(&loaded, file.path) || !LoadCampaign(&state, file.path)
+        || memcmp(&loaded, &state, sizeof(state))) return Fail("migrated campaign must round trip as v3");
+    for (int i = 0; i < 26; ++i) {
+        v2[i] ^= 0x80;
+        if (!WriteCampaignFixture(file.path, v2, 26) || LoadCampaign(&loaded, file.path)
+            || memcmp(&loaded, &fresh, sizeof(fresh))) return Fail("corrupt legacy v2 must still reset safely");
+        v2[i] ^= 0x80;
+    }
+    for (DWORD size = 0; size <= 27; ++size) if (size != 26) {
+        if (!WriteCampaignFixture(file.path, v2, size) || LoadCampaign(&loaded, file.path)
+            || memcmp(&loaded, &fresh, sizeof(fresh))) return Fail("invalid legacy v2 lengths must reset safely");
+    }
+    v2[17] = 4; RefreshFixtureChecksum(v2, 22);
+    if (!WriteCampaignFixture(file.path, v2, 26) || LoadCampaign(&loaded, file.path))
+        return Fail("legacy v2 floor fields must remain validated");
+
+    // Restore the v3 snapshot before failed-write preservation checks below.
+    state = before;
+    if (!SaveCampaign(&before, file.path)) return Fail("restore v3 campaign fixture");
     if (!SaveCampaign(&state, file.path) || !SetFileAttributesW(file.path, FILE_ATTRIBUTE_READONLY))
         return Fail("campaign read-only fixture");
     state.cleared[0] = 0;
@@ -215,7 +273,74 @@ static int TestCampaignStorage() {
     lstrcpyW(missing, file.path); lstrcatW(missing, L"\\AROGUE.SAV");
     if (SaveCampaign(&state, missing) || memcmp(&state, &unsaved, sizeof(state)))
         return Fail("unwritable campaign path must fail safely");
-    printf("PASS: campaign storage, 64 masks, corruption fallback, failed-save preservation, settings round trip\n");
+    printf("PASS: campaign v3 storage, 64 masks, UTF-16 names, v1/v2 migration, corruption and failed-save preservation\n");
+    return 0;
+}
+
+static int TestNarrativeStorage() {
+    CampaignState campaign; InitCampaign(&campaign);
+    NarrativeProgress progress = {};
+    lstrcpyW(progress.playerName, L"  민\t서  ");
+    progress.introSeen = 1; progress.tutorialSeen = 1;
+    progress.milestoneSeen = 0x03; progress.shardSeen = 0x12;
+    progress.bossSeen = (1u << 20); progress.logsSeen = (1u << 17);
+    if (!RecordCampaignNarrative(&campaign, &progress) || wcscmp(campaign.narrative.playerName, L"민서")
+        || campaign.narrative.milestoneSeen != 3 || campaign.narrative.bossSeen != (1u << 20)
+        || campaign.narrative.logsSeen != (1u << 17)) return Fail("narrative merge must sanitize names and record discoveries");
+    if (RecordCampaignNarrative(&campaign, &progress)) return Fail("narrative merge must be idempotent");
+    NarrativeProgress blank = {};
+    if (RecordCampaignNarrative(&campaign, &blank) || wcscmp(campaign.narrative.playerName, L"민서"))
+        return Fail("a restarted run must not erase the name or discoveries");
+    progress.milestoneSeen = 4; progress.shardSeen = 0x08; progress.bossSeen = 1; progress.logsSeen = 2;
+    lstrcpyW(progress.playerName, L"새 이름");
+    if (!RecordCampaignNarrative(&campaign, &progress) || wcscmp(campaign.narrative.playerName, L"새 이름")
+        || campaign.narrative.milestoneSeen != 7 || campaign.narrative.shardSeen != 0x1A
+        || campaign.narrative.bossSeen != ((1u << 20) | 1)
+        || campaign.narrative.logsSeen != ((1u << 17) | 2)) return Fail("narrative merge must preserve union and exact supplied name");
+    CampaignState before = campaign;
+    for (int invalid = 0; invalid < 6; ++invalid) {
+        progress = blank; lstrcpyW(progress.playerName, L"무효");
+        if (invalid == 0) progress.introSeen = 2;
+        if (invalid == 1) progress.tutorialSeen = 2;
+        if (invalid == 2) progress.milestoneSeen = 64;
+        if (invalid == 3) progress.shardSeen = 64;
+        if (invalid == 4) progress.bossSeen = (1u << 21);
+        if (invalid == 5) progress.logsSeen = (1u << 21);
+        if (RecordCampaignNarrative(&campaign, &progress) || memcmp(&before, &campaign, sizeof(campaign)))
+            return Fail("invalid narrative flags must reject atomically");
+    }
+    // The fixed API field need not be terminated; merging reads only the field
+    // and installs a terminated maximum-length name in the owned campaign.
+    progress = blank;
+    for (int i = 0; i <= NARRATIVE_NAME_MAX; ++i) progress.playerName[i] = L'가';
+    if (!RecordCampaignNarrative(&campaign, &progress) || wcslen(campaign.narrative.playerName) != NARRATIVE_NAME_MAX
+        || campaign.narrative.playerName[NARRATIVE_NAME_MAX]) return Fail("narrative names must be bounded and terminated");
+    CampaignTestFile file;
+    if (!SaveCampaign(&campaign, file.path)) return Fail("narrative save fixture");
+    CampaignState loaded;
+    if (!LoadCampaign(&loaded, file.path) || memcmp(&campaign, &loaded, sizeof(campaign)))
+        return Fail("merged narrative must survive restart without padding differences");
+    before = campaign;
+    campaign.narrative.playerName[0] = L'\n';
+    if (SaveCampaign(&campaign, file.path) || !LoadCampaign(&loaded, file.path)
+        || memcmp(&before, &loaded, sizeof(before))) return Fail("invalid save names must preserve the previous file");
+    if (RecordCampaignNarrative(0, &progress) || RecordCampaignNarrative(&campaign, 0))
+        return Fail("null narrative merge must be harmless");
+
+    CampaignTestFile settingsFile, codexFile;
+    UserSettings settings, reloadedSettings; InitSettings(&settings);
+    settings.language = 1; settings.fxLevel = 2; settings.volume = 37;
+    uint8_t scanned[ENEMY_KIND_COUNT] = {}, reloadedScanned[ENEMY_KIND_COUNT];
+    scanned[0] = 1; scanned[ENEMY_KIND_COUNT - 1] = 1;
+    if (!SaveSettings(&settings, settingsFile.path) || !SaveCodex(scanned, ENEMY_KIND_COUNT, codexFile.path))
+        return Fail("independent preferences and codex fixtures");
+    InitCampaign(&campaign);
+    if (!SaveCampaign(&campaign, file.path) || !LoadSettings(&reloadedSettings, settingsFile.path)
+        || !LoadCodex(reloadedScanned, ENEMY_KIND_COUNT, codexFile.path)
+        || memcmp(&settings, &reloadedSettings, sizeof(settings))
+        || memcmp(scanned, reloadedScanned, sizeof(scanned)))
+        return Fail("resetting narrative progress must preserve preferences and permanent codex");
+    printf("PASS: narrative persistence, exact bounded names, union/idempotency, atomic rejection and reload\n");
     return 0;
 }
 
@@ -2193,8 +2318,15 @@ static int CheckDebugWinDrive() {
     return 0;
 }
 
+#include "narrative_tests.inl"
+
 int main() {
     if (TestCampaignStorage()) return 1;
+    if (TestNarrativeStorage()) return 1;
+    if (TestNarrativeTutorial()) return 1;
+    if (TestNarrativeMilestoneResume()) return 1;
+    if (TestNarrativeCampaign()) return 1;
+    if (TestNarrativeOptionalRecords()) return 1;
     if (TestSettingsStorage()) return 1;
     if (TestCampaignDriveChoices()) return 1;
     if (TestCampaignProgression()) return 1;

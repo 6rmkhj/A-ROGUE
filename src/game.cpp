@@ -38,28 +38,54 @@ static void DriveRuleOnFaceReplaced(GameState* game, int die, int face) {
 
 const StoryFragment* CurrentStoryFragment(const GameState* game) {
     if (!game) return 0;
+    int drive = game->narrativeEnabled ? game->story.drive : game->selectedDrive;
     switch (game->story.kind) {
     case STORY_INTRO:
+        if (game->narrativeEnabled)
+            return &NARRATIVE_INTRO_DATA[ClampInt(game->story.fragment, 0, 2)];
         return game->clearedMask == 0x3F ? &STORY_RECOVERED_DATA
             : game->clearedMask ? &STORY_RESUME_DATA : &STORY_INTRO_DATA;
     case STORY_SHARD:
-        if (game->selectedDrive >= 0 && game->selectedDrive < 6) return &STORY_SHARD_DATA[game->selectedDrive];
+        if (drive >= 0 && drive < 6) return &STORY_SHARD_DATA[drive];
         break;
     case STORY_BOSS:
-        if (game->selectedDrive >= 0 && game->selectedDrive < DRIVE_COUNT && game->story.fragment < 3)
-            return &STORY_BOSS_DATA[game->selectedDrive][game->story.fragment];
+        if (drive >= 0 && drive < DRIVE_COUNT && game->story.fragment < 3)
+            return &STORY_BOSS_DATA[drive][game->story.fragment];
         break;
     case STORY_LOGS:
-        if (game->selectedDrive >= 0 && game->selectedDrive < DRIVE_COUNT && game->story.fragment < 3)
-            return &STORY_LOGS_DATA[game->selectedDrive][game->story.fragment];
+        if (drive >= 0 && drive < DRIVE_COUNT && game->story.fragment < 3)
+            return &STORY_LOGS_DATA[drive][game->story.fragment];
         break;
     case STORY_TRUTH: return &STORY_TRUTH_DATA;
-    case STORY_ENDING_RESTORE: return &STORY_ENDING_DATA[0];
-    case STORY_ENDING_ROGUE: return &STORY_ENDING_DATA[1];
-    case STORY_ENDING_MERGE: return &STORY_ENDING_DATA[2];
+    case STORY_ENDING_RESTORE:
+    case STORY_ENDING_ROGUE:
+    case STORY_ENDING_MERGE: {
+        int ending = game->story.kind - STORY_ENDING_RESTORE;
+        return game->narrativeEnabled && game->story.page > 0
+            ? &NARRATIVE_ENDING_LAST_DATA[ending] : &STORY_ENDING_DATA[ending];
+    }
+    case STORY_MILESTONE: {
+        int fragment = ClampInt(game->story.fragment, 0, 5);
+        return &NARRATIVE_MILESTONE_DATA[fragment + (fragment == 5 ? ClampInt(game->story.page, 0, 2) : 0)];
+    }
+    case STORY_A_ENTRY: return &NARRATIVE_A_ENTRY_DATA;
+    case STORY_A_GREETING: return &NARRATIVE_A_GREETING_DATA;
     default: break;
     }
     return 0;
+}
+
+int StoryPageCount(const GameState* game) {
+    if (!game || !game->narrativeEnabled) return 1;
+    if (game->story.kind == STORY_MILESTONE && game->story.fragment == 5) return 3;
+    if (game->story.kind >= STORY_ENDING_RESTORE && game->story.kind <= STORY_ENDING_MERGE) return 2;
+    return 1;
+}
+
+static uint32_t NarrativeRecordBit(const GameState* game, int floor) {
+    int drive = game->narrativeEnabled ? game->story.drive : game->selectedDrive;
+    if (drive < 0 || drive >= DRIVE_COUNT || floor < 0 || floor >= 3) return 0;
+    return 1u << (drive * 3 + floor);
 }
 
 void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase) {
@@ -67,17 +93,160 @@ void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase) 
     game->story.kind = (uint8_t)kind;
     game->story.fragment = (uint8_t)ClampInt(fragment, 0, 255);
     game->story.page = 0;
+    game->story.resume = 0;
+    game->story.drive = (int8_t)game->selectedDrive;
+    game->story.replay = 0;
+    if (game->narrativeEnabled) {
+        uint32_t bit = NarrativeRecordBit(game, fragment);
+        if (kind == STORY_BOSS) game->story.replay = (uint8_t)((game->narrative.bossSeen & bit) != 0);
+        if (kind == STORY_LOGS) game->story.replay = (uint8_t)((game->narrative.logsSeen & bit) != 0);
+        if (kind == STORY_A_ENTRY || kind == STORY_A_GREETING)
+            game->story.replay = game->finalVolumeCleared;
+    }
     game->story.returnPhase = returnPhase;
     game->phase = PHASE_STORY;
 }
 
+static bool BeginPendingMilestone(GameState* game, GamePhase next) {
+    if (!game->narrativeEnabled) return false;
+    int recovered = RecoveredShardCount(game->clearedMask);
+    for (int i = 0; i < recovered; ++i) {
+        if (game->narrative.milestoneSeen & (1u << i)) continue;
+        BeginStory(game, STORY_MILESTONE, i, next);
+        return true;
+    }
+    return false;
+}
+
+static bool BeginRecoveredEvidence(GameState* game) {
+    // Clear flags are durable as soon as combat ends. Reading is durable only
+    // after acknowledgment, so quitting between those operations loses no clue.
+    for (int drive = 0; drive < 6; ++drive) {
+        if (!(game->clearedMask & (1u << drive))) continue;
+        for (int floor = 0; floor < 3; ++floor) {
+            if (game->narrative.bossSeen & (1u << (drive * 3 + floor))) continue;
+            BeginStory(game, STORY_BOSS, floor, PHASE_DRIVE_SELECT);
+            game->story.drive = (int8_t)drive;
+            game->story.resume = 1;
+            return true;
+        }
+        if (!(game->narrative.shardSeen & (1u << drive))) {
+            BeginStory(game, STORY_SHARD, 0, PHASE_DRIVE_SELECT);
+            game->story.drive = (int8_t)drive;
+            game->story.resume = 1;
+            return true;
+        }
+    }
+    if (BeginPendingMilestone(game, PHASE_DRIVE_SELECT)) {
+        game->story.resume = 1;
+        return true;
+    }
+    if (game->finalVolumeCleared && !(game->narrative.bossSeen & (1u << 20))) {
+        BeginStory(game, STORY_BOSS, 2, PHASE_ENDING_CHOICE);
+        game->story.drive = DRIVE_FINAL;
+        game->story.resume = 1;
+        return true;
+    }
+    if (game->finalVolumeCleared && game->seenEndingMask == 0) {
+        BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
+        game->story.drive = DRIVE_FINAL;
+        return true;
+    }
+    return false;
+}
+
+void AttachNarrative(GameState* game, const NarrativeProgress* progress) {
+    if (!game || game->selectedDrive >= 0 || game->tutorial.active) return;
+    game->narrativeEnabled = 1;
+    if (progress) game->narrative = *progress;
+    else ZeroMemory(&game->narrative, sizeof(game->narrative));
+    game->narrative.playerName[NARRATIVE_NAME_MAX] = 0;
+    if (!game->narrative.playerName[0]) {
+        BeginStory(game, STORY_INTRO, 0, PHASE_NAME_ENTRY);
+        return;
+    }
+    if (!game->narrative.introSeen || !game->narrative.tutorialSeen) {
+        BeginStory(game, STORY_INTRO, game->narrative.tutorialSeen ? 2 : 1, PHASE_DRIVE_SELECT);
+        return;
+    }
+    if (!BeginRecoveredEvidence(game)) {
+        game->story.kind = STORY_NONE;
+        game->phase = PHASE_DRIVE_SELECT;
+    }
+}
+
+static bool ValidNarrativeNameChar(wchar_t c) {
+    return c >= 0x20 && !(c >= 0x7F && c <= 0x9F)
+        && !(c >= 0xD800 && c <= 0xDFFF)
+        && !(c >= 0x200B && c <= 0x200F)
+        && !(c >= 0x2028 && c <= 0x202E)
+        && !(c >= 0x2060 && c <= 0x206F)
+        && c != 0xFEFF && !(c >= 0xFDD0 && c <= 0xFDEF)
+        && c != 0xFFFE && c != 0xFFFF;
+}
+
+bool SubmitNarrativeName(GameState* game, const wchar_t* name) {
+    if (!game || !game->narrativeEnabled || game->phase != PHASE_NAME_ENTRY || !name) return false;
+    int length = 0;
+    while (name[length] && length <= NARRATIVE_NAME_MAX) {
+        if (!ValidNarrativeNameChar(name[length])) return false;
+        ++length;
+    }
+    if (length == 0 || length > NARRATIVE_NAME_MAX) return false;
+    int start = 0;
+    while (start < length && name[start] == L' ') ++start;
+    while (length > start && name[length - 1] == L' ') --length;
+    if (length == start) return false;
+    ZeroMemory(game->narrative.playerName, sizeof(game->narrative.playerName));
+    for (int i = start; i < length; ++i) game->narrative.playerName[i - start] = name[i];
+    BeginStory(game, STORY_INTRO, game->narrative.tutorialSeen ? 2 : 1, PHASE_DRIVE_SELECT);
+    return true;
+}
+
 void AdvanceStory(GameState* game) {
     if (!game || game->phase != PHASE_STORY) return;
+    if (game->story.page + 1 < StoryPageCount(game)) { ++game->story.page; return; }
+    if (game->narrativeEnabled) {
+        uint32_t bit = NarrativeRecordBit(game, game->story.fragment);
+        if (game->story.kind == STORY_BOSS) game->narrative.bossSeen |= bit;
+        if (game->story.kind == STORY_LOGS) game->narrative.logsSeen |= bit;
+        if (game->story.kind == STORY_SHARD && game->story.drive >= 0 && game->story.drive < 6)
+            game->narrative.shardSeen |= (uint8_t)(1u << game->story.drive);
+        if (game->story.kind == STORY_INTRO) {
+            if (game->story.fragment == 0) { game->phase = PHASE_NAME_ENTRY; return; }
+            if (game->story.fragment == 1) { BeginTutorial(game); return; }
+            game->narrative.introSeen = 1;
+            if (BeginRecoveredEvidence(game)) return;
+        }
+        if (game->story.kind == STORY_MILESTONE) {
+            game->narrative.milestoneSeen |= (uint8_t)(1u << ClampInt(game->story.fragment, 0, 5));
+            if (game->story.resume) {
+                if (BeginRecoveredEvidence(game)) return;
+                game->story.kind = STORY_NONE;
+                game->phase = PHASE_DRIVE_SELECT;
+                return;
+            }
+            if (BeginPendingMilestone(game, game->story.returnPhase)) return;
+        }
+        if (game->story.resume) {
+            if (BeginRecoveredEvidence(game)) return;
+            game->story.kind = STORY_NONE;
+            game->phase = PHASE_DRIVE_SELECT;
+            return;
+        }
+        if (game->story.kind == STORY_SHARD && BeginPendingMilestone(game, PHASE_CHAPTER_CLEAR)) return;
+    }
     // 3층 보스 기록 다음은 볼륨에 따라 갈린다. 일반 볼륨은 조각 하나를 남기고 챕터를
     // 닫고, 최종 볼륨만 진실을 열어 최종 명령 선택으로 이어진다.
     if (game->story.kind == STORY_BOSS && game->story.fragment == 2) {
-        if (game->selectedDrive == DRIVE_FINAL) BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
-        else BeginStory(game, STORY_SHARD, 0, PHASE_CHAPTER_CLEAR);
+        if ((game->narrativeEnabled ? game->story.drive : game->selectedDrive) == DRIVE_FINAL)
+            BeginStory(game, STORY_TRUTH, 0, PHASE_ENDING_CHOICE);
+        else if (!game->narrativeEnabled || game->story.newlyRecovered)
+            BeginStory(game, STORY_SHARD, 0, PHASE_CHAPTER_CLEAR);
+        else {
+            game->story.kind = STORY_NONE;
+            game->phase = PHASE_CHAPTER_CLEAR;
+        }
         return;
     }
     if (game->story.kind == STORY_TRUTH) {
@@ -1208,6 +1377,104 @@ void NewRun(GameState* game, uint32_t seed, uint8_t clearedMask) {
     PushLog(game, L"A:\\ROGUE 부팅 완료. 탐색할 볼륨을 선택하십시오.");
 }
 
+void BeginTutorial(GameState* game) {
+    // Practice must start on a fresh, unmounted run. The desktop can snapshot an
+    // ongoing run before creating this sandbox, then restore it after practice.
+    if (!game || !game->narrativeEnabled || game->selectedDrive >= 0 || game->tutorial.active) return;
+    ZeroMemory(&game->tutorial, sizeof(game->tutorial));
+    game->tutorial.active = 1;
+    game->tutorial.step = TUTORIAL_READ;
+    game->tutorial.seed = game->rng;
+    game->tutorial.savedFinalClear = game->finalVolumeCleared;
+    game->tutorial.savedSeenEndings = game->seenEndingMask;
+    CopyMemory(game->tutorial.savedScanned, game->enemyScanned, sizeof(game->enemyScanned));
+    game->phase = PHASE_COMBAT;
+    game->story.kind = STORY_NONE;
+    game->selectedDrive = -1;
+    game->modifierA = game->modifierB = -1;
+    game->floor = game->encounter = 0;
+    game->turn = 1;
+    game->playerMaxHp = game->playerHp = 40;
+    game->playerBlock = 0;
+    game->targetEnemy = 0;
+    game->enemyCount = 1;
+    ZeroMemory(game->enemies, sizeof(game->enemies));
+    EnemyState* enemy = &game->enemies[0];
+    enemy->kind = ENEMY_GLITCH;
+    enemy->trait = TRAIT_NONE;
+    enemy->hp = enemy->maxHp = 12;
+    enemy->alive = 1;
+    enemy->intent = INTENT_ATTACK;
+    enemy->intentValue = 4;
+    ZeroMemory(&game->boss, sizeof(game->boss));
+    game->boss.offlineDie = game->boss.nextOfflineDie = -1;
+    game->boss.bestSlotLastTurn = game->boss.nextTargetDie = game->boss.nextTargetFace = -1;
+    game->boss.shredNext = -1;
+    game->boss.nextSealSlot = -1;
+    SetupStartingDice(game);
+    game->dice[0].rolledFace = 5; // 6 attack
+    game->dice[1].rolledFace = 3; // 4 defense
+    game->dice[2].rolledFace = 1; // 2 amplify -> +1 to attack and defense
+    ClearTurnTrace(game);
+    ClearCombatFx(game);
+    PushLog(game, L"로그: 안전한 판독 연습이에요. R로 눈을 읽으세요.");
+}
+
+void TutorialReadDice(GameState* game) {
+    if (!game || !game->tutorial.active || game->tutorial.step != TUTORIAL_READ) return;
+    game->tutorial.step = TUTORIAL_PLACE;
+    PushLog(game, L"로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.");
+}
+
+static bool TutorialPlacementComplete(const GameState* game) {
+    return game->dice[0].assignedSlot == SLOT_ATTACK
+        && game->dice[1].assignedSlot == SLOT_DEFEND
+        && game->dice[2].assignedSlot == SLOT_AMPLIFY;
+}
+
+void AcknowledgeTutorialPreview(GameState* game) {
+    if (!game || !game->tutorial.active || game->tutorial.step != TUTORIAL_PREVIEW
+        || !TutorialPlacementComplete(game)) return;
+    game->tutorial.step = TUTORIAL_EXECUTE;
+    PushLog(game, L"로그: 증폭 2는 공격·방어에 1씩 더해요. 스페이스로 실행하세요.");
+}
+
+const wchar_t* TutorialInstruction(const GameState* game) {
+    if (!game || !game->tutorial.active) return L"";
+    switch (game->tutorial.step) {
+    case TUTORIAL_READ: return L"로그: R로 주사위 눈을 읽으세요. 이 연습에서는 6·4·2가 나와요.";
+    case TUTORIAL_PLACE: return L"로그: 6→공격, 4→방어, 2→증폭. 주사위 셋이라 한 칸은 비워둬요.";
+    case TUTORIAL_PREVIEW: return L"로그: 예상 피해 7, 방어 5. 적의 공격 4를 막는 계산을 확인하세요.";
+    case TUTORIAL_EXECUTE: return L"로그: 확인한 배치예요. 스페이스로 실제 실행해보세요.";
+    case TUTORIAL_COMPLETE: return L"로그: 실제 결과와 계산이 같죠. 연쇄는 공격·방어를 반복해요. 이제 연결을 고릅시다.";
+    default: return L"";
+    }
+}
+
+static void LeaveTutorial(GameState* game) {
+    NarrativeProgress progress = game->narrative;
+    TutorialRuntime training = game->tutorial;
+    uint8_t mask = game->clearedMask;
+    progress.tutorialSeen = 1;
+    // Reconstruct exactly the fresh run: practice consumes no campaign RNG,
+    // rewards, discoveries, deck bytes, permanent seals, or health.
+    NewRun(game, training.seed, mask);
+    game->narrative = progress;
+    game->narrativeEnabled = 1;
+    game->seenEndingMask = training.savedSeenEndings;
+    game->finalVolumeCleared = training.savedFinalClear;
+    CopyMemory(game->enemyScanned, training.savedScanned, sizeof(game->enemyScanned));
+    BeginStory(game, STORY_INTRO, 2, PHASE_DRIVE_SELECT);
+}
+
+void FinishTutorial(GameState* game) {
+    if (game && game->tutorial.active && game->tutorial.step == TUTORIAL_COMPLETE) LeaveTutorial(game);
+}
+
+void SkipTutorial(GameState* game) {
+    if (game && game->tutorial.active) LeaveTutorial(game);
+}
+
 // 이미 고른 최종 명령의 번호, 아직 고르지 않았으면 -1. story.selectedEnding은 0이
 // RESTORE라서 그 값만으로는 "고르지 않음"과 구분되지 않는다.
 int CommittedEnding(const GameState* game) {
@@ -1234,7 +1501,7 @@ void SelectDrive(GameState* game, int choiceIndex) {
     if (driveIndex == DRIVE_FINAL && game->clearedMask != 0x3F) return;
     // 자동 러너와 기존 호출자는 인트로를 입력 없이 건너뛸 수 있다. 실제 UI에서는
     // STORY 입력이 먼저 처리되므로 플레이어에게는 정상적으로 표시된다.
-    if (game && game->phase == PHASE_STORY && game->story.kind == STORY_INTRO) AdvanceStory(game);
+    if (!game->narrativeEnabled && game->phase == PHASE_STORY && game->story.kind == STORY_INTRO) AdvanceStory(game);
     if (game->phase != PHASE_DRIVE_SELECT) return;
     game->selectedDrive = game->driveChoices[choiceIndex];
     game->difficulty = game->driveDifficulty[choiceIndex];
@@ -1270,6 +1537,8 @@ void SelectDrive(GameState* game, int choiceIndex) {
         PushLog(game, buffer);
     }
     BeginDirectorySelection(game);
+    if (game->narrativeEnabled && game->selectedDrive == DRIVE_FINAL)
+        BeginStory(game, STORY_A_ENTRY, 0, game->phase);
 }
 
 // 테스트 전용 경로: 드라이브와 일반전 순서만 준비한다. 특성 적용·전투 시작은
@@ -1671,6 +1940,8 @@ int StartCombat(GameState* game) {
     ApplyDirectoryCombatSetup(game);
     GimmickInitCombat(game);
     BeginTurn(game);
+    if (game->narrativeEnabled && game->selectedDrive == DRIVE_FINAL && game->floor == 2 && game->encounter == 2)
+        BeginStory(game, STORY_A_GREETING, 0, PHASE_COMBAT);
     return 1;
 }
 
@@ -1914,6 +2185,14 @@ static void BeginTurn(GameState* game) {
 
 int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
     if (game->phase != PHASE_COMBAT || dieIndex < 0 || dieIndex >= 3 || slotIndex < 0 || slotIndex >= SLOT_COUNT) return 0;
+    if (game->tutorial.active) {
+        if (game->tutorial.step == TUTORIAL_READ || game->tutorial.step == TUTORIAL_COMPLETE) return 0;
+        const int expected[3] = {SLOT_ATTACK, SLOT_DEFEND, SLOT_AMPLIFY};
+        if (slotIndex != expected[dieIndex]) {
+            PushLog(game, L"로그: 이번에는 6→공격, 4→방어, 2→증폭으로 계산해보세요.");
+            return 0;
+        }
+    }
     if (SlotLockedThisTurn(game, slotIndex)) {
         PushLog2(game, L"권한 거부: %s 슬롯은 이번 턴 잠겨 있습니다.", SLOT_NAMES[slotIndex], 0);
         return 0;
@@ -1934,12 +2213,16 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
         }
     }
     game->selectedDie = dieIndex;
+    if (game->tutorial.active)
+        game->tutorial.step = (uint8_t)(TutorialPlacementComplete(game) ? TUTORIAL_PREVIEW : TUTORIAL_PLACE);
     return 1;
 }
 
 void UnassignDie(GameState* game, int dieIndex) {
     if (dieIndex < 0 || dieIndex >= 3) return;
+    if (game->tutorial.active && (game->tutorial.step == TUTORIAL_READ || game->tutorial.step == TUTORIAL_COMPLETE)) return;
     game->dice[dieIndex].assignedSlot = -1;
+    if (game->tutorial.active) game->tutorial.step = TUTORIAL_PLACE;
 }
 
 void SelectEnemy(GameState* game, int enemyIndex) {
@@ -2072,7 +2355,7 @@ static int DamageEnemy(GameState* game, int enemyIndex, int damage, int rollValu
         enemy->hp = 0;
         enemy->alive = 0;
         // 처치한 순간 그 종류가 판독된다. 가이드의 노이즈가 여기서 걷힌다.
-        if (IsValidEnemyKind(enemy->kind)) game->enemyScanned[enemy->kind] = 1;
+        if (!game->tutorial.active && IsValidEnemyKind(enemy->kind)) game->enemyScanned[enemy->kind] = 1;
         PushLog2(game, L"%s 삭제 완료. 피해 %d.", GetEnemyInfoOrUnknown(enemy->kind)->name, damage);
         if (enemy->trait == TRAIT_DANGLING) enemy->flags |= 2;   // 그 턴 행동은 남는다
         TraitOnDeath(game, enemyIndex, rollValue);
@@ -2574,6 +2857,7 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
     if (assigned == 0) return;
 
     GameState copy = *game;
+    if (copy.tutorial.active) copy.tutorial.step = TUTORIAL_EXECUTE;
     // 읽기 오류는 실행하는 순간 다시 굴러간다. 사본에서 그대로 굴려 보면 실제로 나올 숫자가
     // 미리보기로 새어 나가므로, 재굴림 자체를 빼고 돌린다. 대신 예상은 확정이 아니라고 밝히고,
     // 흔들리는 값이 닿는 슬롯은 산출량을 모른다고 표시한다.
@@ -2653,6 +2937,8 @@ static void GenerateTsrRewards(GameState* game) {
 }
 
 static void CompleteVolume(GameState* game) {
+    game->story.newlyRecovered = (uint8_t)(game->selectedDrive >= 0 && game->selectedDrive < 6
+        && !(game->clearedMask & (1u << game->selectedDrive)));
     if (game->selectedDrive == DRIVE_FINAL) game->finalVolumeCleared = 1;
     if (game->selectedDrive >= 0 && game->selectedDrive < 6)
         game->clearedMask |= (uint8_t)(1u << game->selectedDrive);
@@ -2661,6 +2947,11 @@ static void CompleteVolume(GameState* game) {
 }
 
 static void CombatWon(GameState* game) {
+    if (game->tutorial.active) {
+        game->tutorial.step = TUTORIAL_COMPLETE;
+        game->phase = PHASE_COMBAT;
+        return;
+    }
     // 어떤 조기 return보다 먼저 임시 기믹 상태를 정리한다. 영구 EMPTY만 남는다.
     GimmickCombatEnd(game);
     ++game->combatsWon;
@@ -2750,6 +3041,7 @@ int DebugJumpToBoss(GameState* game, int floor) {
 
 void EndTurn(GameState* game) {
     if (game->phase != PHASE_COMBAT) return;
+    if (game->tutorial.active && game->tutorial.step != TUTORIAL_EXECUTE) return;
     int assigned = 0;
     for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot >= 0) ++assigned;
     if (assigned == 0) {
@@ -2820,6 +3112,10 @@ void EndTurn(GameState* game) {
     wsprintfW(result, L"실행 결과: 적 체력 -%d · 내 체력 -%d · 방어도 %d.",
         game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);
     PushLog(game, result);
+    if (game->tutorial.active) {
+        game->tutorial.step = TUTORIAL_COMPLETE;
+        return;
+    }
     if (game->phase == PHASE_GAMEOVER) return;
     GimmickTurnEnd(game);
     MobTraitTurnEnd(game);

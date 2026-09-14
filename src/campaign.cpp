@@ -3,9 +3,14 @@
 #include "campaign.h"
 
 static const uint32_t CAMPAIGN_MAGIC = 0x474F5241u; // On disk: AROG
-static const uint16_t CAMPAIGN_VERSION = 2;
+static const uint16_t CAMPAIGN_VERSION = 3;
 static const DWORD SAVE_V1_SIZE = 20;
-static const DWORD SAVE_SIZE = 26;
+static const DWORD SAVE_V2_SIZE = 26;
+// v3: legacy payload 22, UTF-16LE name 34, flags 4, seen bitsets 8,
+// FNV-1a checksum 4. No compiler struct layout is part of this format.
+static const DWORD SAVE_SIZE = 72;
+static const int SAVE_CHECKSUM_OFFSET = 68;
+static const uint32_t NARRATIVE_ENTRY_MASK = 0x001FFFFFu;
 
 // Explicit little-endian encoding keeps compiler padding out of the save format.
 static void Put32(uint8_t* bytes, uint32_t value) {
@@ -24,6 +29,42 @@ static uint32_t ChecksumN(const uint8_t* bytes, int length) {
     return hash;
 }
 
+static bool NameCharacter(wchar_t value) {
+    return value >= 0x20 && !(value >= 0x7F && value <= 0x9F)
+        && !(value >= 0xD800 && value <= 0xDFFF)
+        && !(value >= 0xFDD0 && value <= 0xFDEF) && value != 0xFFFE && value != 0xFFFF
+        && !(value >= 0x200B && value <= 0x200F)
+        && !(value >= 0x2028 && value <= 0x202E)
+        && !(value >= 0x2060 && value <= 0x206F) && value != 0xFEFF;
+}
+
+static void CleanName(wchar_t* destination, const wchar_t* source) {
+    ZeroMemory(destination, (NARRATIVE_NAME_MAX + 1) * sizeof(wchar_t));
+    int length = 0;
+    for (int i = 0; i <= NARRATIVE_NAME_MAX && source[i] && length < NARRATIVE_NAME_MAX; ++i) {
+        wchar_t value = source[i];
+        if (!NameCharacter(value) || (!length && value == L' ')) continue;
+        destination[length++] = value;
+    }
+    while (length && destination[length - 1] == L' ') destination[--length] = 0;
+}
+
+static bool NarrativeFlagsValid(const NarrativeProgress* progress) {
+    return progress->introSeen <= 1 && progress->tutorialSeen <= 1
+        && !(progress->milestoneSeen & ~0x3Fu) && !(progress->shardSeen & ~0x3Fu)
+        && !(progress->bossSeen & ~NARRATIVE_ENTRY_MASK)
+        && !(progress->logsSeen & ~NARRATIVE_ENTRY_MASK);
+}
+
+static bool NarrativeValid(const NarrativeProgress* progress) {
+    if (!NarrativeFlagsValid(progress) || progress->playerName[NARRATIVE_NAME_MAX]) return false;
+    wchar_t cleaned[NARRATIVE_NAME_MAX + 1];
+    CleanName(cleaned, progress->playerName);
+    for (int i = 0; i <= NARRATIVE_NAME_MAX; ++i)
+        if (cleaned[i] != progress->playerName[i]) return false;
+    return true;
+}
+
 static void Encode(const CampaignState* campaign, uint8_t* bytes) {
     Put32(bytes, CAMPAIGN_MAGIC);
     bytes[4] = (uint8_t)CAMPAIGN_VERSION;
@@ -32,16 +73,28 @@ static void Encode(const CampaignState* campaign, uint8_t* bytes) {
     bytes[12] = campaign->finalCleared;
     for (int i = 0; i < 3; ++i) bytes[13 + i] = campaign->endingSeen[i];
     for (int i = 0; i < 6; ++i) bytes[16 + i] = campaign->bestFloor[i];
-    Put32(bytes + 22, ChecksumN(bytes, 22));
+    for (int i = 0; i <= NARRATIVE_NAME_MAX; ++i) {
+        uint16_t value = (uint16_t)campaign->narrative.playerName[i];
+        bytes[22 + i * 2] = (uint8_t)value;
+        bytes[23 + i * 2] = (uint8_t)(value >> 8);
+    }
+    bytes[56] = campaign->narrative.introSeen;
+    bytes[57] = campaign->narrative.tutorialSeen;
+    bytes[58] = campaign->narrative.milestoneSeen;
+    bytes[59] = campaign->narrative.shardSeen;
+    Put32(bytes + 60, campaign->narrative.bossSeen);
+    Put32(bytes + 64, campaign->narrative.logsSeen);
+    Put32(bytes + SAVE_CHECKSUM_OFFSET, ChecksumN(bytes, SAVE_CHECKSUM_OFFSET));
 }
 
 void InitCampaign(CampaignState* campaign) {
+    if (!campaign) return;
     ZeroMemory(campaign, sizeof(*campaign));
     campaign->magic = CAMPAIGN_MAGIC;
     campaign->version = CAMPAIGN_VERSION;
     uint8_t bytes[SAVE_SIZE];
     Encode(campaign, bytes);
-    campaign->checksum = Get32(bytes + 22);
+    campaign->checksum = Get32(bytes + SAVE_CHECKSUM_OFFSET);
 }
 
 uint8_t CampaignClearedMask(const CampaignState* campaign) {
@@ -81,6 +134,31 @@ bool RecordCampaignReach(CampaignState* campaign, int drive, int floor) {
     return true;
 }
 
+bool RecordCampaignNarrative(CampaignState* campaign, const NarrativeProgress* progress) {
+    if (!campaign || !progress || !NarrativeFlagsValid(progress)) return false;
+    NarrativeProgress* saved = &campaign->narrative;
+    wchar_t name[NARRATIVE_NAME_MAX + 1];
+    CleanName(name, progress->playerName);
+    bool changed = false;
+    if (name[0]) for (int i = 0; i <= NARRATIVE_NAME_MAX; ++i) {
+        if (saved->playerName[i] != name[i]) changed = true;
+        saved->playerName[i] = name[i];
+    }
+    uint8_t intro = saved->introSeen | progress->introSeen;
+    uint8_t tutorial = saved->tutorialSeen | progress->tutorialSeen;
+    uint8_t milestone = saved->milestoneSeen | progress->milestoneSeen;
+    uint8_t shards = saved->shardSeen | progress->shardSeen;
+    uint32_t bosses = saved->bossSeen | progress->bossSeen;
+    uint32_t logs = saved->logsSeen | progress->logsSeen;
+    changed = changed || intro != saved->introSeen || tutorial != saved->tutorialSeen
+        || milestone != saved->milestoneSeen || shards != saved->shardSeen
+        || bosses != saved->bossSeen || logs != saved->logsSeen;
+    saved->introSeen = intro; saved->tutorialSeen = tutorial;
+    saved->milestoneSeen = milestone; saved->shardSeen = shards;
+    saved->bossSeen = bosses; saved->logsSeen = logs;
+    return changed;
+}
+
 static bool BesideExecutable(wchar_t* path, const wchar_t* overridePath, const wchar_t* name) {
     if (overridePath) {
         DWORD length = GetFullPathNameW(overridePath, MAX_PATH, path, 0);
@@ -99,6 +177,7 @@ static bool SavePath(wchar_t* path, const wchar_t* overridePath) {
 }
 
 bool LoadCampaign(CampaignState* campaign, const wchar_t* overridePath) {
+    if (!campaign) return false;
     InitCampaign(campaign);
     wchar_t path[MAX_PATH];
     if (!SavePath(path, overridePath)) return false;
@@ -110,23 +189,33 @@ bool LoadCampaign(CampaignState* campaign, const wchar_t* overridePath) {
     CloseHandle(file);
     if (!ok || Get32(bytes) != CAMPAIGN_MAGIC) return false;
     uint16_t version = (uint16_t)(bytes[4] | ((uint16_t)bytes[5] << 8));
-    if (version == 1) {
-        if (read != SAVE_V1_SIZE || Get32(bytes + 16) != ChecksumN(bytes, 16)) return false;
-        for (int i = 6; i < 16; ++i) if (bytes[i] > 1) return false;
-        for (int i = 0; i < 6; ++i) { campaign->cleared[i] = bytes[6+i]; campaign->bestFloor[i] = bytes[6+i] ? 3 : 0; }
-        campaign->finalCleared = bytes[12];
-        for (int i = 0; i < 3; ++i) campaign->endingSeen[i] = bytes[13+i];
-        campaign->version = CAMPAIGN_VERSION;
-        return true;
-    }
-    if (version != CAMPAIGN_VERSION || read != SAVE_SIZE || Get32(bytes + 22) != ChecksumN(bytes, 22)) return false;
+    int checksumOffset = version == 1 ? 16 : version == 2 ? 22 : SAVE_CHECKSUM_OFFSET;
+    DWORD expectedSize = version == 1 ? SAVE_V1_SIZE : version == 2 ? SAVE_V2_SIZE : SAVE_SIZE;
+    if (version < 1 || version > CAMPAIGN_VERSION || read != expectedSize
+        || Get32(bytes + checksumOffset) != ChecksumN(bytes, checksumOffset)) return false;
     for (int i = 6; i < 16; ++i) if (bytes[i] > 1) return false;
-    for (int i = 0; i < 6; ++i) if (bytes[16+i] > 3) return false;
-    for (int i = 0; i < 6; ++i) campaign->cleared[i] = bytes[6+i];
-    campaign->finalCleared = bytes[12];
-    for (int i = 0; i < 3; ++i) campaign->endingSeen[i] = bytes[13+i];
-    for (int i = 0; i < 6; ++i) campaign->bestFloor[i] = bytes[16+i];
-    campaign->checksum = Get32(bytes + 22);
+    if (version >= 2) for (int i = 0; i < 6; ++i) if (bytes[16+i] > 3) return false;
+    CampaignState loaded;
+    InitCampaign(&loaded);
+    for (int i = 0; i < 6; ++i) loaded.cleared[i] = bytes[6+i];
+    loaded.finalCleared = bytes[12];
+    for (int i = 0; i < 3; ++i) loaded.endingSeen[i] = bytes[13+i];
+    for (int i = 0; i < 6; ++i)
+        loaded.bestFloor[i] = version >= 2 ? bytes[16+i] : (bytes[6+i] ? 3 : 0);
+    if (version >= 3) {
+        for (int i = 0; i <= NARRATIVE_NAME_MAX; ++i)
+            loaded.narrative.playerName[i] = (wchar_t)(bytes[22 + i * 2] | ((uint16_t)bytes[23 + i * 2] << 8));
+        loaded.narrative.introSeen = bytes[56]; loaded.narrative.tutorialSeen = bytes[57];
+        loaded.narrative.milestoneSeen = bytes[58]; loaded.narrative.shardSeen = bytes[59];
+        loaded.narrative.bossSeen = Get32(bytes + 60); loaded.narrative.logsSeen = Get32(bytes + 64);
+        if (!NarrativeValid(&loaded.narrative)) return false;
+    }
+    // Migrated saves keep every victory and floor, but the new introduction,
+    // training and conversations remain unread. Re-encode the current metadata.
+    uint8_t current[SAVE_SIZE];
+    Encode(&loaded, current);
+    loaded.checksum = Get32(current + SAVE_CHECKSUM_OFFSET);
+    *campaign = loaded;
     return true;
 }
 
@@ -154,6 +243,7 @@ static bool WriteFileAtomically(const wchar_t* path, const uint8_t* bytes, DWORD
 }
 
 bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
+    if (!campaign || !NarrativeValid(&campaign->narrative)) return false;
     uint8_t bytes[SAVE_SIZE];
     Encode(campaign, bytes);
     for (int i = 6; i < 16; ++i) if (bytes[i] > 1) return false;
@@ -163,7 +253,7 @@ bool SaveCampaign(CampaignState* campaign, const wchar_t* overridePath) {
     if (!WriteFileAtomically(path, bytes, SAVE_SIZE)) return false;
     campaign->magic = CAMPAIGN_MAGIC;
     campaign->version = CAMPAIGN_VERSION;
-    campaign->checksum = Get32(bytes + 22);
+    campaign->checksum = Get32(bytes + SAVE_CHECKSUM_OFFSET);
     return true;
 }
 

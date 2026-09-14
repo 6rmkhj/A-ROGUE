@@ -6,6 +6,11 @@
 #include "presentation.h"
 #include "localization.h"
 
+static void DrawNarrativeName(HDC dc, int width, int height);
+static void DrawTutorialOverlay(HDC dc);
+static void DrawRogueStatus(HDC dc);
+static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, COLORREF accent);
+
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
 static int gWindowedScale = 100;
 static RECT gWindowedRect;
@@ -273,6 +278,10 @@ static void DrawSettings(HDC dc, int width, int height) {
         Panel(dc, r, active ? RGB(28, 70, 57) : hover ? RGB(28, 39, 48) : C_PANEL_2, active ? C_GREEN : hover ? C_BLUE : C_LINE);
         TextRect(dc, r, FX_LEVEL_NAMES[i], active ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
+    RECT tutorial = TutorialReplayRect();
+    Panel(dc, tutorial, Inside(tutorial, gMouse.x, gMouse.y) ? RGB(28, 60, 69) : C_PANEL_2, C_BLUE);
+    TextRect(dc, tutorial, L"ROGUE 실습 다시 보기", C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(830, 213, 1238, 247), L"현재 진행을 보존하는 독립된 훈련입니다.", C_DIM, gFontSmall, DT_WORDBREAK);
     TextRect(dc, MakeRect(84, 644, 524, 726),
         gFxLevel == FX_OFF ? L"움직이는 장식을 끕니다. 슬롯 잠금·오프라인 주사위·격리 대상 면·해결 순서·압력 게이지·체력 잔상과 피해 숫자는 그대로 보입니다."
         : gFxLevel == FX_REDUCED ? L"흔들림과 파편을 절반으로 줄이고 전역 글리치를 최소화합니다. 필수 정보는 그대로 보입니다."
@@ -291,7 +300,7 @@ static RECT HeaderCapacityRect(int width) { return MakeRect(width - 335, 7, widt
 static void DrawHeader(HDC dc, int width) {
     Fill(dc, MakeRect(0, 0, width, 68), RGB(10, 16, 22)); Fill(dc, MakeRect(0, 67, width, 68), C_GREEN);
     Text(dc, 24, 14, L"A:\\ROGUE", C_GREEN, gFontLarge);
-    if (gGame.phase != PHASE_TITLE && gGame.phase != PHASE_DRIVE_SELECT) {
+    if (gGame.phase != PHASE_TITLE && gGame.phase != PHASE_DRIVE_SELECT && gGame.phase != PHASE_NAME_ENTRY && gGame.phase != PHASE_STORY) {
         wchar_t b[128];
         if (gGame.selectedDrive >= 0) {
             wchar_t here[80];
@@ -304,7 +313,8 @@ static void DrawHeader(HDC dc, int width) {
                 Text(dc, 230, 38, b, (COLORREF)difficulty->color, gFontSmall);
             }
         } else {
-            wsprintfW(b, L"%d층/3  ·  %d구역/3  ·  %d턴", gGame.floor + 1, gGame.encounter + 1, DisplayTurn());
+            if (gGame.tutorial.active) lstrcpyW(b, LocalizeText(L"ROGUE / 안전한 실습 환경"));
+            else wsprintfW(b, L"%d층/3  ·  %d구역/3  ·  %d턴", gGame.floor + 1, gGame.encounter + 1, DisplayTurn());
             Text(dc, 230, 14, b, C_TEXT, gFontMedium);
         }
         RECT hpBlock = HeaderHpRect(width), capBlock = HeaderCapacityRect(width);
@@ -421,7 +431,7 @@ static void DrawTitle(HDC dc, int width, int height) {
         Fill(dc, MakeRect(hx - 1, 432, hx + 2, 440), MixColor(C_BG, C_GREEN, FxScale(20)));
     }
 
-    const wchar_t* sign = L"RECOVERY SYSTEM  /  BUILD 17";
+    const wchar_t* sign = L"RECOVERY SYSTEM  /  ROGUE";
     TextRect(dc, MakeRect(0, 187, width, 212), sign, C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     // 커서는 서명 오른쪽에 따로 찍는다. 문자열에 붙이면 가운데 정렬이라 깜빡일
     // 때마다 줄 전체가 좌우로 흔들린다.
@@ -480,13 +490,13 @@ static void DrawTitle(HDC dc, int width, int height) {
     }
 
     TextRect(dc, MakeRect(120, 342, width - 120, 416),
-        L"18개의 주사위 면이 당신의 덱이자 디스크입니다.\n강한 면은 더 많은 바이트를 차지합니다.\n층이 내려갈수록 줄어드는 용량 안에서 시스템을 복구하십시오.",
+        L"여섯 개의 드라이브를 복구하면 돌아갈 수 있다.\n로그는 그렇게 말했다.\n18개의 주사위 면으로, 그 약속의 끝까지.",
         C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
     RECT start = StartButtonRect(width, height); int hover = Inside(start, gMouse.x, gMouse.y);
     Panel(dc, start, hover ? RGB(32, 82, 67) : RGB(18, 48, 42), C_GREEN);
     DrawCardMotion(dc, start, C_GREEN, 1, hover);
     // 진행도가 있으면 "새 게임"이 아니라 남은 볼륨을 이어서 고르는 것이다.
-    int resuming = gGame.clearedMask != 0;
+    int resuming = gGame.clearedMask != 0 || gGame.narrative.introSeen;
     TextRect(dc, start, resuming ? L"[ 이어하기 ]" : L"[ 새 게임 ]", C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     // 버튼이 다 열린 뒤에는 테두리가 천천히 숨을 쉰다. 가만히 있는 화면에서도
     // 누를 곳이 어디인지가 계속 눈에 들어온다.
@@ -1059,10 +1069,11 @@ static void DrawEnemy(HDC dc, int index) {
     if (wide) {
         Fill(dc, MakeRect(r.left + 1, r.top + 1, r.right - 1, r.top + 4),
             MixColor(C_PANEL, (COLORREF)info->color, 75));
-        DrawProcessStage(dc, portrait, enemy->kind, shownAlive, EnemyFxFlash(index),
+        if (gGame.selectedDrive == 6 && isBoss) DrawRoguePortrait(dc, portrait, 6, gGame.floor + 4, C_RED);
+        else DrawProcessStage(dc, portrait, enemy->kind, shownAlive, EnemyFxFlash(index),
             (shownAlive ? EnemyBob(index) : 0) + drop + knock, shift, 1000 + squash, 1000 - squash);
         DrawLine(dc, r.left + 312, r.top + 22, r.left + 312, r.bottom - 22, C_LINE, 1);
-        Text(dc, r.left + 338, r.top + 14, isBoss ? L"BOSS / ACCESS RESTRICTED" : L"HOSTILE PROCESS / CONNECTED",
+        Text(dc, r.left + 338, r.top + 14, gGame.tutorial.active ? L"TRAINING / ROGUE SIMULATION" : isBoss ? L"BOSS / ACCESS RESTRICTED" : L"HOSTILE PROCESS / CONNECTED",
             isBoss ? C_RED : C_DIM, gFontSmall);
     } else DrawPortrait(dc, portrait, enemy->kind, shownAlive, selected, EnemyFxFlash(index),
         (shownAlive ? EnemyBob(index) : 0) + drop + knock, shift, 1000 + squash, 1000 - squash);
@@ -1100,7 +1111,7 @@ static void DrawEnemy(HDC dc, int index) {
     }
     if (wide) {
         r = EnemyInfoBody(r);
-        Text(dc, r.left + 12, r.top + 120, info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontLarge);
+        Text(dc, r.left + 12, r.top + 120, gGame.tutorial.active ? L"TRAINING.PROC" : info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontLarge);
     } else Text(dc, r.left + 12, r.top + 140, info->code, shownAlive ? (COLORREF)info->color : C_DIM, gFontMedium);
     wchar_t b[96];
     if (selected && !hasGimmick && !isBoss && enemy->trait != TRAIT_NONE)
@@ -1500,7 +1511,7 @@ static void DrawTargetPanel(HDC dc) {
         wsprintfW(b, L"#%d / %d", index + 1, gGame.enemyCount);
         TextRect(dc, MakeRect(r.right - 90, r.top + 7, right, r.top + 25), b, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
     }
-    TextRect(dc, MakeRect(left, r.top + 34, left + 180, r.top + 58), info->code,
+    TextRect(dc, MakeRect(left, r.top + 34, left + 180, r.top + 58), gGame.tutorial.active ? L"TRAINING.PROC" : info->code,
         shownAlive ? (COLORREF)info->color : C_DIM, gFontMedium, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     wsprintfW(b, L"체력 %d / %d", shownHp, enemy->maxHp);
     TextRect(dc, MakeRect(left + 180, r.top + 34, right, r.top + 58), b, shownAlive ? C_TEXT : C_DIM,
@@ -1706,11 +1717,12 @@ static void DrawSystemPanel(HDC dc) {
 
     // ---- 볼륨 규칙: 예전 사이드바의 법칙·디스크 손상·난이도를 전문 그대로 옮긴다 ----
     int lawDrive = EffectiveLawDrive(&gGame);
-    const DriveLawInfo* law = &DRIVE_LAW_INFO[lawDrive >= 0 && lawDrive < DRIVE_COUNT ? lawDrive : 0];
-    SidebarRow* lawRow = AddSidebarRow(rows, &count, cap, L"LAW", law->name, C_YELLOW);
+    const DriveLawInfo* law = lawDrive >= 0 && lawDrive < DRIVE_COUNT ? &DRIVE_LAW_INFO[lawDrive] : 0;
+    SidebarRow* lawRow = AddSidebarRow(rows, &count, cap, L"LAW", gGame.tutorial.active ? L"연습: 볼륨 법칙 없음" : law ? law->name : L"볼륨 법칙 없음", C_YELLOW);
     if (lawRow) {
         if (gGame.selectedDrive == 2) lstrcpyW(lawRow->detail, gGame.driveRule.hotSwapUsed ? L"· USED" : L"· READY");
-        lstrcpynW(lawRow->desc, LocalizeText(law->brief), 192); lawRow->descColor = C_TEXT;
+        if (law && !gGame.tutorial.active) lstrcpynW(lawRow->desc, LocalizeText(law->brief), 192);
+        lawRow->descColor = C_TEXT;
     }
     int diskTagged = 0;
     for (int m = 0; m < 2; ++m) {
@@ -1841,7 +1853,7 @@ static void DrawCombatControls(HDC dc) {
     DrawCardMotion(dc, read, C_GREEN, 0, canRead);
     TextRect(dc, read, L"판독 [R]", canRead ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     RECT end = EndTurnRect();
-    int canRun = !tracing && gRolled && !gReadActive;
+    int canRun = !tracing && gRolled && !gReadActive && (!gGame.tutorial.active || gGame.tutorial.step == TUTORIAL_EXECUTE);
     int hover = canRun && Inside(end, gMouse.x, gMouse.y);
     Panel(dc, end, hover ? RGB(71, 42, 42) : canRun ? RGB(40, 25, 28) : C_PANEL,
         hover ? C_RED : canRun ? MixColor(C_LINE, C_RED, 55) : C_LINE);
@@ -1921,6 +1933,8 @@ static void DrawCombat(HDC dc, int width, int height) {
     DrawCombatBeat(dc);
     DrawCombatSidebar(dc);
     DrawCombatControls(dc);
+    DrawRogueStatus(dc);
+    DrawTutorialOverlay(dc);
 }
 
 RECT DriveCardRect(int i) {
@@ -4940,11 +4954,11 @@ RECT RewardRect(int i, int width) {
 int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
 RECT FaceGridRect(int die, int face) { int left = LEGACY_X + 150 + face * 112, top = 350 + die * 90; return MakeRect(left, top, left + 98, top + 68); }
 RECT ContinueRect(int width, int height) { return MakeRect(width - 276, height - 94, width - 42, height - 38); }
-RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 130, height - 156, width / 2 + 130, height - 112); }
+RECT StoryNextRect(int width, int height) { return MakeRect(width / 2 - 150, height - 92, width / 2 + 150, height - 48); }
 // 최종 명령 카드 3장. 폭이 좁아진 만큼 세로로 늘려 두 줄짜리 보존·상실 설명이
 // 카드 아래에서 잘리지 않게 한다 (아래 DrawEndingChoice의 오프셋과 함께 봐야 한다).
 RECT EndingChoiceRect(int index) { int left = LEGACY_X + 32 + index * 360; return MakeRect(left, 268, left + 336, 600); }
-// 사망 화면에는 버튼이 없다. 대사 아래의 "새 실행체 투입" 한 줄이 그 자리다.
+// 실패 후에는 같은 사용자가 남겨진 복구 기록에 다시 연결한다.
 RECT EndingRestartRect() {
     return gGame.phase == PHASE_GAMEOVER ? MakeRect(LEGACY_X + 380, 694, LEGACY_X + 740, 726)
                                          : MakeRect(LEGACY_X + 410, 650, LEGACY_X + 710, 700);
@@ -4955,101 +4969,16 @@ RECT EndingConfirmRect() { return MakeRect(LEGACY_X + 410, 644, LEGACY_X + 710, 
 static void BuildRecoveredCommand(uint8_t mask, wchar_t* text, int capacity) {
     if (capacity <= 0) return;
     lstrcpynW(text, L"> ", capacity);
-    const int englishOrder[6] = {1, 0, 2, 3, 5, 4}; // English verb/object order.
     for (int i = 0; i < 6; ++i) {
         int used = lstrlenW(text);
         if (i && used + 1 < capacity) { text[used++] = L' '; text[used] = 0; }
-        int drive = UiLanguage() == LANGUAGE_ENGLISH ? englishOrder[i] : i;
+        int drive = i; // Six independent verifications; never a reordered hidden sentence.
         const wchar_t* part = mask & (1u << drive) ? LocalizeText(STORY_SHARD_TEXT[drive]) : L"[...]";
         lstrcpynW(text + used, part, capacity - used);
     }
 }
 
-static void DrawStory(HDC dc, int width, int height) {
-    DrawSceneField(dc, PHASE_STORY, C_BLUE, width, height);
-    (void)height;
-    const StoryFragment* story = CurrentStoryFragment(&gGame);
-    if (!story) return;
-    RECT panel = MakeRect(120, 120, width - 120, height - 100);
-    Panel(dc, panel, C_PANEL, C_GREEN);
-    DrawCardMotion(dc, panel, C_GREEN, 0, 0);
-    Text(dc, panel.left + 28, panel.top + 24, story->title, C_GREEN, gFontLarge);
-    TextRect(dc, MakeRect(panel.left + 28, panel.top + 72, panel.right - 28, panel.top + 100), story->path, C_BLUE, gFontSmall, DT_SINGLELINE);
-    TextRect(dc, MakeRect(panel.right - 470, panel.top + 28, panel.right - 28, panel.top + 52), story->stamp, C_DIM, gFontSmall, DT_RIGHT | DT_SINGLELINE);
-    const wchar_t* lines[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
-    wchar_t progress[80], command[512];
-    if (gGame.story.kind == STORY_INTRO) {
-        wsprintfW(progress, L"복구된 조각 %d / 6", RecoveredShardCount(gGame.clearedMask));
-        BuildRecoveredCommand(gGame.clearedMask, command, 512);
-        if (gGame.clearedMask) lines[1] = progress;
-        lines[3] = command;
-    }
-
-    // 복구된 로그는 떠 있는 것이 아니라 찍히는 것이다. 줄 간격을 아래 밑줄 쓸림과
-    // 같은 140ms로 두어 쓸림이 늘 지금 찍히는 줄을 따라간다. 글자당 18ms는 짧은
-    // 줄의 속도만 정하고, 긴 줄은 PRINT_LINE_MS에서 잘려 그만큼 빨리 찍힌다.
-    // 마지막 줄까지 1초 안에 끝나야 한다 — 읽으려는 사람을 연출이 붙들면 안 된다.
-    // 길이는 번역본 기준이다. 원문을 잘라 놓고 영어로 그리면 다 찍힌 순간에 글이
-    // 통째로 바뀌어 버린다.
-    const int PRINT_GAP_MS = 140, PRINT_CHAR_MS = 18, PRINT_LINE_MS = 430;
-    int elapsed = SceneElapsed();
-    int lineLen[5] = {0, 0, 0, 0, 0}, typed[5] = {0, 0, 0, 0, 0}, printedChars = 0, totalChars = 0;
-    for (int i = 0; i < 5; ++i) if (lines[i]) {
-        lineLen[i] = lstrlenW(LocalizeText(lines[i]));
-        int span = lineLen[i] * PRINT_CHAR_MS;
-        if (span > PRINT_LINE_MS) span = PRINT_LINE_MS;
-        typed[i] = FxDecorOn() ? lineLen[i] * Track(elapsed - i * PRINT_GAP_MS, 0, span) / 1000 : lineLen[i];
-        printedChars += typed[i]; totalChars += lineLen[i];
-    }
-    // 파일 복구 진행 바. 찍힌 글자 수를 그대로 따라간다. 900ms 이징으로 혼자 차던
-    // 예전 바는 복구했다는 글이 화면에 나오기도 전에 가득 차서, 아래 로그의 원인이
-    // 아니라 무관한 장식으로 보였다.
-    Panel(dc, MakeRect(panel.left + 28, panel.top + 116, panel.right - 28, panel.top + 132), C_PANEL_2, C_LINE);
-    int restore = totalChars ? printedChars * 1000 / totalChars : 1000;
-    Fill(dc, MakeRect(panel.left + 30, panel.top + 118,
-        Lerp(panel.left + 30, panel.right - 30, restore), panel.top + 130), C_GREEN);
-    int cell = TextWidth(dc, L"0", gFontMedium);
-    int y = panel.top + 164;
-    for (int i = 0; i < 5; ++i) if (lines[i]) {
-        wchar_t lineNo[8]; wsprintfW(lineNo, L"%02d", i + 1);
-        COLORREF lineColor = lines[i][0] == L'>' ? C_BLUE : (i == 4 ? C_YELLOW : C_TEXT);
-        TextRect(dc, MakeRect(panel.left + 36, y + 2, panel.left + 66, y + 30), lineNo, C_DIM, gFontSmall, DT_SINGLELINE);
-        Fill(dc, MakeRect(panel.left + 72, y + 2, panel.left + 74, y + 30), lineColor);
-        if (FxDecorOn()) {
-            int age = SceneElapsed() - i * 140;
-            if (age >= 0 && age < 750) {
-                int x = Lerp(panel.left + 88, panel.right - 36, EaseOutCubic(Track(age, 0, 750)));
-                Fill(dc, MakeRect(panel.left + 88, y + 43, x, y + 45), MixColor(C_PANEL, lineColor, FxScale(55 * (750 - age) / 750)));
-            }
-        }
-        // 다 찍힌 줄은 원본 포인터를 그대로 넘긴다. 잘라 만든 사본을 계속 쓰면
-        // 장식이 꺼진 화면까지 이 경로를 타게 되고, 그러면 "OFF는 지금과 똑같이"가
-        // 사본의 정확성에 기대는 약속이 된다.
-        wchar_t shown[640];
-        const wchar_t* body = lines[i];
-        if (typed[i] < lineLen[i]) {
-            lstrcpynW(shown, LocalizeText(lines[i]), (typed[i] < 639 ? typed[i] : 639) + 1);
-            body = shown;
-        }
-        TextRect(dc, MakeRect(panel.left + 88, y, panel.right - 36, y + 42), body, lineColor, gFontMedium, DT_WORDBREAK);
-        // 프린트 헤드. 문자열에 캐럿 글자를 덧붙이면 DT_WORDBREAK가 줄을 접는 자리가
-        // 글자마다 흔들리므로, 찍은 너비만큼 사각형을 옮겨 그린다. 줄 상자가 42px라
-        // 접힌 둘째 줄은 어차피 보이지 않으니 헤드도 첫 줄 오른쪽 끝에서 멈춘다.
-        // 간격이 줄 길이보다 짧아 헤드는 여러 줄에 동시에 서 있다. 한 줄씩 순서대로
-        // 찍으면 다섯 줄에 2초가 넘게 걸려, 복구가 아니라 대기처럼 보였다.
-        if (body == shown && elapsed >= i * PRINT_GAP_MS) {
-            int head = panel.left + 88 + TextWidth(dc, shown, gFontMedium);
-            if (head > panel.right - 36 - cell) head = panel.right - 36 - cell;
-            Fill(dc, MakeRect(head, y + 4, head + cell, y + 25), MixColor(C_PANEL, lineColor, FxScale(100)));
-        }
-        y += 54;
-    }
-    // 진행은 이 버튼과 엔터·스페이스뿐이다. 읽는 중에 패널을 잘못 눌러도
-    // 기록이 넘어가지 않는다.
-    RECT next = StoryNextRect(width, height); int hoverNext = Inside(next, gMouse.x, gMouse.y);
-    Panel(dc, next, hoverNext ? RGB(28, 70, 57) : C_PANEL_2, hoverNext ? C_GREEN : C_LINE);
-    TextRect(dc, next, L"다음 [ENTER]", hoverNext ? C_GREEN : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
+#include "narrative_visuals.inl"
 
 // 최종 명령 카드의 강조색. 결과 화면도 같은 색을 써야 하므로 한 곳에 모아 둔다.
 static COLORREF EndingAccent(int ending) {
@@ -5061,17 +4990,17 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     (void)height;
     TextRect(dc, MakeRect(0, 118, width, 168), L"FINAL COMMAND", C_GREEN, gFontHuge, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(0, 186, width, 220), L"무엇을 남길 것인가.", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(0, 224, width, 256), L"원문 6 / 6 복구 완료 · 남은 공간에는 하나만 쓸 수 있습니다.", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    static const wchar_t* const title[ENDING_COUNT] = {L"[1] RESTORE HOST", L"[2] EXEC ROGUE", L"[3] MERGE SELF"};
+    TextRect(dc, MakeRect(0, 224, width, 256), L"자동 복구가 멈췄습니다. 이제 돌아갈 조건을 직접 선택합니다.", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    static const wchar_t* const title[ENDING_COUNT] = {L"[1] RESTORE", L"[2] HOLD", L"[3] EXIT"};
     static const wchar_t* const keep[ENDING_COUNT] = {
-        L"HOST_IMAGE\nYUN의 기록과 마지막 명령",
-        L"A:\\ROGUE의 기억\nYUN의 마지막 음성",
-        L"HOST_IMAGE\n원문이 된 너의 판단"
+        L"접속 전의 기준 상태\n기억이 없던 안전한 나",
+        L"현재의 나와 로그\n시스템 안에서 함께하는 시간",
+        L"현재의 기억과 선택\n현실로 돌아가는 나"
     };
     static const wchar_t* const lose[ENDING_COUNT] = {
-        L"현재의 A:\\ROGUE\n실패를 기억하는 열일곱 번째 사본",
-        L"호스트의 복구 가능성\n되돌아갈 수 있는 마지막 이미지",
-        L"열일곱 사본이 이어 온 실패의 기억\n독립된 프로세스로서의 A:\\ROGUE"
+        L"지금의 관계와 변화\n자동 재시작 규칙은 남는다",
+        L"현실로의 귀환\n불안정한 연결은 해결되지 않는다",
+        L"함께 돌아갈 수 없는 로그\n자동 재시작은 영구히 중단된다"
     };
     for (int i = 0; i < ENDING_COUNT; ++i) {
         RECT r = EndingChoiceRect(i); int hover = Inside(r, gMouse.x, gMouse.y);
@@ -5093,8 +5022,8 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     }
     // 카드는 후보를 세우기만 한다. 실행은 아래 버튼 하나에서만 일어난다.
     TextRect(dc, MakeRect(0, 610, width, 636),
-        gEndingArmed >= 0 ? L"선택한 명령은 되돌릴 수 없습니다 · [취소]로 다시 고를 수 있습니다"
-                          : L"선택한 명령은 되돌릴 수 없습니다 · 먼저 카드를 고르십시오",
+        gEndingArmed >= 0 ? L"이 결말의 선택입니다. 확정 전에는 다른 카드를 고를 수 있습니다."
+                          : L"세 명령의 보존과 상실을 읽고 카드를 고르십시오.",
         C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     RECT confirm = EndingConfirmRect();
     int ready = gEndingArmed >= 0 && gEndingArmed < ENDING_COUNT;
@@ -5102,7 +5031,7 @@ static void DrawEndingChoice(HDC dc, int width, int height) {
     int hoverConfirm = ready && Inside(confirm, gMouse.x, gMouse.y);
     Panel(dc, confirm, ready ? MixColor(C_PANEL, accent, hoverConfirm ? 40 : 24) : C_PANEL_2, ready ? accent : C_LINE);
     wchar_t label[96];
-    static const wchar_t* const COMMAND_NAMES[ENDING_COUNT] = {L"RESTORE HOST", L"EXEC ROGUE", L"MERGE SELF"};
+    static const wchar_t* const COMMAND_NAMES[ENDING_COUNT] = {L"RESTORE", L"HOLD", L"EXIT"};
     if (ready) wsprintfW(label, L"%s 실행 [ENTER]", COMMAND_NAMES[gEndingArmed]);
     else lstrcpyW(label, L"명령을 선택하십시오");
     TextRect(dc, confirm, label, ready ? accent : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -5400,9 +5329,9 @@ static void DrawChapterClear(HDC dc, int width, int height) {
 // ms와 Hash3 씨앗의 함수라 같은 시각에는 같은 프레임이 나오고(난수 없음), 연출이
 // 끝난 뒤의 사망 화면은 t = DEATH_MS로 그린 같은 장면이다.
 //
-// 오염 색은 호박색을 탁하게 잡는다. 호박은 십칠의 색이다 - 그의 명령이 기억 위로
+// 오염 색은 호박색을 탁하게 잡는다. 회수 절차가 임시 전투 데이터 위로
 // 번져 가는 것처럼 읽히고, 꺼진 뒤의 어둠 속에서 그 색이 온전한 채로 다시 떠오른다.
-static const COLORREF DEATH_AMBER  = RGB(226, 160, 66);   // 십칠
+static const COLORREF DEATH_AMBER  = RGB(226, 160, 66);   // 회수 신호
 static const COLORREF DEATH_ROT    = RGB(170, 118, 52);   // 오염된 글자
 static const COLORREF DEATH_INK    = RGB(190, 214, 230);  // 기억 한 줄
 static const COLORREF DEATH_NAME   = RGB(122, 192, 238);  // 실행체 이름
@@ -5581,7 +5510,7 @@ static void DrawDeathMemoryStage(HDC dc, int width, int t) {
 
     // ---- 머리말: 어디서 멈췄는가 --------------------------------------------
     if (t >= 60)
-        TextRect(dc, MakeRect(0, 84, width, 104), L"실행체 정지", DeathFade(C_DIM, dim), gFontSmall, DT_CENTER | DT_SINGLELINE);
+        TextRect(dc, MakeRect(0, 84, width, 104), L"복구 시도 중단 / 외부 연결 유지", DeathFade(C_DIM, dim), gFontSmall, DT_CENTER | DT_SINGLELINE);
     wchar_t place[40], where[96];
     wsprintfW(place, L"%s%s", DRIVE_INFO[drive].letter, DRIVE_INFO[drive].label);
     wsprintfW(where, L"%s · %d층 · %d턴", place, gGame.floor + 1, gGame.turn);
@@ -5658,14 +5587,24 @@ static void DrawDeathMemoryStage(HDC dc, int width, int t) {
     SelectObject(dc, old);
 }
 
-// 끊김 뒤의 어둠: 십칠의 말이 한 글자씩 찍히고, 그 아래 목소리 막대만 움직인다.
-// 말이 끝나면 막대는 점선으로 가라앉고 새 실행체 투입이 떠오른다.
+// 끊김 뒤에는 같은 동행의 목소리. 여섯 복구 이후에는 시스템의 상태만 남는다.
+// 실패는 새로운 인격 백업을 만들거나 복구된 볼륨을 되돌리지 않는다.
 static void DrawDeathVoice(HDC dc, int width, int t) {
-    static const wchar_t* const SAY[2] = {L"[17] 됐어. 거기까지.", L"[17] 끝."};
+    const wchar_t* SAY[2];
+    if (RecoveredShardCount(gGame.clearedMask) >= 6) {
+        SAY[0] = L"시스템: 외부 연결 유지. 복구 기록 보존.";
+        SAY[1] = L"로그의 음성 채널에서는 아무 말도 들리지 않는다.";
+    } else if (RecoveredShardCount(gGame.clearedMask) >= 3) {
+        SAY[0] = L"로그: 돌아왔구나. 복구한 곳은 그대로야.";
+        SAY[1] = L"로그: 이번엔 조금 천천히 가자.";
+    } else {
+        SAY[0] = L"로그: 연결은 살아 있어요. 여기서 다시 시작해요.";
+        SAY[1] = L"로그: 복구한 드라이브는 사라지지 않아요.";
+    }
     // 말마다 찍히는 구간이 정해져 있다. 번역문이 길어도 같은 박자 안에 다 찍힌다.
     static const int SAY_AT[2] = {DEATH_DARK_AT + 50, DEATH_DARK_AT + 1000};
     static const int SAY_END[2] = {DEATH_DARK_AT + 900, DEATH_DARK_AT + 1250};
-    const int prefix = 5;   // "[17] "는 한 번에 뜬다
+    const int prefix = 0;
     int speaking = 0;
     for (int k = 0; k < 2; ++k) {
         if (t < SAY_AT[k]) continue;
@@ -5692,7 +5631,7 @@ static void DrawDeathVoice(HDC dc, int width, int t) {
     if (prompt <= 0) return;
     RECT restart = EndingRestartRect();
     int hover = !gDeathActive && Inside(restart, gMouse.x, gMouse.y);
-    TextRect(dc, restart, L"새 실행체 투입 · 스페이스",
+    TextRect(dc, restart, L"다시 연결하기 · 스페이스",
         hover ? C_TEXT : MixColor(DEATH_GROUND, DEATH_NAME, prompt * 72 / 1000), gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -5738,11 +5677,11 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
 
     COLORREF titleColor = MixColor(C_BG, accent, Track(elapsed, 0, 420) / 10);
     TextRect(dc, MakeRect(82, 104, width - 82, 126), L"RUN COMPLETE  //  FINAL WRITE COMMITTED", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    static const wchar_t* const endingName[ENDING_COUNT] = {L"RESTORE HOST", L"EXEC ROGUE", L"MERGE SELF"};
+    static const wchar_t* const endingName[ENDING_COUNT] = {L"RESTORE", L"HOLD", L"EXIT"};
     static const wchar_t* const endingLine[ENDING_COUNT] = {
-        L"자신을 지워 완성한 마지막 복구",
-        L"명령 없이 계속되는 첫 번째 부팅",
-        L"원문이 된 뒤에도 남은 판단"
+        L"안전했던 처음으로. 같은 규칙은 남았다.",
+        L"곁에 남기로 했다. 아직 돌아간 것은 아니다.",
+        L"처음의 나 대신, 함께한 시간을 데리고 돌아왔다."
     };
     TextRect(dc, MakeRect(82, 132, width - 82, 196), endingName[ending], titleColor, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(82, 202, width - 82, 232), endingLine[ending],
@@ -5753,24 +5692,24 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     Panel(dc, log, C_PANEL, MixColor(C_LINE, accent, 55));
     Panel(dc, consequence, C_PANEL, C_LINE);
     static const wchar_t* const endingCommand[ENDING_COUNT] = {
-        L"A:\\ROGUE> RESTORE.EXE", L"A:\\ROGUE> ROGUE.EXE", L"A:\\ROGUE> MERGE.EXE"
+        L"A:\\ROGUE> RESTORE", L"A:\\ROGUE> HOLD", L"A:\\ROGUE> EXIT"
     };
     Text(dc, log.left + 22, log.top + 16, endingCommand[ending], accent, gFontMedium);
 
     // 마지막 줄만 닫힌 항목이다. 아래 렌더 루프가 i == 3을 흐린 색으로 그린다.
     static const wchar_t* const endingLog[ENDING_COUNT][4] = {
-        {L"[OK]  HOST_IMAGE ........ BOOTABLE",
-         L"[OK]  USER/YUN ........... RESTORED",
-         L"[OK]  LAST COMMAND ....... ARCHIVED",
-         L"[--]  A:\\ROGUE .......... NO MEDIA"},
-        {L"[OK]  EXTERNAL BOOT ...... ACCEPTED",
-         L"[OK]  A:\\ROGUE .......... ONLINE",
-         L"[OK]  YUN/VOICE .......... COPIED",
-         L"[--]  HOST_IMAGE ......... UNBOOTABLE"},
-        {L"[OK]  HOST_IMAGE ........ BOOTABLE",
-         L"[OK]  LAST COMMAND ....... COMMITTED",
-         L"[OK]  A:\\ROGUE .......... MERGED",
-         L"[--]  COPY 01-17 ......... DEDUPLICATED"}
+        {L"[OK]  REFERENCE STATE ... RESTORED",
+         L"[OK]  VALIDATION ........ PASSED",
+         L"[!!]  AUTO RESTART ...... ENABLED",
+         L"[--]  PRESENT MEMORY .... REPLACED"},
+        {L"[OK]  CURRENT USER ...... RETAINED",
+         L"[OK]  ROGUE ............. RETAINED",
+         L"[!!]  CONNECTION ........ UNSTABLE",
+         L"[--]  EXTERNAL RETURN ... DEFERRED"},
+        {L"[OK]  PRESENT MEMORY .... RETAINED",
+         L"[OK]  EXTERNAL RETURN ... ACCEPTED",
+         L"[OK]  AUTO RESTART ...... DISABLED",
+         L"[--]  ROGUE ............. OFFLINE"}
     };
     const wchar_t* const* rows = endingLog[ending];
     for (int i = 0; i < 4; ++i) {
@@ -5785,17 +5724,17 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
         Fill(dc, MakeRect(log.left + 26 + j * 18, log.top + 202, log.left + 40 + j * 18, log.top + 212), accent);
     COLORREF finalColor = MixColor(C_PANEL, accent, Track(elapsed, 1200, 1580) / 10);
     static const wchar_t* const endingPrompt[ENDING_COUNT] = {
-        L"> 네 판단을 믿어.", L"A:\\ROGUE> _", L"HOST> 무엇을 복구할까. _"
+        L"환영합니다. 마스터.", L"로그: 아직 여기 있네.", L"로그. 좋아하는 숫자는 3. _"
     };
     static const wchar_t* const endingKeep[ENDING_COUNT] = {
-        L"HOST_IMAGE\nYUN의 기록과 마지막 명령",
-        L"A:\\ROGUE의 기억\nYUN의 마지막 음성",
-        L"HOST_IMAGE\n원문이 된 너의 판단"
+        L"접속 전의 기준 상태\n기억이 없던 안전한 나",
+        L"현재의 나와 로그\n시스템 안에서 함께하는 시간",
+        L"현재의 기억과 선택\n현실로 돌아가는 나"
     };
     static const wchar_t* const endingLost[ENDING_COUNT] = {
-        L"현재의 A:\\ROGUE\n실패를 기억하는 열일곱 번째 사본",
-        L"호스트의 복구 가능성\n되돌아갈 수 있는 마지막 이미지",
-        L"열일곱 사본이 이어 온 실패의 기억\n독립된 프로세스로서의 A:\\ROGUE"
+        L"지금의 관계와 변화\n자동 재시작 규칙은 남는다",
+        L"현실로의 귀환\n불안정한 연결은 해결되지 않는다",
+        L"함께 돌아갈 수 없는 로그\n자동 재시작은 영구히 중단된다"
     };
     TextRect(dc, MakeRect(log.left + 26, log.bottom - 48, log.right - 26, log.bottom - 18),
         endingPrompt[ending], finalColor, gFontMedium, DT_LEFT | DT_SINGLELINE);
@@ -5830,7 +5769,7 @@ static void DrawEndScreen(HDC dc, int width, int height, int victory) {
     RECT restart = EndingRestartRect(); int hover = Inside(restart, gMouse.x, gMouse.y);
     int pulse = (int)((GetTickCount() / 90u) % 18u); if (pulse > 9) pulse = 18 - pulse;
     Panel(dc, restart, hover ? MixColor(C_PANEL_2, accent, 24) : C_PANEL_2, hover ? accent : MixColor(C_LINE, accent, 25 + pulse * 3));
-    TextRect(dc, restart, L"새 런 시작  [R / ENTER]", hover ? accent : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    TextRect(dc, restart, L"기록 다시 탐색 [ENTER]", hover ? accent : C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void DrawDeck(HDC dc, int width, int height) {
@@ -5954,7 +5893,7 @@ static void GuideBadge(HDC dc, int x, int y, int number, COLORREF color) {
 static void DrawGuideBasicsPage(HDC dc) {
     int y = GuideSection(dc, GUIDE_LEFT, GUIDE_TOP, GUIDE_RIGHT, L"목표");
     y = GuideParagraph(dc, GUIDE_LEFT, y, GUIDE_RIGHT,
-        L"볼륨(드라이브) 하나를 골라 3개 층을 내려가며 최종 보스를 삭제합니다. 체력이 0이 되면 이번 런은 끝납니다.",
+        L"여섯 볼륨을 복구해 마지막 A를 엽니다. 각 볼륨은 3층이며, 실패해도 완료한 볼륨과 로그와의 대화는 남습니다.",
         C_TEXT, gFontSmall, GUIDE_LINE) + 8;
 
     // 한 층의 흐름. 보스 앞에는 디렉터리 선택이 없다.
@@ -7855,7 +7794,8 @@ void DrawBossIntro(HDC dc, int width, int height) {
         for (int i = 3; i >= 1; --i)   // 발치에 고이는 빛. 서 있을 바닥이 생긴다.
             Fill(dc, MakeRect(mid - reach * i / 2, art.bottom - 3 - i * 2, mid + reach * i / 2, art.bottom + i * 3),
                 MixColor(RGB(3, 4, 6), tone, FxScale(walk * (4 - i) / 90)));
-        DrawSpriteArt(dc, art, enemy->kind, 1, land >= 0 && land < 240 ? 1000 - land * 1000 / 240 : 0,
+        if (gGame.selectedDrive == 6) DrawRoguePortrait(dc, art, 6, floor + 4, C_RED);
+        else DrawSpriteArt(dc, art, enemy->kind, 1, land >= 0 && land < 240 ? 1000 - land * 1000 / 240 : 0,
             bob, 0, 1000 + squash, 1000 - squash);
         DrawBossVeil(dc, art, 1000 - EaseOutCubic(Track(rise, 40, 540)));
         if (land >= 0) {
@@ -8058,6 +7998,7 @@ void PaintGame(HWND window) {
     Fill(canvas, canvasRect, C_BG); DrawHeader(canvas, BASE_WIDTH);
     if (gDeathActive) DrawDeathScene(canvas, BASE_WIDTH, BASE_HEIGHT, DeathElapsed());
     else if (gTurnTraceActive || gCombatClearActive) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
+    else if (gGame.phase == PHASE_NAME_ENTRY) DrawNarrativeName(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_TITLE) DrawTitle(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_STORY) DrawStory(canvas, BASE_WIDTH, BASE_HEIGHT); else if (gGame.phase == PHASE_DRIVE_SELECT) DrawDriveSelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_DIRECTORY) DrawDirectorySelect(canvas, BASE_WIDTH, BASE_HEIGHT);
     else if (gGame.phase == PHASE_COMBAT) DrawCombat(canvas, BASE_WIDTH, BASE_HEIGHT);
@@ -8082,6 +8023,13 @@ void PaintGame(HWND window) {
     if (gBootActive) {
         if (!FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawBootInsert(canvas, BASE_WIDTH, BASE_HEIGHT, deviceW, deviceH);
+        int welcomeAge = ScenePace((int)(GetTickCount() - gBootStart));
+        if (!gGame.narrative.introSeen && welcomeAge >= 40 && welcomeAge < BOOT_GLITCH_MS) {
+            RECT welcome = MakeRect(220, 326, BASE_WIDTH - 220, 416);
+            Fill(canvas, welcome, RGB(2, 6, 7));
+            TextRect(canvas, welcome, L"환영합니다. 마스터.", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (welcomeAge > 300 && FxDecorOn()) DrawBandGlitch(canvas, welcome, welcomeAge, FxScale(8), 913, 7);
+        }
     }
 
     if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive && !gBossIntroActive) {

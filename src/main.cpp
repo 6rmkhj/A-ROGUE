@@ -17,6 +17,24 @@ static UserSettings gSettings;
 // Persistent discovery state. NewRun clears GameState, so this copy is merged
 // back into each run and written independently from campaign progression.
 static uint8_t gCodex[ENEMY_KIND_COUNT];
+static int gCampaignSavePending;
+static int gCodexSavePending;
+static HWND gNarrativeNameEdit;
+static WNDPROC gNarrativeNameEditProc;
+static HFONT gNarrativeNameFont;
+static HBRUSH gNarrativeNameBrush;
+static int gNarrativeNameFontHeight;
+static int gNarrativeNameComposing;
+static int gNarrativeNameSession;
+static int gTutorialPracticeActive;
+static GameState gTutorialPracticeBackup;
+static int gTutorialPracticeRolled;
+static void SyncNarrativeControls();
+static void ConfirmNarrativeName();
+static void BeginTutorialReplay();
+static void FinishTutorialUi(int skip);
+static void AdvanceTutorialUi();
+#define NARRATIVE_CONFIRM_MESSAGE (WM_APP + 21)
 // TSR removals on the prune screen are staged until Continue, making a second
 // click an undo rather than an irreversible mistake.
 uint8_t gPruneTsrPending[TSR_COUNT] = {};
@@ -985,6 +1003,10 @@ static void FinishBootInsert() {
     FxSnapshotRelease();
     NewRun(&gGame, gBootSeed, CampaignClearedMask(&gCampaign));
     SetSeenEndings(&gGame, CampaignSeenEndingMask(&gCampaign));
+    gGame.finalVolumeCleared = gCampaign.finalCleared;
+    AttachNarrative(&gGame, &gCampaign.narrative);
+    for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
+    SyncNarrativeControls();
     PlaySfx(SFX_BOOT);
     InvalidateRect(gWindow, 0, FALSE);
 }
@@ -1069,6 +1091,7 @@ int DieSettleFlash(int die) {
 static void StopRead() {
     if (!gReadActive) return;
     gReadActive = 0; gRolled = 1; KillTimer(gWindow, 1);
+    if (gGame.tutorial.active) TutorialReadDice(&gGame);
 }
 
 static void BeginRead() {
@@ -1139,6 +1162,7 @@ static int VisibleSceneKey() {
 }
 int SceneElapsed() { return gSceneKey < 0 ? 1200 : (int)(GetTickCount() - gSceneStart); }
 void SyncIdleAnimation() {
+    SyncNarrativeControls();
     SyncUiFocus();
     int key = VisibleSceneKey();
     // 보스 조우 연출은 그 층의 보스전이 처음 보이는 프레임에 한 번만 연다. 연출이
@@ -1247,19 +1271,42 @@ static int CampaignSaveExistsBesideExecutable() {
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static void FlushPendingProgress() {
+    int attempted = 0;
+    if (gCampaignSavePending && !gCampaignCorrupt) {
+        gCampaignSavePending = SaveCampaign(&gCampaign) ? 0 : 1;
+        attempted = 1;
+    }
+    if (gCodexSavePending) {
+        gCodexSavePending = SaveCodex(gCodex, ENEMY_KIND_COUNT) ? 0 : 1;
+        attempted = 1;
+    }
+    if (attempted) gSaveFailed = (gCampaignSavePending && !gCampaignCorrupt) || gCodexSavePending;
+}
+
 static void PersistCampaignProgress() {
+    if (gTutorialPracticeActive) return;
+    if (gGame.tutorial.active) {
+        if (gGame.narrativeEnabled && RecordCampaignNarrative(&gCampaign, &gGame.narrative))
+            gCampaignSavePending = 1;
+        FlushPendingProgress();
+        return;
+    }
     bool changed = RecordCampaignClears(&gCampaign, gGame.clearedMask);
+    if (gGame.narrativeEnabled && RecordCampaignNarrative(&gCampaign, &gGame.narrative)) changed = true;
     if (gGame.selectedDrive >= 0 && gGame.selectedDrive < 6 && RecordCampaignReach(&gCampaign, gGame.selectedDrive, gGame.floor)) changed = true;
     if (gGame.finalVolumeCleared && !gCampaign.finalCleared) { gCampaign.finalCleared = 1; changed = true; }
-    if (RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
-    // 실패는 조용히 넘기지 않는다. 다음 저장이 성공하면 표시도 내려간다.
-    if (changed && !gCampaignCorrupt) gSaveFailed = SaveCampaign(&gCampaign) ? 0 : 1;
+    // Commit an ending after its final page was acknowledged, so quitting in
+    // the epilogue resumes the final decision instead of losing the goodbye.
+    if (gGame.phase == PHASE_VICTORY && RecordCampaignEnding(&gCampaign, CommittedEnding(&gGame))) changed = true;
+    if (changed) gCampaignSavePending = 1;
     bool codexChanged = false;
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) {
         if (gGame.enemyScanned[i] && !gCodex[i]) { gCodex[i] = 1; codexChanged = true; }
         if (gCodex[i]) gGame.enemyScanned[i] = 1;
     }
-    if (codexChanged && !SaveCodex(gCodex, ENEMY_KIND_COUNT)) gSaveFailed = 1;
+    if (codexChanged) gCodexSavePending = 1;
+    FlushPendingProgress();
 }
 
 // 세이브를 비우고 타이틀로 돌아간다. 진행 중이던 런의 clearedMask가 살아남으면
@@ -1285,7 +1332,10 @@ static void ResetCampaignProgress() {
         return;
     }
     gCampaignCorrupt = 0;
-    gSaveFailed = 0;
+    gCampaignSavePending = 0;
+    gSaveFailed = gCodexSavePending;
+    gTutorialPracticeActive = 0;
+    ZeroMemory(&gTutorialPracticeBackup, sizeof(gTutorialPracticeBackup));
     InitTitle(&gGame, 0, 0);
 }
 
@@ -1294,6 +1344,8 @@ static void AdvanceStoryUi() {
     // 답을 알고 있으므로 그쪽에 묻는다 (에필로그를 넘기는 순간이 결과 화면의 시작이다).
     int wasEnding = gGame.phase == PHASE_STORY && CommittedEnding(&gGame) >= 0;
     AdvanceStory(&gGame);
+    SyncRollAnimation();
+    SyncNarrativeControls();
     PersistCampaignProgress();
     if (gGame.phase == PHASE_CHAPTER_CLEAR) PlaySfx(SFX_VICTORY);
     if (wasEnding && gGame.phase == PHASE_VICTORY) {
@@ -1306,7 +1358,7 @@ static void SyncAudioScene() {
     AudioSetDrive(gGame.selectedDrive < 0 ? 0 : gGame.selectedDrive);
     int scene = MUSIC_SCENE_PLAY, intensity = 0;
     if (gGame.phase == PHASE_TITLE || gGame.phase == PHASE_DRIVE_SELECT) scene = MUSIC_SCENE_TITLE;
-    else if (gGame.phase == PHASE_STORY || gGame.phase == PHASE_ENDING_CHOICE) scene = MUSIC_SCENE_STORY;
+    else if (gGame.phase == PHASE_STORY || gGame.phase == PHASE_NAME_ENTRY || gGame.phase == PHASE_ENDING_CHOICE) scene = MUSIC_SCENE_STORY;
     else if (gGame.phase == PHASE_GAMEOVER) scene = MUSIC_SCENE_GAMEOVER;
     else if (gGame.phase == PHASE_VICTORY || gGame.phase == PHASE_CHAPTER_CLEAR) scene = MUSIC_SCENE_VICTORY;
     if (gGame.phase == PHASE_COMBAT) {
@@ -1322,6 +1374,7 @@ static void SyncAudioScene() {
 }
 
 static void BeginNewRun() {
+    if (gTutorialPracticeActive) { gGame = gTutorialPracticeBackup; gTutorialPracticeActive = 0; }
     gReplayPage = 0;
     FinishDeath();
     FinishDirectoryEnter();
@@ -1346,6 +1399,7 @@ static void ContinueFromEnd() {
 }
 
 static void ExecuteCombatTurn() {
+    if (gGame.tutorial.active && gGame.tutorial.step != TUTORIAL_EXECUTE) return;
     FinishUiFx();
     int floor = gGame.floor, encounter = gGame.encounter;
     int turn = gGame.turn;
@@ -1355,8 +1409,9 @@ static void ExecuteCombatTurn() {
     gTraceTurn = gGame.turn;
     EndTurn(&gGame);
     PersistCampaignProgress();
-    int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn);
-    int cleared = LivingEnemyCount(&gGame) == 0;
+    int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn
+        || (gGame.tutorial.active && gGame.tutorial.step == TUTORIAL_COMPLETE));
+    int cleared = !gGame.tutorial.active && LivingEnemyCount(&gGame) == 0;
     if (resolved) BeginTurnTrace(floor, encounter, cleared);
     // 정지음과 화면 붕괴는 계산 재생이 끝난 뒤 BeginDeath가 맡는다.
     if (gGame.phase == PHASE_GAMEOVER) { if (!resolved) BeginDeath(); }
@@ -1375,6 +1430,10 @@ static void KeybRerollSelected() {
 }
 
 static void ClickCombat(int x, int y) {
+    if (gGame.tutorial.active) {
+        if (Inside(TutorialSkipRect(), x, y)) { FinishTutorialUi(1); return; }
+        if (Inside(TutorialNextRect(), x, y)) { AdvanceTutorialUi(); return; }
+    }
     if (Inside(ReadButtonRect(), x, y)) { BeginRead(); return; }
     if (TacticalRerollAvailable(&gGame) && Inside(KeybButtonRect(), x, y)) { KeybRerollSelected(); return; }
     if (!gRolled) return;
@@ -1471,7 +1530,7 @@ static void ClickDriveSelect(int x, int y) {
     }
     for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) {
         SelectDrive(&gGame, i);
-        if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, i); }
+        if (gGame.phase == PHASE_DIRECTORY || (gGame.phase == PHASE_STORY && gGame.story.kind == STORY_A_ENTRY)) { PlaySfx(SFX_CONFIRM); BeginDescent(0, i); }
         return;
     }
 }
@@ -1595,6 +1654,7 @@ static int HoverId(int x, int y) {
         if (Inside(FullscreenToggleRect(), x, y)) return 920;
         if (Inside(RestartButtonRect(), x, y)) return 921;
         if (Inside(CampaignResetRect(), x, y)) return 922;
+        if (Inside(TutorialReplayRect(), x, y)) return 923;
         return -1;
     }
     if (Inside(GuideButtonRect(BASE_WIDTH), x, y)) return 800;
@@ -1614,6 +1674,8 @@ static int HoverId(int x, int y) {
     if (gGame.phase == PHASE_STORY) {
         return Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y) ? 40 : -1;
     }
+    if (gGame.phase == PHASE_NAME_ENTRY)
+        return Inside(NarrativeNameConfirmRect(), x, y) ? 41 : -1;
     if (gGame.phase == PHASE_DRIVE_SELECT) {
         for (int i = 0; i < gGame.driveChoiceCount; ++i) if (Inside(DriveCardRect(i), x, y)) return 50 + i;
         return -1;
@@ -1630,6 +1692,11 @@ static int HoverId(int x, int y) {
         return -1;
     }
     if (gGame.phase == PHASE_COMBAT) {
+        if (gGame.tutorial.active) {
+            if (Inside(TutorialSkipRect(), x, y)) return 431;
+            if ((gGame.tutorial.step == TUTORIAL_PREVIEW || gGame.tutorial.step == TUTORIAL_COMPLETE)
+                && Inside(TutorialNextRect(), x, y)) return 430;
+        }
         if (!gRolled && !gReadActive && Inside(ReadButtonRect(), x, y)) return 420;
         if (!gRolled) return -1;
         for (int i = 0; i < gGame.enemyCount; ++i)
@@ -1638,7 +1705,7 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < SLOT_COUNT; ++i)
             if ((gGame.selectedDie >= 0 ? !SlotLockedThisTurn(&gGame, i) : DieForSlotUI(i) >= 0)
                 && Inside(SlotRect(i), x, y)) return 300 + i;
-        if (Inside(EndTurnRect(), x, y)) return 400;
+        if ((!gGame.tutorial.active || gGame.tutorial.step == TUTORIAL_EXECUTE) && Inside(EndTurnRect(), x, y)) return 400;
         if (IsTsrInstalled(&gGame, TSR_KEYB) && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0
             && Inside(KeybButtonRect(), x, y)) return 410;
         return -1;
@@ -1736,7 +1803,9 @@ static void HandleClick(int x, int y) {
     if (gDeathActive) { if (DeathElapsed() >= DEATH_DARK_AT) FinishDeath(); return; }
     if (UiFxBlocksInput()) return;
     int skippedOne = 0;
-    if (gBootActive) { FinishBootInsert(); skippedOne = 1; }
+    // The click that skips the entrance belongs to that cinematic. Consuming it
+    // here prevents the same click from dismissing ROGUE's first spoken line.
+    if (gBootActive) { FinishBootInsert(); return; }
     else if (gTurnTraceActive) { FinishTurnTrace(); skippedOne = 1; }
     else if (gDescentActive) { FinishDescent(); skippedOne = 1; }
     else if (gDirEnterActive) { FinishDirectoryEnter(); skippedOne = 1; }
@@ -1750,6 +1819,7 @@ static void HandleClick(int x, int y) {
     }
     if (gGame.phase != PHASE_TITLE && Inside(DeckButtonRect(BASE_WIDTH), x, y)) { gDeckOpen = 1; gGuideOpen = 0; gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
+        if (Inside(TutorialReplayRect(), x, y)) { BeginTutorialReplay(); return; }
         if (Inside(RestartButtonRect(), x, y)) {
             gCampaignResetArmed = 0;
             if (gRestartArmed) { gRestartArmed = 0; gSettingsOpen = 0; BeginNewRun(); InvalidateRect(gWindow, 0, FALSE); return; }
@@ -1803,6 +1873,7 @@ static void HandleClick(int x, int y) {
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
     // 스토리는 [다음] 버튼에서만 넘어간다. 패널 아무 곳이나 눌러 넘기면
     // 읽는 중 잘못 누른 클릭으로 기록이 사라진다.
+    else if (gGame.phase == PHASE_NAME_ENTRY) { if (Inside(NarrativeNameConfirmRect(), x, y)) ConfirmNarrativeName(); }
     else if (gGame.phase == PHASE_STORY) { if (Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) AdvanceStoryUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         // 캠페인 전체에서 가장 되돌릴 수 없는 한 번이다. 카드는 후보만 세우고
@@ -1998,6 +2069,7 @@ static void HandleKey(WPARAM key) {
     if (key == VK_F2) { gSettingsOpen = !gSettingsOpen; gGuideOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; InvalidateRect(gWindow, 0, FALSE); return; }
     if (gSettingsOpen) {
         if (key == VK_ESCAPE) { gSettingsOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0; PersistSettings(); }
+        else if (key == 'T') { BeginTutorialReplay(); return; }
         // 마우스로 정확히 맞추기 어려운 값을 위해 5씩 움직인다.
         else if (key == VK_LEFT)  { SetAudioChannelVolume(gVolumeKeyboardChannel, AudioChannelVolume(gVolumeKeyboardChannel) - 5); PlaySfx(SFX_UI_CLICK); }
         else if (key == VK_RIGHT) { SetAudioChannelVolume(gVolumeKeyboardChannel, AudioChannelVolume(gVolumeKeyboardChannel) + 5); PlaySfx(SFX_UI_CLICK); }
@@ -2013,6 +2085,17 @@ static void HandleKey(WPARAM key) {
         InvalidateRect(gWindow, 0, FALSE); return;
     }
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
+    if (gGame.phase == PHASE_NAME_ENTRY) {
+        if (key == VK_RETURN) ConfirmNarrativeName();
+        else if (gNarrativeNameEdit) SetFocus(gNarrativeNameEdit);
+        return;
+    }
+    if (gGame.tutorial.active) {
+        if (key == VK_F4) { FinishTutorialUi(1); return; }
+        if (key == VK_RETURN && (gGame.tutorial.step == TUTORIAL_PREVIEW || gGame.tutorial.step == TUTORIAL_COMPLETE)) {
+            AdvanceTutorialUi(); return;
+        }
+    }
     if ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_PRUNE) && key == VK_TAB) {
         MoveKeyboardFocus((GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1); return;
     }
@@ -2037,7 +2120,7 @@ static void HandleKey(WPARAM key) {
         if ((gGame.clearedMask & 0x3F) == 0x3F && (key == VK_LEFT || key == VK_RIGHT)) { CycleReplayPage(key == VK_LEFT ? -1 : 1); }
         else if (key >= '1' && key <= '0' + gGame.driveChoiceCount) {
             SelectDrive(&gGame, (int)(key - '1'));
-            if (gGame.phase == PHASE_DIRECTORY) { PlaySfx(SFX_CONFIRM); BeginDescent(0, (int)(key - '1')); }
+            if (gGame.phase == PHASE_DIRECTORY || (gGame.phase == PHASE_STORY && gGame.story.kind == STORY_A_ENTRY)) { PlaySfx(SFX_CONFIRM); BeginDescent(0, (int)(key - '1')); }
         }
     }
     else if (gGame.phase == PHASE_DIRECTORY) {
@@ -2076,7 +2159,7 @@ static void HandleKey(WPARAM key) {
         }
     } else if (gGame.phase == PHASE_PRUNE) { if (key == VK_RETURN) ConfirmPrune(&gGame); }
     else if (IsEndScreen()) {
-        // 사망 화면은 "새 실행체 투입 · 스페이스"라고 적혀 있다.
+        // 재도전은 같은 사용자와 로그의 연결을 복구한다.
         if (key == 'R' || key == VK_RETURN || (key == VK_SPACE && gGame.phase == PHASE_GAMEOVER)) ContinueFromEnd();
     }
     ClearStaleConfirmations();
@@ -2088,6 +2171,8 @@ static void HandleKey(WPARAM key) {
     SyncRollAnimation();
     InvalidateRect(gWindow, 0, FALSE);
 }
+
+#include "narrative_ui.inl"
 
 static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -2132,6 +2217,18 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
     case WM_KEYDOWN:
         if ((lParam & (1u << 30)) == 0) { HandleKey(wParam); SyncUiFocus(); }
         return 0;
+    case NARRATIVE_CONFIRM_MESSAGE:
+        ConfirmNarrativeName(); return 0;
+    case WM_CTLCOLOREDIT:
+        if ((HWND)lParam == gNarrativeNameEdit) {
+            SetTextColor((HDC)wParam, C_TEXT);
+            SetBkColor((HDC)wParam, C_PANEL);
+            if (!gNarrativeNameBrush) gNarrativeNameBrush = CreateSolidBrush(C_PANEL);
+            return (LRESULT)gNarrativeNameBrush;
+        }
+        break;
+    case WM_SIZE:
+        SyncNarrativeControls(); InvalidateRect(window, 0, FALSE); return 0;
     case WM_TIMER:
         if (wParam == AUDIO_TIMER_ID) { SyncAudioScene(); TickUiFocus(); return 0; }   // 믹싱은 오디오 스레드가 한다
         if (wParam == 1u) TickRollAnimation();
@@ -2234,7 +2331,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         return 0;
-    case WM_PAINT: PaintGame(window); return 0;
+    case WM_PAINT: SyncNarrativeControls(); PaintGame(window); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_CLOSE: {
         // 캠페인 진행도는 남지만 진행 중인 런(층·체력·덱)은 저장되지 않는다.
@@ -2249,11 +2346,14 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         return 0;
     }
     case WM_DESTROY:
+        PersistCampaignProgress();
         PersistSettings();
-        if (!gCampaignCorrupt) SaveCampaign(&gCampaign);
+        FlushPendingProgress();
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
         KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID); KillTimer(window, BOSS_INTRO_TIMER_ID);
+        if (gNarrativeNameFont) { DeleteObject(gNarrativeNameFont); gNarrativeNameFont = 0; }
+        if (gNarrativeNameBrush) { DeleteObject(gNarrativeNameBrush); gNarrativeNameBrush = 0; }
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }
@@ -2294,12 +2394,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // 번역을 읽은 뒤라야 English 설정이 실제로 받아들여진다.
     LoadSettings(&gSettings);
     ApplySettings(0);
-    InitTitle(&gGame, CampaignClearedMask(&gCampaign), CampaignSeenEndingMask(&gCampaign)); WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
+    InitTitle(&gGame, CampaignClearedMask(&gCampaign), CampaignSeenEndingMask(&gCampaign));
+    gGame.narrative = gCampaign.narrative;
+    WNDCLASSEXW wc = {}; wc.cbSize = sizeof(wc); wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProcedure; wc.hInstance = instance; wc.hCursor = LoadCursorW(0, IDC_ARROW); wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1)); wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(1));   // src/arogue.rc
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); wc.lpszClassName = L"ARogueWindowClass"; if (!RegisterClassExW(&wc)) return 1;
     RECT desired = {0, 0, BASE_WIDTH, BASE_HEIGHT}; AdjustWindowRectEx(&desired, WS_OVERLAPPEDWINDOW, FALSE, 0); int width = desired.right - desired.left, height = desired.bottom - desired.top;
     int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-    gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE", WS_OVERLAPPEDWINDOW, x, y, width, height, 0, 0, instance, 0);
+    gWindow = CreateWindowExW(0, wc.lpszClassName, L"A:\\ROGUE", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, width, height, 0, 0, instance, 0);
     if (!gWindow) return 2; ShowWindow(gWindow, showCommand); UpdateWindow(gWindow);
     // 배율·전체화면은 창이 있어야 적용된다. 창 제목도 실제로 적용된 언어를 따른다.
     ApplySettings(1);

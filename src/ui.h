@@ -259,10 +259,10 @@ constexpr inline int ScenePace(int realMs) { return realMs * 100 / SCENE_PACE_PC
 // ---- 사망 연출 (DEATH-01) ---------------------------------------------------
 // 화면 전체를 잡음으로 덮지 않는다. 이번 런의 기억 열 줄이 한 줄씩 오염되어
 // 부서지고, 마지막으로 실행체의 이름이 부서지는 순간 화면이 한 번 꺼진다.
-// 어둠 속에서 십칠의 말이 찍히고 나면 그 마지막 프레임이 곧 사망 화면이다.
+// 어둠 속에서 로그(6개 복구 뒤에는 시스템)의 말이 남는 재접속 화면이다.
 // 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로 여기 모아 둔다.
 #define DEATH_LINES          10
-#define DEATH_CMD_AT         700    // 십칠이 명령을 친다 (0~1000에는 기억이 들어온다)
+#define DEATH_CMD_AT         700    // 임시 전투 데이터 회수 (0~1000에는 기록이 들어온다)
 #define DEATH_ROT_AT         1400   // 첫 줄의 오염이 시작된다
 #define DEATH_SPREAD_MS      360    // 한 줄에서 오염이 양끝까지 번지는 최대 시간
 #define DEATH_ROT_HOLD_MS    200    // 오염된 글자가 쪼개지기까지
@@ -532,6 +532,12 @@ RECT ContinueRect(int width, int height);
 // 스토리 화면의 [다음]. 패널 아무 곳이나 눌러 넘어가지 않도록 진행 입력을
 // 이 버튼 하나로 좁힌다 (엔터·스페이스는 그대로 받는다).
 RECT StoryNextRect(int width, int height);
+// Narrative widgets use the same canvas coordinates for drawing and input.
+RECT NarrativeNameRect();
+RECT NarrativeNameConfirmRect();
+RECT TutorialNextRect();
+RECT TutorialSkipRect();
+RECT TutorialReplayRect();
 RECT EndingChoiceRect(int index);
 // 최종 명령의 확정 버튼. 카드 선택과 실행을 갈라 놓는다.
 RECT EndingConfirmRect();

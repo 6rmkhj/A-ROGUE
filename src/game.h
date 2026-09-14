@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "data.h"
+#include "narrative_state.h"
 
 enum GamePhase {
     PHASE_TITLE = 0,
@@ -14,7 +15,8 @@ enum GamePhase {
     PHASE_ENDING_CHOICE,
     PHASE_GAMEOVER,
     PHASE_VICTORY,
-    PHASE_CHAPTER_CLEAR
+    PHASE_CHAPTER_CLEAR,
+    PHASE_NAME_ENTRY
 };
 
 struct DriveRuleRuntime {
@@ -39,6 +41,22 @@ struct StoryRuntime {
     uint8_t selectedEnding;
     GamePhase returnPhase;
     uint8_t optionalLogsSeen;
+    uint8_t replay;       // Reading an already recovered record: no new absorption.
+    uint8_t newlyRecovered;
+    uint8_t resume;       // Mandatory evidence restored after closing the game.
+    int8_t drive;         // A story source is not necessarily a mounted volume.
+};
+
+enum TutorialStep { TUTORIAL_READ = 0, TUTORIAL_PLACE, TUTORIAL_PREVIEW,
+    TUTORIAL_EXECUTE, TUTORIAL_COMPLETE };
+
+struct TutorialRuntime {
+    uint8_t active;
+    uint8_t step;
+    uint8_t savedFinalClear;
+    uint8_t savedSeenEndings;
+    uint32_t seed;
+    uint8_t savedScanned[ENEMY_KIND_COUNT];
 };
 
 // X:\ 격리 상태. FaceCost와 kind·value·damaged는 그대로 두고 출력만 0이 된다.
@@ -284,6 +302,9 @@ struct GameState {
     DirectoryRuntime directory;
     DriveRuleRuntime driveRule;
     StoryRuntime story;
+    NarrativeProgress narrative;
+    uint8_t narrativeEnabled;
+    TutorialRuntime tutorial;
     int rewardChoiceCount;        // 이번 면 보상의 후보 수 (TEMP면 2)
     int encryptBonus;             // 1 = RANSOMWARE를 한 방으로 끊어 이번 보상 후보 +1
     int rewardTier;               // 0 = 표준, 1 = 강화
@@ -310,6 +331,15 @@ void BeginStory(GameState* game, int kind, int fragment, GamePhase returnPhase);
 void AdvanceStory(GameState* game);
 void SelectEnding(GameState* game, int ending);
 const StoryFragment* CurrentStoryFragment(const GameState* game);
+int StoryPageCount(const GameState* game);
+void AttachNarrative(GameState* game, const NarrativeProgress* progress);
+bool SubmitNarrativeName(GameState* game, const wchar_t* name);
+void BeginTutorial(GameState* game);
+void TutorialReadDice(GameState* game);
+void AcknowledgeTutorialPreview(GameState* game);
+const wchar_t* TutorialInstruction(const GameState* game);
+void FinishTutorial(GameState* game);
+void SkipTutorial(GameState* game);
 
 // clearedMask/seenMask는 이어하기 표시 전용이다. 규칙 경로는 읽지 않는다.
 void InitTitle(GameState* game, uint8_t clearedMask, uint8_t seenMask);
