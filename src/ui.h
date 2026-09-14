@@ -192,11 +192,15 @@ constexpr inline int ScenePace(int realMs) { return realMs * 100 / SCENE_PACE_PC
 // 그 소리가 어긋나면 조립되는 것이 아니라 느리게 그려지는 것으로 읽힌다.
 #define TITLE_SIGN_AT   110    // 부팅 서명이 찍힌다
 #define TITLE_LOGO_AT   170    // 제목이 판에서 밀려 올라온다
-#define TITLE_BLURB_AT  620    // 안내 세 줄이 한 줄씩 찍힌다
-#define TITLE_START_AT  900    // 시작 버튼이 열린다
-#define TITLE_SHARD_AT  1090   // 복구 진행도와 조각 칸이 선다
-#define TITLE_HINT_AT   1280   // 맨 아래 조작 안내
-#define TITLE_SETTLE_AT 1560   // 여기부터는 헤드가 계속 판을 읽는 유휴 상태다
+// 제목이 앉은 뒤 판 위에 이름 하나만 서 있는 시간. 예전에는 앉는 충격(500ms)이
+// 끝나기도 전에 안내가 밀려 들어와 이름이 0.45초만 혼자였다. 뒤의 구간이 모두
+// 이만큼 밀린다. 시작 입력은 막지 않으므로 기다리기 싫으면 바로 누르면 된다.
+#define TITLE_NAME_HOLD_MS 1000
+#define TITLE_BLURB_AT  (620 + TITLE_NAME_HOLD_MS)    // 안내 세 줄이 한 줄씩 찍힌다
+#define TITLE_START_AT  (900 + TITLE_NAME_HOLD_MS)    // 시작 버튼이 열린다
+#define TITLE_SHARD_AT  (1090 + TITLE_NAME_HOLD_MS)   // 복구 진행도와 조각 칸이 선다
+#define TITLE_HINT_AT   (1280 + TITLE_NAME_HOLD_MS)   // 맨 아래 조작 안내
+#define TITLE_SETTLE_AT (1560 + TITLE_NAME_HOLD_MS)   // 여기부터는 헤드가 계속 판을 읽는 유휴 상태다
 
 // ---- 새 게임 삽입 연출 -----------------------------------------------------
 // 새 게임을 누르면 지금 화면이 먼저 갈라지고, 소용돌이에 감겨 빨려 들어가 플로피
