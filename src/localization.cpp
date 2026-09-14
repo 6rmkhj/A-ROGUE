@@ -87,6 +87,14 @@ static int MatchFormatted(const std::wstring& format, const wchar_t* shown,
             std::wstring next = NextLiteral(format, end);
             size_t stop = next.empty() ? value.size() : value.find(next, vi);
             if (stop == std::wstring::npos) return 0;
+            // An integer placeholder only takes an integer. Otherwise the loose
+            // "주사위 %d" swallows "주사위 2 배치" before its own row is reached.
+            wchar_t spec = format[end - 1];
+            if (spec == L'd' || spec == L'i' || spec == L'u') {
+                size_t digit = vi < stop && (value[vi] == L'+' || value[vi] == L'-') ? vi + 1 : vi;
+                if (digit == stop) return 0;
+                for (size_t k = digit; k < stop; ++k) if (value[k] < L'0' || value[k] > L'9') return 0;
+            }
             captures->push_back(value.substr(vi, stop - vi));
             vi = stop; fi = end; continue;
         }
@@ -184,13 +192,24 @@ const wchar_t* LocalizeText(const wchar_t* source) {
         const TranslationEntry& entry = gTranslations[i];
         if (!entry.formatted && entry.source == source) return entry.english.c_str();
     }
+    // The row that leaves the least text to placeholders is the most specific.
+    // First-match let "%s 주사위 %d" take "오프라인 · 주사위 1" from its own row.
+    const TranslationEntry* best = 0;
+    std::vector<std::wstring> bestCaptures;
+    size_t bestCaptured = 0;
     for (size_t i = 0; i < gTranslations.size(); ++i) {
         const TranslationEntry& entry = gTranslations[i];
         if (!entry.formatted) continue;
         std::vector<std::wstring> captures;
         if (!MatchFormatted(entry.source, source, &captures)) continue;
+        size_t captured = 0;
+        for (size_t c = 0; c < captures.size(); ++c) captured += captures[c].size();
+        if (best && captured >= bestCaptured) continue;
+        best = &entry; bestCaptures.swap(captures); bestCaptured = captured;
+    }
+    if (best) {
         gLocalizedBufferIndex = (gLocalizedBufferIndex + 1) % 8;
-        std::wstring expanded = ExpandFormatted(entry.english, captures);
+        std::wstring expanded = ExpandFormatted(best->english, bestCaptures);
         lstrcpynW(gLocalizedBuffers[gLocalizedBufferIndex], expanded.c_str(), 2048);
         return gLocalizedBuffers[gLocalizedBufferIndex];
     }

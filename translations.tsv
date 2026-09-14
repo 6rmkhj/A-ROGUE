@@ -43,7 +43,7 @@
 %s\n대응: %s	%s\nCounter: %s
 미판독	UNSCANNED
 판독 %d / %d  ·  처치한 개체만 열립니다	Scanned %d / %d  ·  Only defeated entities are revealed
-UNREAD PROCESS · 처치하거나 LOGS로 열립니다	UNREAD PROCESS · Defeat it or reveal it with LOGS
+UNREAD PROCESS · 처치하거나 LOGS로 열립니다	UNREAD PROCESS · Defeat or use LOGS
 탐색할 볼륨을 선택하십시오 · 디스크 손상과 볼륨 특성이 미리 공개됩니다	Choose a volume to scan · Disk damage and volume perks are shown in advance
 VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 대상 볼륨  %s%s	TARGET VOLUME  %s%s
@@ -102,7 +102,7 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 증폭 슬롯: 보너스가 출력의 절반이 아니라 100%. 공격·방어에 그대로 더해집니다.	AMPLIFY slot: Adds 100% output instead of half to attack and defense.
 연쇄 슬롯: 직전 공격 또는 방어를 감쇠 없이 100% 반복합니다.	CHAIN slot: Repeat the previous attack or defense at full strength.
 공격	ATTACK
-강공	HEAVY ATTACK
+강공	HEAVY
 방어	DEFEND
 복구	RESTORE
 증폭	AMPLIFY
@@ -1010,3 +1010,137 @@ RISK %s · 위험 %s · 분류 %s	RISK %s · THREAT %s · CLASS %s
 HANDLE RESOLVED · 다음 프로세스와 교전합니다	HANDLE RESOLVED · engaging the next process
 %s  ·  보상 %s · 면 후보 %d개	%s  ·  REWARD %s · %d face candidates
 이번 구역의 프로세스	The process in this sector
+# UI copy added after the shred, trait and replay screens (was falling back to Korean)
+오디오	Audio
+진행 중인 런(층·체력·덱)은 저장되지 않습니다.\n복구한 조각과 엔딩 기록은 그대로 남습니다.\n\n종료하시겠습니까?	The run in progress (floor, HP, deck) is not saved.\nRecovered fragments and ending records are kept.\n\nQuit now?
+세이브 검증 실패 · 원본 AROGUE.SAV는 보호 중입니다 · 설정의 진행도 초기화로 새로 시작할 수 있습니다	Save check failed · AROGUE.SAV left untouched · Reset progress in Settings
+설정을 저장하지 못했습니다 · AROGUE.CFG를 쓸 수 있는지 확인하십시오	Could not save settings · Check that AROGUE.CFG is writable
+진행 데이터를 저장하지 못했습니다 · 실행 폴더에 쓸 수 있는지 확인하십시오	Could not save progress · Check that the game folder is writable
+→ %s	→ %s
+%s · %dB	%s · %dB
+▶ 대상 · %s	▶ TARGET · %s
+캠페인 복구 완료 · 모든 일반 볼륨을 재플레이할 수 있습니다	Campaign restored · Every standard volume can be replayed
+◀ 이전 볼륨	◀ PREV VOLUME
+다음 볼륨 ▶	NEXT VOLUME ▶
+좌우 화살표 또는 아래 버튼으로 복구한 볼륨을 다시 마운트할 수 있습니다.	Use the arrow keys or the buttons below to remount a recovered volume.
+한 번 더 누르면 진입 · [취소]로 해제	Press again to enter · [ESC] to cancel
+클릭하여 선택	Click to select
+고른 디렉터리를 한 번 더 누르면 진입합니다  ·  [취소]로 선택을 해제할 수 있습니다	Press the chosen directory again to enter  ·  [ESC] clears the selection
+[1] / [2] 또는 디렉터리를 클릭해 고르십시오  ·  선택지는 다시 뽑히지 않습니다	Press [1] / [2] or click a directory  ·  Choices are not rerolled
+대상	Target
+HANDLE RESOLVED  ·  다음 프로세스와 교전합니다	HANDLE RESOLVED  ·  Engaging the next process
+오염(관통) 피해 %d%% · 방어도는 절반만 막습니다	Corruption damage %d%% · Armor blocks only half
+%s  ·  한도 %dB	%s  ·  Limit %dB
+용량 한도 %dB → %dB  ·  이 층의 적이 더 강해집니다	Capacity limit %dB → %dB  ·  Enemies on this floor grow stronger
+심층 트랙	Deep track
+볼륨 마운트  ·  %s%s  ·  %s	VOLUME MOUNT  ·  %s%s  ·  %s
+심층 탐색  ·  %s%s  ·  %s	DEEP SCAN  ·  %s%s  ·  %s
+플래터 스택	PLATTER STACK
+오픈릴 테이프	REEL-TO-REEL TAPE
+광 디스크	OPTICAL DISC
+원격 링크	REMOTE LINK
+셀 격자	CELL GRID
+격리 캐비닛	QUARANTINE CABINET
+플로피	FLOPPY
+판독 완료 · 3/3 트랙	Read complete · 3/3 tracks
+트랙 확보	Track secured
+진입 후 용량 정리가 필요합니다 · 클릭이나 아무 키로 바로 넘기기	Capacity cleanup required after entry · Click or press any key to skip
+잠시 후 전투가 시작됩니다 · 클릭이나 아무 키로 바로 넘기기	Combat will begin shortly · Click or press any key to skip
+기록 완료  ·  1,440,000 바이트	Write complete  ·  1,440,000 bytes
+다음 [ENTER]	NEXT [ENTER]
+선택한 명령은 되돌릴 수 없습니다 · [취소]로 다시 고를 수 있습니다	The selected command cannot be undone · [ESC] to choose again
+선택한 명령은 되돌릴 수 없습니다 · 먼저 카드를 고르십시오	The selected command cannot be undone · Choose a card first
+%s 실행 [ENTER]	%s [ENTER]
+명령을 선택하십시오	SELECT A COMMAND
+확정	CONFIRM
+%s · 한 번 더 누르면 설치합니다 · [취소]로 해제	%s · Press again to install · [ESC] to cancel
+상주 프로그램은 면과 용량을 나눠 씁니다 · 카드를 눌러 고르십시오	Resident programs share capacity with faces · Click a card to choose
+2/2  주사위 %d-%d  %s(%dB) → %s(%dB)  ·  용량 %dB → %dB  ·  다시 누르면 확정	2/2  DIE %d-%d  %s(%dB) → %s(%dB)  ·  CAPACITY %dB → %dB  ·  Click again to confirm
+2/2  교체할 기존 면을 클릭하세요 (한 번 더 누르면 확정)	2/2  Click an existing face to replace (click again to confirm)
+정말 포기?	REALLY SKIP?
+보상 포기 [취소]	SKIP REWARD [ESC]
+한 번 더 누르면 이 보상을 버리고 진행합니다.	Press again to discard this reward.
+%dB · 삭제 예정	%dB · REMOVING
+%dB · 삭제 예약	%dB · REMOVE
+다시 클릭해 취소	CLICK TO UNDO
+읽기 오류 → 다음 오프라인	READ ERR → OFFLINE
+슬롯 권한 잠금과 칸 파쇄	Slot access locks and slot shredding
+파쇄 예고	SHRED WARNING
+↶ 배치 취소	↶ RETURNED
+복구 %d%%	FIX %d%%
+복구 완료	REPAIRED
+턴 뒤 복구	TURNS LEFT
+실행 시 파쇄	SHREDS ON RUN
+%s 칸 파쇄됨 · %d턴 뒤 복구	%s shredded · repair in %d
+파쇄 임박: 실행하면 %s 칸이 부서집니다	Shred imminent: executing breaks %s
+예고: 다음 턴 %s 칸 파쇄 · 피해 %d+로 빗나감	Next turn: %s shreds · %d+ damage deflects
+다음 파쇄 대기 중	Next shred pending
+파쇄	SHRED
+3턴마다 칸 하나를 부숴 2턴 동안 없앱니다. 놓인 주사위는 돌아옵니다.	Every 3 turns, breaks one slot for 2 turns. A die placed there is returned.
+예고 턴에 보스 피해 12+로 빗나가게 하거나 그 칸을 비우십시오.	On the warning turn, deal 12+ to the boss to deflect it, or leave that slot empty.
+가로채기	INTERCEPT
+증폭 쓰면 1 감소. 0이면 증폭을 뺏깁니다.	AMP use -1. At 0, AMP is stolen.
+레지스트리	REGISTRY
+매 턴 방어 +2. 공격 눈이 홀수면 면제.	Armor +2/turn. Odd ATK skips it.
+감시 필터	WATCH FILTER
+공격 눈이 의도값보다 커야 온전합니다.	Full hit only if ATK > intent.
+부패	ROT
+매 턴 감소. 0이면 면 손상. 6+로 회복.	-1/turn. 0 rots a face. 6+ resets.
+블록 색인	BLOCK INDEX
+4 이상만 온전. 3 이하는 절반.	Under 4 deals half damage.
+압축 해제	UNZIP
+처치 시 6 피해. 방어도 6이면 막습니다.	Deals 6 on death; 6 armor blocks.
+1턴 공격은 방어도를 무시합니다.	Turn 1 attack ignores armor.
+유실	LOST
+처치 시 면 격리. 연쇄를 채우면 면제.	On kill, lose a face. Fill CHAIN.
+직전 턴과 같은 눈이면 절반.	Same roll as last turn: half.
+도청	WIRETAP
+매 턴 감소. 0이면 내 최고 눈을 복사.	Counts down, then copies your best.
+포트 필터	PORT FILTER
+홀수만 온전. 짝수는 절반.	Odd hits full; even hits half.
+폭주	RUNAWAY
+매 턴 피해 +1. 방어 4+면 안 오릅니다.	Damage +1/turn. 4+ DEF stops it.
+누수	LEAK
+3 이하 피해가 +3.	Hits of 3 or less gain +3.
+공격 눈 짝수면 왼쪽, 홀수면 오른쪽.	Even ATK goes left, odd goes right.
+허상 참조	DANGLING REF
+처치되어도 그 턴 행동은 실행.	Still acts on the turn it dies.
+변이	MUTATE
+맞을 때마다 약점이 홀/짝 뒤집힘.	Weak side flips odd/even on hit.
+탈주	ESCAPE
+체력 30% 이하면 다음 턴 도망.	HP 30% or less: flees next turn.
+암호화	ENCRYPTED
+한 턴 8+ 못 넣으면 회복.	Heals unless you deal 8+ a turn.
+직전 턴과 같은 눈이면 2배.	Same roll as last turn: double.
+미완성	INCOMPLETE
+매 턴 감소. 0이면 절반 회복.	Counts down, then heals half.
+반향	ECHO
+준 피해 절반 반사. 방어 비우면 면제.	Reflects half. Leave DEF empty.
+[17] 복구 프로그램 가동.	[17] Recovery program running.
+복구 완료: %s 칸이 다시 조립되었습니다.	Repair complete: the %s slot is reassembled.
+파쇄 경고: %s 칸이 이번 실행에 부서집니다.	Shred warning: the %s slot breaks on this execution.
+%s: 레지스트리에 다시 등록되었습니다.	%s: registered again.
+%s: 가로채기 완료. 이후 증폭이 적에게 갑니다.	%s: intercept complete. Amplify now goes to the enemy.
+가로채기: 증폭 %d가 %s의 방어도가 되었습니다.	Intercept: Amplify %d became armor for %s.
+%s: 부패가 면 1개를 이번 전투 동안 삭혔습니다.	%s: rot corroded one face for this combat.
+%s: 도청 완료. 다음 턴 내 최고 눈을 복사합니다.	%s: wiretap complete. It copies your highest roll next turn.
+미완성 쓰기: %s 체력 +%d	Half Write: %s HP +%d
+%s: 암호화가 손상을 되돌립니다.	%s: encryption reverts the damage.
+반향: 준 피해가 %d 되돌아왔습니다.	Echo: %d of your damage came back.
+%s: 탈주했습니다. 보상 없음.	%s escaped. No reward.
+%s: 다음 턴 탈주합니다.	%s escapes next turn.
+[파쇄] %s 칸 파괴 · 주사위 %d 미배치로 복귀 (잃지 않음)	[SHRED] %s slot destroyed · Die %d returned unplaced (not lost)
+[파쇄] %s 칸 파괴 · 되돌릴 주사위 없음	[SHRED] %s slot destroyed · No die to return
+파쇄 빗나감: 피해 %d로 %s 칸을 지켜 냈습니다.	Shred deflected: %d damage saved the %s slot.
+마스터 백업: 복원한 만큼 방어도 +%d.	Master Backup: armor +%d from the restore.
+제로데이: 삭제한 면 %d를 자기 코드로 씁니다. 한 턴 %d+ 피해로 되찾습니다.	Zero-day: it runs your deleted face %d as its own code. Deal %d+ in one turn to take it back.
+제로데이: 빼앗긴 코드 %d를 되찾았습니다.	Zero-day: stolen code %d recovered.
+압축 해제: 방어도가 폭발을 막았습니다.	Unzip: armor blocked the blast.
+압축 해제: 폭발로 체력 -%d.	Unzip: the blast took HP -%d.
+유실: 연쇄가 클러스터를 붙잡았습니다.	Lost: CHAIN caught the cluster.
+유실: 면 1개가 이번 전투 격리되었습니다.	Lost: one face is quarantined for this combat.
+암호화 해제: 이번 전투 보상 후보가 하나 늘어납니다.	Decrypted: this combat offers one more reward.
+조각화: 중복 주사위를 한 번 재굴림했습니다.	Fragmented: duplicate dice rerolled once.
+조각화: 재굴림 후에도 겹친 주사위만 비활성화됩니다.	Fragmented: only dice still duplicated after the reroll are disabled.
+자동 실행: 준비 전에 실행되어 방어도가 절반만 듭니다.	Autorun: it acts before you are ready, so armor counts half.
+SECTOR LOSS: 용량 한도 %dB → %dB · 손상된 디스크에서 남길 데이터를 고르십시오.	SECTOR LOSS: Capacity limit %dB → %dB · Choose what to keep from the damaged disk.

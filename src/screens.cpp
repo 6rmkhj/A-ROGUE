@@ -53,8 +53,9 @@ RECT FullscreenToggleRect() { return MakeRect(84, 380, 364, 422); }
 RECT BgmToggleRect() { return MakeRect(SETTINGS_COL2 + 40, 420, SETTINGS_COL2 + 115, 452); }
 RECT RestartButtonRect() { return MakeRect(84, 460, 364, 502); }
 RECT CampaignResetRect() { return MakeRect(SETTINGS_COL2, 658, SETTINGS_COL2 + 280, 700); }
-RECT ReplayPrevRect() { return MakeRect(LEGACY_X + 370, 650, LEGACY_X + 545, 688); }
-RECT ReplayNextRect() { return MakeRect(LEGACY_X + 575, 650, LEGACY_X + 750, 688); }
+// 조각 진행 띠(650, 가운데 최대 약 640px)의 양옆. 띠 위에 얹으면 조각 칩을 덮는다.
+RECT ReplayPrevRect() { return MakeRect(BASE_WIDTH / 2 - 516, 650, BASE_WIDTH / 2 - 341, 688); }
+RECT ReplayNextRect() { return MakeRect(BASE_WIDTH / 2 + 341, 650, BASE_WIDTH / 2 + 516, 688); }
 RECT FxLevelRect(int index) { int left = 84 + index * 150; return MakeRect(left, 592, left + 132, 634); }
 
 // 창 모드로 되돌아갈 때 복원할 위치/크기를 저장해 두고, 모니터 전체를 덮는 테두리 없는 창으로 전환한다.
@@ -1224,7 +1225,8 @@ static void DrawShredHole(HDC dc, const RECT& r, int slot, int turnsLeft) {
     Text(dc, r.left + 10, r.top + 9, SLOT_SHORT_NAMES[slot], MixColor(C_BG, C_RED, 60), gFontMedium);
     wchar_t left[8]; wsprintfW(left, L"%d", turnsLeft);
     TextRect(dc, MakeRect(r.left, r.top + 34, r.right, r.top + 84), left, C_RED, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    TextRect(dc, MakeRect(r.left, r.top + 86, r.right, r.top + 106), L"턴 뒤 복구", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 아래 SLOT SHREDDED(bottom-28)와 겹치지 않게 숫자 바로 밑에 붙인다.
+    TextRect(dc, MakeRect(r.left, r.top + 77, r.right, r.top + 95), L"턴 뒤 복구", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), L"SLOT SHREDDED",
         MixColor(C_BG, C_RED, 75), gFontSmall, DT_CENTER | DT_SINGLELINE);
 }
@@ -1263,7 +1265,8 @@ static void DrawSlot(HDC dc, int slot) {
     DrawCardMotion(dc, r, SlotAccent(slot), slot, hover && gGame.selectedDie >= 0);
     if (gGame.boss.gimmick == GIMMICK_SIGNATURE && gGame.boss.signatureSlot == slot) {
         Outline(dc, r, C_YELLOW, 2);
-        TextRect(dc, MakeRect(r.left + 4, r.top + 88, r.right - 4, r.top + 108), L"짝수 서명 필요", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+        // 값 숫자(42~83)와 아래 주사위 배지(bottom-28) 사이. 88~108은 배지와 겹친다.
+        TextRect(dc, MakeRect(r.left + 4, r.top + 75, r.right - 4, r.top + 94), L"짝수 서명 필요", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     }
     if (die >= 0 || (hover && gGame.selectedDie >= 0)) {
         COLORREF accent = SlotAccent(slot);
@@ -1297,7 +1300,7 @@ static void DrawSlot(HDC dc, int slot) {
     } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
     if (lockedNext) TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6),
         die >= 0 ? L"" : L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    if (lockedNext && die >= 0) TextRect(dc, MakeRect(r.left + 4, r.top + 88, r.right - 4, r.top + 108), L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    if (lockedNext && die >= 0) TextRect(dc, MakeRect(r.left + 4, r.top + 75, r.right - 4, r.top + 94), L"다음 턴 잠김", C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     if (SlotShredPending(&gGame, slot)) DrawShredAim(dc, r);
 }
 
@@ -1934,8 +1937,8 @@ static void DrawDriveModifier(HDC dc, const RECT& card, int top, int modifier) {
 
 static void DrawDriveSelect(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_DRIVE_SELECT, C_BLUE, width, height);
-    if ((gGame.clearedMask & 0x3F) == 0x3F) {
-        TextRect(dc, MakeRect(280, 116, width - 280, 146), L"캠페인 복구 완료 · 모든 일반 볼륨을 재플레이할 수 있습니다", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    int replay = (gGame.clearedMask & 0x3F) == 0x3F;
+    if (replay) {
         RECT prev = ReplayPrevRect(), next = ReplayNextRect();
         int hoverPrev = Inside(prev, gMouse.x, gMouse.y), hoverNext = Inside(next, gMouse.x, gMouse.y);
         Panel(dc, prev, hoverPrev ? RGB(28, 39, 48) : C_PANEL_2, hoverPrev ? C_BLUE : C_LINE);
@@ -1948,7 +1951,9 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(40, 344, width - 40, 382), L"좌우 화살표 또는 아래 버튼으로 복구한 볼륨을 다시 마운트할 수 있습니다.", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
         return;
     }
-    TextRect(dc, MakeRect(0, 78, width, 102), L"감염된 저장소 감지  →  [현재: 탐색 볼륨 선택]  →  마운트  →  전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
+    // 재플레이 안내는 진행 단계 줄 자리를 쓴다. 따로 116에 두면 아래 제목과 겹친다.
+    TextRect(dc, MakeRect(0, 78, width, 102), replay ? L"캠페인 복구 완료 · 모든 일반 볼륨을 재플레이할 수 있습니다"
+        : L"감염된 저장소 감지  →  [현재: 탐색 볼륨 선택]  →  마운트  →  전투", C_GREEN, gFontSmall, DT_CENTER | DT_SINGLELINE);
     TextRect(dc, MakeRect(0, 98, width, 126), L"탐색할 볼륨을 선택하십시오 · 디스크 손상과 볼륨 특성이 미리 공개됩니다", C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     for (int i = 0; i < gGame.driveChoiceCount; ++i) {
         RECT r = DriveCardRect(i);
@@ -1970,7 +1975,8 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
             wsprintfW(badge, L"난이도 · %s", difficulty->name);
             TextRect(dc, MakeRect(r.left + 56, r.top + 10, r.right - 12, r.top + 30), badge, (COLORREF)difficulty->color, gFontSmall, DT_RIGHT | DT_SINGLELINE);
         }
-        RECT letterRect = MakeRect(r.left + 8, r.top + 20, r.right - 8, r.top + 86);
+        // 머리줄([n]·난이도, 10~30) 아래에서 시작한다. 20부터 깔면 잡음과 주사선이 머리줄 글자를 긋는다.
+        RECT letterRect = MakeRect(r.left + 8, r.top + 32, r.right - 8, r.top + 88);
         // 셔터가 열리는 동안에만 문자가 노이즈에서 풀려 나온다. 다 열리면 예전과 같은 60이다.
         DrawSectorStatic(dc, letterRect, gGame.driveChoices[i], (int)(GetTickCount() / 260u),
                          60 + FxScale(460) * (1000 - opened) / 1000);
@@ -2014,7 +2020,8 @@ static void DrawDriveSelect(HDC dc, int width, int height) {
             offered |= (uint8_t)(1u << gGame.driveChoices[i]);
     wchar_t progress[96];
     FormatShardProgress(gGame.clearedMask, progress);
-    int stripW = ShardStripWidth(0), labelW = 190;
+    // 라벨 폭은 재서 쓴다. 190으로 고정하면 영어 라벨의 앞 글자가 잘린다.
+    int stripW = ShardStripWidth(0), labelW = TextWidth(dc, progress, gFontSmall) + 2;
     int stripLeft = (width - (labelW + 16 + stripW)) / 2;
     TextRect(dc, MakeRect(stripLeft, 650, stripLeft + labelW, 678), progress,
              gGame.clearedMask == 0x3F ? C_GREEN : C_TEXT, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -4925,7 +4932,9 @@ static void DrawTurnCalculation(HDC dc) {
 RECT RewardRect(int i, int width) {
     int cardWidth = 220, gap = 28, total = cardWidth * REWARD_CARD_COUNT + gap * (REWARD_CARD_COUNT - 1);
     int left = (width - total) / 2 + i * (cardWidth + gap);
-    return MakeRect(left, 130, left + cardWidth, 278);
+    // 아래 20px은 설명 몫이다. 148 높이에서는 설명이 아이콘 밑변에 닿고, 세 줄로
+    // 접히는 영어 설명은 카드 밑에서 잘렸다.
+    return MakeRect(left, 130, left + cardWidth, 298);
 }
 
 int CanRepairSector() { return gGame.playerHp < gGame.playerMaxHp; }
@@ -5141,6 +5150,8 @@ static int WrappedTextHeight(HDC dc, const wchar_t* value, HFONT font, int width
     value = LocalizeText(value);
     HFONT old = (HFONT)SelectObject(dc, font);
     RECT r = MakeRect(0, 0, width, 0);
+    wchar_t wrapped[2048];
+    value = WrapAtSpaces(dc, value, width, wrapped, 2048);
     DrawTextW(dc, value, -1, &r, DT_WORDBREAK | DT_CALCRECT);
     SelectObject(dc, old);
     return r.bottom - r.top;
@@ -5229,7 +5240,7 @@ static void DrawReward(HDC dc, int width, int height) {
         TextRect(dc, MakeRect(r.left + 8, r.top + 15, r.right - 8, r.top + 48), info->name, (COLORREF)info->color, gFontMedium, DT_CENTER | DT_SINGLELINE);
         wchar_t b[64]; wsprintfW(b, L"상주  ·  %dB", info->cost);
         TextRect(dc, MakeRect(r.left + 70, r.top + 58, r.right - 8, r.top + 82), b, C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
-        TextRect(dc, MakeRect(r.left + 12, r.top + 88, r.right - 12, r.top + 122), info->description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+        TextRect(dc, MakeRect(r.left + 12, r.top + 100, r.right - 12, r.bottom - 26), info->description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
         // 설치 후 사용량을 미리 보여주고, 한도를 넘게 되면 경고한다.
         int after = UsedBytes(&gGame) + info->cost;
         int over = after > EffectiveCapacity(&gGame);
@@ -5250,11 +5261,12 @@ static void DrawReward(HDC dc, int width, int height) {
         int tuned = gGame.rewardTier && kind != FACE_NUMBER && gGame.rewardValues[i] > FACE_INFO[kind].power;
         if (tuned) {
             wchar_t tag[16]; wsprintfW(tag, L"강화 +%d", gGame.rewardValues[i] - FACE_INFO[kind].power);
-            TextRect(dc, MakeRect(r.right - 78, r.top + 8, r.right - 10, r.top + 26), tag, C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+            // 제목(15~48) 위 모서리에 붙인다. 8에 두면 영어 제목(AMPLIFY 등)의 끝 글자와 겹친다.
+            TextRect(dc, MakeRect(r.right - 90, r.top + 4, r.right - 8, r.top + 22), tag, C_YELLOW, gFontSmall, DT_RIGHT | DT_SINGLELINE);
         }
         wsprintfW(b, L"출력 %d  ·  %dB", gGame.rewardValues[i], cost);
         TextRect(dc, MakeRect(r.left + 70, r.top + 58, r.right - 8, r.top + 82), b, tuned ? C_YELLOW : C_TEXT, gFontSmall, DT_CENTER | DT_SINGLELINE);
-        TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), FACE_INFO[kind].description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 100, r.right - 16, r.bottom - 8), FACE_INFO[kind].description, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
     {
         RECT r = RewardRect(REWARD_REPAIR, width);
@@ -5273,9 +5285,9 @@ static void DrawReward(HDC dc, int width, int height) {
         else lstrcpyW(b, L"체력 최대치");
         TextRect(dc, MakeRect(r.left + 70, r.top + 58, r.right - 8, r.top + 82), b, usable ? C_TEXT : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         wsprintfW(b, L"면 대신 회복\n현재 %d / %d", gGame.playerHp, gGame.playerMaxHp);
-        TextRect(dc, MakeRect(r.left + 16, r.top + 92, r.right - 16, r.bottom - 12), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
+        TextRect(dc, MakeRect(r.left + 16, r.top + 100, r.right - 16, r.bottom - 8), b, C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
     }
-    if (gGame.rewardIsTsr) { Text(dc, LEGACY_X + 56, 304, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
+    if (gGame.rewardIsTsr) { Text(dc, LEGACY_X + 56, 318, L"현재 보유 면 (참고용 · 상주 프로그램은 면을 교체하지 않습니다)", C_DIM, gFontSmall); DrawFaceGrid(dc, 0); }
     else {
         // 덮을 자리를 세워 두면 무엇이 무엇으로 바뀌고 용량이 어떻게 되는지
         // 확정 전에 한 줄로 보여 준다.
@@ -5294,7 +5306,7 @@ static void DrawReward(HDC dc, int width, int height) {
         }
         else if (gGame.selectedReward >= 0) lstrcpyW(step, L"2/2  교체할 기존 면을 클릭하세요 (한 번 더 누르면 확정)");
         else lstrcpyW(step, L"1/2  위에서 보상 면 또는 섹터 복구를 선택하세요");
-        Text(dc, LEGACY_X + 56, 304, step, stepColor, gFontSmall);
+        Text(dc, LEGACY_X + 56, 318, step, stepColor, gFontSmall);
         DrawFaceGrid(dc, gGame.selectedReward >= 0 ? 1 : 0);
     }
     // 이 버튼은 진행이 아니라 손실이다. 문구로 결과를 밝히고, 확정은 두 번째
@@ -5318,7 +5330,8 @@ static void DrawPrune(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(80, 145, width - 80, 218), L"면을 클릭하면 빈 면(0B)으로 삭제되고, 같은 칸을 다시 클릭하면 복원됩니다.\n한도 이하이고 면이 하나 이상 남으면 다음으로 진행할 수 있습니다.", C_TEXT, gFontMedium, DT_CENTER | DT_WORDBREAK);
     int tsrCount = InstalledTsrCount(&gGame);
     if (tsrCount > 0) {
-        Text(dc, LEGACY_X + 56, 272, L"상주 프로그램", C_GREEN, gFontMedium);
+        // 상주 칸(LEGACY_X+150)까지 94px뿐이라 한 줄로 쓰면 첫 칸에 가려진다. 두 줄로 접는다.
+        TextRect(dc, MakeRect(LEGACY_X + 56, 262, LEGACY_X + 146, 314), L"상주 프로그램", C_GREEN, gFontMedium, DT_WORDBREAK);
         for (int i = 0; i < tsrCount && i < 4; ++i) {
             int tsr = InstalledTsrAt(&gGame, i);
             if (tsr < 0) break;
@@ -5327,7 +5340,9 @@ static void DrawPrune(HDC dc, int width, int height) {
             Panel(dc, r, pending ? RGB(58, 29, 32) : hover ? RGB(46, 28, 32) : C_PANEL, pending || hover ? C_RED : C_LINE);
             TextRect(dc, MakeRect(r.left + 4, r.top + 8, r.right - 4, r.top + 34), TSR_INFO[tsr].name,
                 pending ? C_DIM : (COLORREF)TSR_INFO[tsr].color, gFontMedium, DT_CENTER | DT_SINGLELINE);
-            if (pending) wsprintfW(b, L"%dB · 삭제 예정 · 다시 클릭해 취소", TSR_INFO[tsr].cost);
+            // 칸 폭이 156px이라 한 줄에 둘을 다 싣지 못한다. 취소 안내는 가리킬 때만 바꿔 단다.
+            if (pending && hover) lstrcpyW(b, L"다시 클릭해 취소");
+            else if (pending) wsprintfW(b, L"%dB · 삭제 예정", TSR_INFO[tsr].cost);
             else wsprintfW(b, hover ? L"%dB · 삭제 예약" : L"%dB", TSR_INFO[tsr].cost);
             TextRect(dc, MakeRect(r.left + 4, r.bottom - 26, r.right - 4, r.bottom - 6), b, pending || hover ? C_RED : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
         }

@@ -2218,6 +2218,10 @@ int main() {
     if (lstrcmpW(LocalizeText(L"C:\\ SYSTEM 마운트 완료. 심층 스캔을 시작합니다."),
         L"C:\\ SYSTEM mounted. Starting deep scan.") != 0)
         return Fail("adjacent formatted values must remain intact");
+    if (lstrcmpW(LocalizeText(L"주사위 2 배치"), L"PLACE DIE 2") != 0)
+        return Fail("an integer placeholder must not swallow the words after it");
+    if (lstrcmpW(LocalizeText(L"오프라인 · 주사위 1"), L"OFFLINE · DIE 1") != 0)
+        return Fail("the most specific formatted row must win over a looser one");
     SetUiLanguage(LANGUAGE_KOREAN);
     if (CheckRosterIntegrity()) return 1;
     if (CheckSprites()) return 1;

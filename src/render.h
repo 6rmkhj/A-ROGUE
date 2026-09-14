@@ -33,6 +33,7 @@ void Outline(HDC dc, const RECT& rect, COLORREF color, int thickness);
 void Panel(HDC dc, const RECT& rect, COLORREF fillColor, COLORREF borderColor);
 void Text(HDC dc, int x, int y, const wchar_t* value, COLORREF color, HFONT font);
 void TextRect(HDC dc, const RECT& rect, const wchar_t* value, COLORREF color, HFONT font, UINT flags);
+const wchar_t* WrapAtSpaces(HDC dc, const wchar_t* value, int width, wchar_t* out, int cap);
 void Bar(HDC dc, const RECT& rect, int value, int maximum, COLORREF color);
 int TextWidth(HDC dc, const wchar_t* value, HFONT font);
 COLORREF MixColor(COLORREF from, COLORREF to, int amount);
