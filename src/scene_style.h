@@ -76,14 +76,14 @@ inline void DrawSceneField(HDC dc, int phase, COLORREF color, int width, int hei
             }
         }
     } else if (phase == PHASE_REWARD) {
-        DrawLine(dc, 66, 292, width - 66, 292, dim, 1);
+        DrawLine(dc, 66, 310, width - 66, 310, dim, 1);
         for (int i = 0; i < REWARD_CARD_COUNT; ++i) {
             RECT r = RewardRect(i, width); int cx = (r.left + r.right) / 2;
-            DrawLine(dc, cx, r.bottom + 1, cx, 292, dim, 1);
+            DrawLine(dc, cx, r.bottom + 1, cx, 310, dim, 1);
             if (age >= i * 75 && age < 850) {
                 int p = EaseOutCubic(Track(age - i * 75, 0, 480));
                 int x = Lerp(66, cx, p);
-                Fill(dc, MakeRect(x - 3, 291, x + 4, 293), MixColor(C_BG, color, FxScale(60 * (850 - age) / 850)));
+                Fill(dc, MakeRect(x - 3, 309, x + 4, 311), MixColor(C_BG, color, FxScale(60 * (850 - age) / 850)));
             }
         }
     } else if (phase == PHASE_PRUNE) {

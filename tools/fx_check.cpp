@@ -686,6 +686,14 @@ int main(int argc, char** argv) {
     if (DisplayEnemyAction(0)->intent != gGame.enemies[0].intent || DisplayTurn() != gGame.turn) return 57;
     if (DisplayDie(0)->assignedSlot != -1) return 12;
     CreateRenderFonts();
+    {   // 한글은 띄어쓰기에서 줄을 바꾼다. GDI에 맡기면 "막습니|다"로 낱말 한가운데가 끊긴다.
+        HDC probe = CreateCompatibleDC(0); HGDIOBJ probeFont = SelectObject(probe, gFontSmall);
+        wchar_t wrapped[64];
+        const wchar_t* w = WrapAtSpaces(probe, L"방어도는 절반만 막습니다",
+            TextWidth(probe, L"방어도는 절반만 막습", gFontSmall), wrapped, 64);
+        SelectObject(probe, probeFont); DeleteDC(probe);
+        if (lstrcmpW(w, L"방어도는 절반만\n막습니다")) { printf("FAIL: Korean must wrap at spaces\n"); return 58; }
+    }
     int frames = 0; DWORD beforeObjects = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
     LARGE_INTEGER freq, start, finish; QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&start);
     // First pass warms Windows' font fallback caches before measuring GDI growth.

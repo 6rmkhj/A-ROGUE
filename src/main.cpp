@@ -2241,8 +2241,8 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         // 실수로 닫는 것과 정말 끝내는 것을 구분해 준다.
         int inRun = gGame.phase != PHASE_TITLE && !IsEndScreen();
         if (inRun && MessageBoxW(window,
-                L"진행 중인 런(층·체력·덱)은 저장되지 않습니다.\n"
-                L"복구한 조각과 엔딩 기록은 그대로 남습니다.\n\n종료하시겠습니까?",
+                LocalizeText(L"진행 중인 런(층·체력·덱)은 저장되지 않습니다.\n"
+                L"복구한 조각과 엔딩 기록은 그대로 남습니다.\n\n종료하시겠습니까?"),
                 L"A:\\ROGUE", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
             return 0;
         DestroyWindow(window);
