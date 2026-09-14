@@ -7772,7 +7772,7 @@ static void DrawBossGimmickStamp(HDC dc, const RECT& box, const wchar_t* stamp, 
 void DrawBossIntro(HDC dc, int width, int height) {
     int index = BossCardIndex();
     if (index < 0) return;                       // 보스가 없으면 열 문도 없다
-    const EnemyState* enemy = &gGame.enemies[index]; const EnemyState* action = DisplayEnemyAction(index);
+    const EnemyState* enemy = &gGame.enemies[index];
     const EnemyInfo* info = GetEnemyInfoOrUnknown(enemy->kind);
     const BossGimmickInfo* gi = &BOSS_GIMMICK_INFO[gGame.boss.gimmick];
     COLORREF tone = (COLORREF)info->color;
