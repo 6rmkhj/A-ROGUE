@@ -3534,7 +3534,7 @@ static void DrawDescent(HDC dc, int width, int height) {
     int mount = gDescentToFloor == 0;
     int lockStage = mount && gDescentChoiceIndex >= 0;
     MountBeats beats = MountBeatsFor(mount);
-    int elapsed = (int)(GetTickCount() - gDescentStart);
+    int elapsed = ScenePace((int)(GetTickCount() - gDescentStart));
     if (elapsed < 0) elapsed = 0;
     if (elapsed > beats.total) elapsed = beats.total;
     if (lockStage && elapsed < MOUNT_LOCK_MS) { DrawVolumeLock(dc, width, height, elapsed); return; }
@@ -4404,7 +4404,7 @@ static void DrawBootVortex(HDC dc, int cx, int cy, int suck) {
 }
 
 void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH) {
-    int t = (int)(GetTickCount() - gBootStart);
+    int t = ScenePace((int)(GetTickCount() - gBootStart));
     if (t < 0) t = 0;
     if (t > BOOT_INSERT_MS) t = BOOT_INSERT_MS;
     int step = NoiseFrameStep();

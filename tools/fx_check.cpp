@@ -413,7 +413,9 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
                 : kind == 1 ? (int)(sizeof(diveAges) / sizeof(diveAges[0]))
                 : (int)(sizeof(mountAges) / sizeof(mountAges[0]));
             for (int frame = 0; frame < count && ok; ++frame) {
-                gCheckTick = 10000 + ages[frame];
+                // 디렉터리 진입만 제 속도로 흐른다. 나머지는 ScenePace를 거꾸로 밟아 같은 장면을 잡는다.
+                int tick = kind == 2 ? ages[frame] : ages[frame] * SCENE_PACE_PCT / 100;
+                gCheckTick = 10000 + tick;
                 CheckDcState dcBefore = ReadCheckDcState(dc);
                 DrawTransitionFixture(dc, kind); ++*frames;
                 CheckDcState dcAfter = ReadCheckDcState(dc);
@@ -431,7 +433,7 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
                     if (!SaveFrame(folder, name, w, h, bits)) { ok = 0; break; }
                 }
                 gCheckTick += 29; DrawTransitionFixture(dc, kind);
-                gCheckTick = 10000 + ages[frame]; DrawTransitionFixture(dc, kind); ++*frames;
+                gCheckTick = 10000 + tick; DrawTransitionFixture(dc, kind); ++*frames;
                 if (FrameHash(bits, w, h) != expected || memcmp(&gGame, &before, sizeof(gGame))) {
                     printf("FAIL: %s transition fixed-time pixels at %d\n", kindName[kind], ages[frame]);
                     ok = 0;
@@ -450,7 +452,7 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
         gDescentToFloor = 0; gDescentChoiceIndex = 0;
         GameState before = gGame;
         for (int frame = 0; frame < 2 && ok; ++frame) {
-            gCheckTick = 10000 + mediaAges[frame];
+            gCheckTick = 10000 + mediaAges[frame] * SCENE_PACE_PCT / 100;
             CheckDcState dcBefore = ReadCheckDcState(dc);
             DrawTransitionFixture(dc, 0); ++*frames;
             CheckDcState dcAfter = ReadCheckDcState(dc);
@@ -466,7 +468,7 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
                 if (!SaveFrame(folder, name, w, h, bits)) { ok = 0; break; }
             }
             gCheckTick += 29; DrawTransitionFixture(dc, 0);
-            gCheckTick = 10000 + mediaAges[frame]; DrawTransitionFixture(dc, 0); ++*frames;
+            gCheckTick = 10000 + mediaAges[frame] * SCENE_PACE_PCT / 100; DrawTransitionFixture(dc, 0); ++*frames;
             if (FrameHash(bits, w, h) != expected || memcmp(&gGame, &before, sizeof(gGame))) {
                 printf("FAIL: media %d fixed-time pixels at %d\n", drive, mediaAges[frame]);
                 ok = 0;
@@ -625,7 +627,7 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         BOOT_SEEK_END + 340,                 // 기계가 덮쳐 온다
     };
     for (int i = 0; i < (int)(sizeof(bootAges) / sizeof(bootAges[0])); ++i) {
-        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i];
+        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i] * SCENE_PACE_PCT / 100;
         DrawFixture(dc); DrawBootInsert(dc, BASE_WIDTH, BASE_HEIGHT, w, h); GdiFlush(); ++*frames;
         if (folder) {
             char name[96]; sprintf_s(name, "stage_boot_%d", i);

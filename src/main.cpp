@@ -935,12 +935,16 @@ static uint32_t gBootSeed;
 // 예전에는 주사위·보상 효과음을 빌려 썼다. 4초짜리 연출의 모든 사건이 판때기를
 // 놓는 소리로 들렸다는 뜻이다. 지금은 사건마다 그 물건의 소리가 따로 있고,
 // 큰 사건에는 둘을 겹쳐 쌓는다 (걸쇠 + 모터, 돌진 + 점등).
+#define BOOT_RISER_AT (BOOT_FLIP_AT - ScenePace(1200))
+// 표는 시각 순서여야 한다. SCENE_PACE_PCT를 크게 바꿔 상승음이 이웃을 넘으면 여기서 멈춘다.
+static_assert(BOOT_SURGE_AT <= BOOT_RISER_AT && BOOT_RISER_AT <= BOOT_SUCK_AT, "BOOT_RISER_AT out of order");
 static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
     // ★표가 음이다. 기계 소리만 있을 때는 사건이 열한 번 일어날 뿐 아무것도
     // 시작되고 끝나지 않았다 - 상승이 없으니 긴장이 쌓이지 않고, 닫는 화음이
     // 없으니 끝난 것이 아니라 그냥 멈춘 것이었다.
-    { 120,                  SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 정확히 벼림에서 끝난다
     { BOOT_SURGE_AT,        SFX_BOOT_TEAR,    0 },   // 과전압. 화면이 찢어진다
+    // 샘플 길이는 시계를 따라 늘지 않으므로 끝나는 자리에서 거꾸로 잡는다.
+    { BOOT_RISER_AT,        SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 정확히 벼림에서 끝난다
     { BOOT_SUCK_AT,         SFX_BOOT_VORTEX,  0 },   // 감겨 들어가기 시작한다
     { BOOT_FLIP_AT,         SFX_BOOT_STINGER, 0 },   // ★ 벼림 = A단조 화음이 선다
     { BOOT_FLIP_AT,         SFX_BOOT_FORGE,   0 },   // 그 위에 얹히는 금속 타격
@@ -1011,7 +1015,7 @@ static int BootKick(int elapsed, int at, int life, int peak) {
 // 화면이 갈라지는 동안 조금씩 세지고, 사건마다 한 번씩 크게 튄다.
 static int BootShakeAmplitude() {
     if (!gBootActive) return 0;
-    int elapsed = (int)(GetTickCount() - gBootStart);
+    int elapsed = ScenePace((int)(GetTickCount() - gBootStart));
     if (elapsed < BOOT_SUCK_AT) {
         // 붕괴. 바닥이 계속 올라가고, 과전압이 터지는 순간 한 번 크게 튄다.
         int amp = 1 + elapsed * 5 / BOOT_GLITCH_MS;
@@ -2152,7 +2156,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         else if (wParam == 6u) {
             // 그림은 경과 시간만 보고 그려지므로 여기가 할 일은 소리와 리페인트뿐이다.
             int mount = gDescentToFloor == 0;
-            int descentElapsed = (int)(GetTickCount() - gDescentStart);
+            int descentElapsed = ScenePace((int)(GetTickCount() - gDescentStart));
             const MountCue* cues = mount ? MOUNT_CUES : DIVE_CUES;
             int cueCount = (int)((mount ? sizeof(MOUNT_CUES) : sizeof(DIVE_CUES)) / sizeof(MountCue));
             int media = DriveMedia(gGame.selectedDrive);
@@ -2205,7 +2209,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 10u) {
-            int bootElapsed = (int)(GetTickCount() - gBootStart);
+            int bootElapsed = ScenePace((int)(GetTickCount() - gBootStart));
             int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
             while (gBootCue < cueCount && bootElapsed >= BOOT_CUES[gBootCue].at) {
                 PlaySfxPitched(BOOT_CUES[gBootCue].sfx, BOOT_CUES[gBootCue].pitch);
