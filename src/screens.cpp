@@ -8149,11 +8149,21 @@ void PaintGame(HWND window) {
     if (right < clientWidth) Fill(dc, MakeRect(right, top, clientWidth, bottom), C_BG);
     // 캔버스를 장치 좌표로 되돌려 픽셀 대 픽셀로 옮긴다. 화면과 크기가 같으면
     // 확대가 일어나지 않고, 상한에 걸린 경우에만 남은 몫을 늘린다.
+    //
+    // 늘릴 때 HALFTONE을 쓰면 안 된다. 이 경로는 RENDER_SCALE_MAX에 걸린 큰 창
+    // 에서만 도는데, 거기서 남는 몫은 몇 퍼센트뿐이다(2880x1800 전체화면 기준
+    // 2704 -> 2854, 5.5%). 그 몇 퍼센트를 메우자고 화면 전체를 고품질로 재표본
+    // 화하면 이 한 줄이 프레임의 대부분을 먹는다 - 실측으로 blit 97ms 대 2.6ms,
+    // 프레임 전체로는 76ms(13fps) 대 23ms(43fps)였다. 상한이 비용을 묶으려고
+    // 있는 것인데 도리어 비용을 폭증시키고 있었다.
+    //
+    // COLORONCOLOR는 남는 줄을 그냥 복제한다. 확대율이 작아 계단이 사실상
+    // 보이지 않고, 도트 그림과 고정폭 글자에는 뭉개지 않는 쪽이 오히려 맞다.
     SetMapMode(canvas, MM_TEXT);
     if (deviceW == scaledWidth && deviceH == scaledHeight)
         BitBlt(dc, left, top, scaledWidth, scaledHeight, canvas, 0, 0, SRCCOPY);
     else {
-        SetStretchBltMode(dc, HALFTONE); SetBrushOrgEx(dc, 0, 0, 0);
+        SetStretchBltMode(dc, COLORONCOLOR); SetBrushOrgEx(dc, 0, 0, 0);
         StretchBlt(dc, left, top, scaledWidth, scaledHeight, canvas, 0, 0, deviceW, deviceH, SRCCOPY);
     }
 
