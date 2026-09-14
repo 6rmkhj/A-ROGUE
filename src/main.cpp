@@ -2280,9 +2280,12 @@ static int CommandLineHasDevFlag() {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     SetProcessDPIAware();
     if (CommandLineHasDevFlag()) gDevMode = 1;
-    // 연출 타이머는 전부 16ms로 걸려 있지만, 시스템 틱이 기본 15.6ms라 실제로는
-    // 두 틱에 한 번씩 밀려 30fps 언저리로 떨어진다. 틱을 1ms로 당겨 두면 16ms가
-    // 16ms로 온다. 끝낼 때 반드시 되돌린다 (전역 설정이다).
+    // 주의: 이것으로 WM_TIMER가 촘촘해지지는 않는다. 재 보면 8ms는 63.7Hz,
+    // 16ms는 39.0Hz로 오는데 이 값이 timeBeginPeriod 적용 전후로 같다. WM_TIMER는
+    // 틱 경계에서만 깨어나고 그 경계는 이 호출이 바꾸지 못한다 - 연출 주기를
+    // 8ms로 둔 이유는 ui.h의 FX_TIMER_MS 주석에 있다.
+    // 여기서 틱을 당기는 것은 Sleep 단위와 오디오 펌프를 위한 것이다.
+    // 끝낼 때 반드시 되돌린다 (전역 설정이다).
     timeBeginPeriod(1);
     int hadCampaignSave = CampaignSaveExistsBesideExecutable();
     if (!LoadCampaign(&gCampaign) && hadCampaignSave) gCampaignCorrupt = 1;
