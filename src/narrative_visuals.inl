@@ -562,6 +562,10 @@ static void DrawNarrativeName(HDC dc, int width, int height) {
 // ROGUE explains each step from a guide window over the lower sidebar (the
 // SYSTEM and HISTORY panels carry nothing the practice needs). A tail points
 // at the control being explained; the line types while ROGUE's mouth moves.
+//
+// 표시는 조용하다. 누를 컨트롤 하나에 노란 테두리를 두르고, 배치 단계에서는
+// 놓을 칸만 네모로 알린다. 움직이는 장식을 얹어 봤지만 실습 화면에서는
+// 시선을 빼앗기만 했다 - 어디를 누르는지가 유일하게 중요한 화면이다.
 #define TUTORIAL_SPEECH_W 358
 #define TUTORIAL_SPEECH_H 300
 
@@ -595,9 +599,21 @@ static void DrawTutorialOverlay(HDC dc) {
     if (!gGame.tutorial.active || gGame.phase != PHASE_COMBAT || gTurnTraceActive) return;
     const int step = gGame.tutorial.step, decor = FxDecorOn();
     const int age = decor ? TutorialStepElapsed() : 60000;
+    const int placing = step == TUTORIAL_PLACE || step == TUTORIAL_CHAIN_PLACE;
     RECT focus = TutorialReadStep(step) ? ReadButtonRect() : step == TUTORIAL_PREVIEW ? ForecastRect()
         : TutorialExecuteStep(step) ? EndTurnRect() : MakeRect(28, 408, 698, 708);
-    if (step != TUTORIAL_COMPLETE) {
+    // 배치 단계: 고른 주사위가 들어갈 칸 하나만 네모로 알린다. 아직 고르지 않았거나
+    // 고른 주사위가 이미 제자리면, 남은 주사위를 둘러 먼저 고르게 한다.
+    if (placing) {
+        const int* slots = TutorialExpectedSlots(&gGame);
+        const int sel = gGame.selectedDie;
+        if (sel >= 0 && sel < 3 && gGame.dice[sel].assignedSlot != slots[sel]) {
+            const RECT s = SlotRect(slots[sel]);
+            Outline(dc, MakeRect(s.left - 3, s.top - 3, s.right + 3, s.bottom + 3), C_YELLOW, 3);
+        } else
+            for (int d = 0; d < 3; ++d)
+                if (gGame.dice[d].assignedSlot != slots[d]) Outline(dc, DieRect(d), C_YELLOW, 2);
+    } else if (step != TUTORIAL_COMPLETE) {
         Outline(dc, MakeRect(focus.left - 3, focus.top - 3, focus.right + 3, focus.bottom + 3), C_YELLOW, 2);
         // Breathing corner brackets, so the eye finds the control first.
         const int reach = 8 + (decor ? 3 * SinMille(age * 3) / 1000 : 0);
@@ -607,15 +623,6 @@ static void DrawTutorialOverlay(HDC dc) {
             const int sx = corner & 1 ? -1 : 1, sy = corner & 2 ? -1 : 1;
             Fill(dc, MakeRect(sx > 0 ? x : x - 14, sy > 0 ? y : y - 3, sx > 0 ? x + 14 : x, sy > 0 ? y + 3 : y), C_YELLOW);
             Fill(dc, MakeRect(sx > 0 ? x : x - 3, sy > 0 ? y : y - 14, sx > 0 ? x + 3 : x, sy > 0 ? y + 14 : y), C_YELLOW);
-        }
-        if (step == TUTORIAL_PLACE || step == TUTORIAL_CHAIN_PLACE) {
-            const int* slots = TutorialExpectedSlots(&gGame);
-            for (int d = 0; d < 3; ++d) {
-                RECT die = DieRect(d), slot = SlotRect(slots[d]);
-                DrawLine(dc, (die.left + die.right) / 2, die.top - 3,
-                    (slot.left + slot.right) / 2, slot.bottom + 3, MixColor(C_BG, C_YELLOW, 70), 1);
-                if (gGame.dice[d].assignedSlot != slots[d]) Outline(dc, slot, C_YELLOW, 2);
-            }
         }
     }
 

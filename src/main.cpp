@@ -1298,7 +1298,12 @@ void SyncIdleAnimation() {
     }
     int tutorialStep = gGame.tutorial.active && gGame.phase == PHASE_COMBAT && !gTurnTraceActive && !gCombatClearActive
         ? gGame.tutorial.step : -1;
-    if (tutorialStep != gTutorialStepShown) { gTutorialStepShown = tutorialStep; gTutorialStepAt = GetTickCount(); gTutorialBlip = 0; }
+    if (tutorialStep != gTutorialStepShown) {
+        // 단계가 열리는 순간의 신호음. 그림의 조준 고리·창 갱신과 같은 프레임에서 난다.
+        if (gWindow && tutorialStep >= 0)
+            PlaySfxPitched(tutorialStep == TUTORIAL_COMPLETE ? SFX_CONFIRM : SFX_UI_FOCUS, 7);
+        gTutorialStepShown = tutorialStep; gTutorialStepAt = GetTickCount(); gTutorialBlip = 0;
+    }
     if (gWindow && tutorialStep >= 0 && FxDecorOn()) {
         int elapsed = TutorialStepElapsed() - TUTORIAL_TYPE_DELAY_MS;
         int beat = elapsed >= 0 && elapsed < TutorialTypeMs() ? elapsed / 75 + 1 : 0;
