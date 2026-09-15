@@ -186,7 +186,7 @@ static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed, int tal
     if (terminal && gGame.story.selectedEnding == 0) corruption = 0;
     RECT portrait = MakeRect(r.left + 24, r.top + 52, r.right - 24, r.top + 292);
     DrawRoguePortrait(dc, portrait, milestone, corruption, accent, talking);
-    if (kind == STORY_A_GREETING || (kind == STORY_INTRO && !gGame.story.fragment) || (terminal && !gGame.story.selectedEnding)) {
+    if (kind == STORY_A_GREETING || (terminal && !gGame.story.selectedEnding)) {
         RECT welcome = MakeRect(r.left + 8, r.top + 294, r.right - 8, r.top + 340);
         Fill(dc, welcome, RGB(2, 5, 8));
         TextRect(dc, welcome, L"환영합니다. 마스터.", C_GREEN, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);

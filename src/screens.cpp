@@ -8023,13 +8023,6 @@ void PaintGame(HWND window) {
     if (gBootActive) {
         if (!FxSnapshotHeld()) FxSnapshotCapture(canvas, deviceW, deviceH);
         DrawBootInsert(canvas, BASE_WIDTH, BASE_HEIGHT, deviceW, deviceH);
-        int welcomeAge = ScenePace((int)(GetTickCount() - gBootStart));
-        if (!gGame.narrative.introSeen && welcomeAge >= 40 && welcomeAge < BOOT_GLITCH_MS) {
-            RECT welcome = MakeRect(220, 326, BASE_WIDTH - 220, 416);
-            Fill(canvas, welcome, RGB(2, 6, 7));
-            TextRect(canvas, welcome, L"환영합니다. 마스터.", C_GREEN, gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            if (welcomeAge > 300 && FxDecorOn()) DrawBandGlitch(canvas, welcome, welcomeAge, FxScale(8), 913, 7);
-        }
     }
 
     if (!gGuideOpen && !gSettingsOpen && !gDeckOpen && !gTurnTraceActive && !gDescentActive && !gCombatClearActive && !gBootActive && !gBossIntroActive) {
