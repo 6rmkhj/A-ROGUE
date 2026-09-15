@@ -484,8 +484,8 @@ def generate():
             'ROGUE: CHAIN follows up the attack you just made. 4 goes in ATTACK, 5 in CHAIN, 1 in DEFEND. The bigger the CHAIN face, the harder it follows up.',
         '로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.':
             'ROGUE: Attack 4 alone leaves 1. CHAIN adds 2 more and finishes it. Press Space.',
-        '로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.':
-            "ROGUE: Nice work. On a turn with no attack, CHAIN follows up your defense instead. Now let's go restore something.",
+        '로그: 잘했어요. 연쇄가 붙으니까 한 번에 끝났죠? 이제 복구하러 가요.':
+            "ROGUE: Nice work. With CHAIN on top, it went down in one go, right? Now let's go restore something.",
         '로그: 두 번째 턴이에요. R로 다시 읽어요.':
             'ROGUE: Second turn. Read again with R.',
         '로그: 4는 공격, 5는 연쇄, 1은 방어에 놔 봐요.':

@@ -194,6 +194,7 @@ int gCombatClearActive;
 static int gClearCuePlayed;
 DWORD gCombatClearStart;
 int gClearedFloor, gClearedEncounter;
+int gFightDealt, gFightTaken, gFightTurns;
 int gTurnTraceActive, gTurnTracePendingClear;
 static int gTurnTracePendingDeath;
 DWORD gTurnTraceStart;
@@ -1537,7 +1538,12 @@ static void ExecuteCombatTurn() {
         const EnemyState* e = &gGame.enemies[i];
         if (e->alive && (e->intent == INTENT_ATTACK || e->intent == INTENT_HEAVY || e->intent == INTENT_CORRUPT)) threat += e->intentValue;
     }
+    // ponytail: 전투 중간에 이어 하면 그 전 턴은 빠진다. 합계를 세이브에 넣으면 정확해진다.
+    if (turn == 1) gFightDealt = gFightTaken = 0;
     EndTurn(&gGame);
+    if (before == PHASE_COMBAT && !gGame.tutorial.active) {
+        gFightDealt += gGame.lastTurnDamageDealt; gFightTaken += gGame.lastTurnDamageTaken; gFightTurns = turn;
+    }
     PersistCampaignProgress();
     // 로그는 결과를 보고 한마디만 한다. 위험이 먼저고, 칭찬은 제일 뒤다.
     if (gGame.phase == PHASE_COMBAT && gGame.turn != turn && !gGame.tutorial.active) {

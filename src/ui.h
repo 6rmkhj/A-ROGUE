@@ -353,6 +353,8 @@ extern int gEndingArmed;      // 최종 명령 카드
 extern int gReadActive, gRolled;
 // 전투 종료·턴 계산·볼륨 진입 연출
 extern int gCombatClearActive, gClearedFloor, gClearedEncounter;
+// 전투 한 판 동안 쌓은 합계. 정리 화면이 마지막 턴이 아니라 전투 전체를 보여 준다.
+extern int gFightDealt, gFightTaken, gFightTurns;
 extern DWORD gCombatClearStart;
 extern int gTurnTraceActive;
 extern DWORD gTurnTraceStart;

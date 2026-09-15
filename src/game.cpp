@@ -1473,7 +1473,7 @@ const wchar_t* TutorialInstruction(const GameState* game) {
     case TUTORIAL_CHAIN_READ: return L"로그: 적이 5 남았네요. 이번엔 연쇄를 써 볼게요. R로 새 눈부터 읽어요.";
     case TUTORIAL_CHAIN_PLACE: return L"로그: 연쇄는 방금 한 공격을 한 번 더 이어서 쳐요. 4는 공격, 5는 연쇄, 1은 방어에 놔 주세요. 연쇄 눈이 클수록 더 세게 이어져요.";
     case TUTORIAL_CHAIN_EXECUTE: return L"로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.";
-    case TUTORIAL_COMPLETE: return L"로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.";
+    case TUTORIAL_COMPLETE: return L"로그: 잘했어요. 연쇄가 붙으니까 한 번에 끝났죠? 이제 복구하러 가요.";
     default: return L"";
     }
 }
@@ -2906,6 +2906,8 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
 
     out->valid = 1;
     out->damageDealt = copy.lastTurnDamageDealt;
+    for (int i = 0; i < game->enemyCount; ++i)
+        out->enemyHpLost += (game->enemies[i].alive ? game->enemies[i].hp : 0) - (copy.enemies[i].alive ? copy.enemies[i].hp : 0);
     out->damageTaken = copy.lastTurnDamageTaken;
     out->blockGained = copy.lastTurnBlockGained;
     for (int s = 0; s < SLOT_COUNT; ++s) out->slotOutput[s] = copy.lastTurnSlotOutput[s];
