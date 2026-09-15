@@ -1304,8 +1304,9 @@ static void DrawSlot(HDC dc, int slot) {
         wchar_t b[48]; wsprintfW(b, L"%s 주사위 %d · %dB", DIE_BADGE[die], die + 1, FaceCost(face));
         TextRect(dc, MakeRect(r.left + 4, r.bottom - 28, r.right - 4, r.bottom - 6), b,
             die == gGame.selectedDie ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    } else if (gGame.selectedDie >= 0) {
-        // 고른 주사위가 있으면 빈 슬롯이 클릭 결과를 미리 말해 준다.
+    } else if (gGame.selectedDie >= 0 && (!gGame.tutorial.active
+        || (TutorialExpectedSlots(&gGame)[gGame.selectedDie] == slot && gGame.dice[gGame.selectedDie].assignedSlot != slot))) {
+        // 고른 주사위가 있으면 빈 슬롯이 클릭 결과를 미리 말해 준다. 실습에서는 받아 주는 칸 하나만 말한다.
         wchar_t hint[32]; wsprintfW(hint, L"주사위 %d 배치", gGame.selectedDie + 1);
         TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), hint, C_YELLOW, gFontSmall, DT_CENTER | DT_SINGLELINE);
     } else TextRect(dc, MakeRect(r.left + 5, r.top + 48, r.right - 5, r.top + 89), L"비어 있음", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
@@ -1475,11 +1476,13 @@ static void DrawForecastPanel(HDC dc) {
         if (!valid) lstrcpyW(value, L"--");
         else if (unknown) { lstrcpyW(value, i == 2 ? L"?" : L"-?"); tone = C_YELLOW; }
         else {
-            int amount = i == 0 ? gPreview.damageDealt : i == 1 ? gPreview.damageTaken : gPreview.blockGained;
-            if (amount <= 0) lstrcpyW(value, L"0");
+            // 적 체력은 준 피해가 아니라 적 행동까지 끝난 뒤의 실제 변화다. 회복이 피해를 넘으면 + 로 적는다.
+            int amount = i == 0 ? gPreview.enemyHpLost : i == 1 ? gPreview.damageTaken : gPreview.blockGained;
+            if (i == 0 && amount < 0) wsprintfW(value, L"+%d", -amount);
+            else if (amount <= 0) lstrcpyW(value, L"0");
             else wsprintfW(value, i == 2 ? L"+%d" : L"-%d", amount);
             // 내 체력 0은 안전하다는 확정이라 초록으로 둔다. 나머지 0은 이번 턴 아무 일도 없다는 뜻이다.
-            if (i == 0) tone = amount <= 0 ? C_DIM : gPreview.combatEnds ? C_GREEN : C_TEXT;
+            if (i == 0) tone = amount < 0 ? C_YELLOW : amount == 0 ? C_DIM : gPreview.combatEnds ? C_GREEN : C_TEXT;
             else if (i == 1) tone = amount <= 0 ? C_GREEN : C_RED;
             else tone = amount <= 0 ? C_DIM : C_BLUE;
         }
@@ -4551,11 +4554,11 @@ static void DrawCombatClear(HDC dc, int width, int height) {
         gClearedEncounter == 2 ? L"ACCESS GRANTED" : L"SECTOR RESTORED",
         MixColor(C_INK, tone, 40 + appear * 60 / 1000), gFontHuge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     wchar_t heading[96];
-    wsprintfW(heading, L"%d층 · %d구역  —  적 삭제 완료", gClearedFloor + 1, gClearedEncounter + 1);
+    wsprintfW(heading, L"%d층 · %d구역  —  %d턴 만에 적 삭제 완료", gClearedFloor + 1, gClearedEncounter + 1, gFightTurns);
     TextRect(dc, MakeRect(0, 322, width, 351), heading, C_TEXT, gFontMedium, DT_CENTER | DT_SINGLELINE);
     DrawLine(dc, cx - 324, 381, cx + 324, 381, MixColor(C_BG, tone, 25), 1);
-    const wchar_t* labels[] = {L"이번 실행 · 가한 피해", L"이번 실행 · 받은 피해", L"남은 체력"};
-    int values[] = {gGame.lastTurnDamageDealt, gGame.lastTurnDamageTaken, gGame.playerHp};
+    const wchar_t* labels[] = {L"이번 전투 · 가한 피해", L"이번 전투 · 받은 피해", L"남은 체력"};
+    int values[] = {gFightDealt, gFightTaken, gGame.playerHp};
     for (int i = 0; i < 3; ++i) {
         int x = cx - 330 + i * 220;
         wchar_t number[24]; wsprintfW(number, L"%d", values[i]);
@@ -4584,6 +4587,8 @@ static void DrawCombatClear(HDC dc, int width, int height) {
 // 지나가야 하는 통로라 경로가 통째로 가려진다. 아래로 내려 통로를 비운다.
 RECT TurnTraceTickerRect() { return MakeRect(28, 712, 916, 750); }
 RECT TurnTracePanelRect() { return MakeRect(SIDEBAR_LEFT, ForecastRect().top, SIDEBAR_RIGHT, SIDEBAR_BOTTOM); }
+
+static int WrappedTextHeight(HDC dc, const wchar_t* value, HFONT font, int width);
 
 static void DrawTurnCalculation(HDC dc) {
     int count = gGame.turnTraceCount;
@@ -4615,20 +4620,30 @@ static void DrawTurnCalculation(HDC dc) {
                                : L"증폭 → 공격 → 적중 → 방어 → 연쇄 → 적 행동",
         gGame.lastTurnReversed ? C_RED : C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
     Fill(dc, MakeRect(panel.left + 10, panel.top + 61, panel.right - 10, panel.top + 62), RGB(28, 40, 50));
+    // 계산 줄은 숫자가 뒤에 오므로 말줄임으로 자르지 않고 접는다. 칸이 모자라면
+    // 오래된 줄부터 위로 밀어낸다.
+    const int textLeft = panel.left + 62, textRight = panel.right - 10;
+    const int listTop = panel.top + 68, listBottom = panel.bottom - 116;
+    int rowH[TURN_TRACE_CAP], total = 0;
     int first = shown > TURN_TRACE_CAP ? shown - TURN_TRACE_CAP : 0;
     for (int i = first; i < shown; ++i) {
-        int y = panel.top + 68 + (i - first) * 24;
-        int current = i == shown - 1;
+        int h = WrappedTextHeight(dc, gGame.turnTrace[i], gFontSmall, textRight - textLeft);
+        rowH[i - first] = (h < 20 ? 20 : h) + 4;
+        total += rowH[i - first];
+    }
+    int skip = 0;
+    while (total > listBottom - listTop && first + skip < shown - 1) total -= rowH[skip++];
+    for (int i = first + skip, y = listTop; i < shown; y += rowH[i - first], ++i) {
+        int current = i == shown - 1, h = rowH[i - first] - 4;
         COLORREF color = current ? C_TEXT : C_DIM;
         if (current) {
-            Fill(dc, MakeRect(panel.left + 8, y - 2, panel.right - 8, y + 21), RGB(14, 24, 34));
+            Fill(dc, MakeRect(panel.left + 8, y - 2, panel.right - 8, y + h + 1), RGB(14, 24, 34));
             Text(dc, panel.left + 12, y, L">", C_GREEN, gFontSmall);
         }
         wchar_t number[8]; wsprintfW(number, L"%02d", i + 1);
         Text(dc, panel.left + 24, y, number, current ? C_GREEN : C_DIM, gFontSmall);
-        Fill(dc, MakeRect(panel.left + 50, y + 3, panel.left + 53, y + 16), color);
-        TextRect(dc, MakeRect(panel.left + 62, y, panel.right - 10, y + 20),
-            gGame.turnTrace[i], color, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
+        Fill(dc, MakeRect(panel.left + 50, y + 3, panel.left + 53, y + h - 4), color);
+        TextRect(dc, MakeRect(textLeft, y, textRight, y + h), gGame.turnTrace[i], color, gFontSmall, DT_WORDBREAK);
     }
     int hits = 0, damage = 0, block = 0, kills = 0, latest = -1;
     for (int i = 0; i < gGame.combatFxCount; ++i) {

@@ -132,7 +132,7 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 화상 -%d	BURN -%d
 연쇄 -%d	CHAIN -%d
 구역 정리 완료 · 보상 데이터 복구	Sector cleared · Recovering reward data
-%d층 · %d구역  —  적 삭제 완료	FLOOR %d · SECTOR %d  —  ENEMY DELETED
+%d층 · %d구역  —  %d턴 만에 적 삭제 완료	FLOOR %d · SECTOR %d  —  ENEMY DELETED IN %d TURNS
 잠시 후 보상 화면으로 이동합니다 · 클릭이나 키로 바로 넘기기	Reward screen opening shortly · Click or press a key to skip
 면을 설치하거나, 대신 섹터를 복구해 체력을 얻으십시오	Install a face, or repair a sector to recover HP
 클릭 또는 숫자 키	Click or press a number key
@@ -223,7 +223,6 @@ KEYB · 판독 후	KEYB · AFTER SCAN
 공격 피해 일부를 회복	Recover some attack damage as HP
 어느 슬롯에서도 높은 출력	High output in any slot
 증폭 슬롯에서 보너스 2배	Double bonus in the Amplify slot
-연쇄 슬롯에서 이번 턴 공격/방어 효과 반복	Repeat this turn's Attack or Defend effect in the Chain slot
 효과와 비용이 모두 0	Zero effect and cost
 대상에게 피해를 줍니다.	Deals damage to the target.
 이번 턴의 적 피해를 막습니다.	Blocks enemy damage this turn.
@@ -994,8 +993,8 @@ KEYB 재굴림 (상주 프로그램 설치 시)	KEYB reroll (when installed)
 면 격리, 최종 보스는 영구 삭제	Face quarantine; the final boss deletes permanently
 볼륨 법칙 — 매 전투에 적용	Volume law — applies to every battle
 보상 종류	Rewards
-이번 실행 · 가한 피해	DAMAGE DEALT THIS TURN
-이번 실행 · 받은 피해	DAMAGE TAKEN THIS TURN
+이번 전투 · 가한 피해	DAMAGE DEALT THIS FIGHT
+이번 전투 · 받은 피해	DAMAGE TAKEN THIS FIGHT
 남은 체력	HP REMAINING
 상위 목록 판독	Reading parent listing
 LOCKED · 되돌아갈 수 없습니다	LOCKED · no way back
@@ -1625,7 +1624,7 @@ ROGUE / 연결됨	ROGUE / CONNECTED
 로그: 적이 5 남았네요. 이번엔 연쇄를 써 볼게요. R로 새 눈부터 읽어요.	ROGUE: The enemy has 5 left. Let's try CHAIN this time. Read the new faces with R.
 로그: 연쇄는 방금 한 공격을 한 번 더 이어서 쳐요. 4는 공격, 5는 연쇄, 1은 방어에 놔 주세요. 연쇄 눈이 클수록 더 세게 이어져요.	ROGUE: CHAIN follows up the attack you just made. 4 goes in ATTACK, 5 in CHAIN, 1 in DEFEND. The bigger the CHAIN face, the harder it follows up.
 로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.	ROGUE: Attack 4 alone leaves 1. CHAIN adds 2 more and finishes it. Press Space.
-로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.	ROGUE: Nice work. On a turn with no attack, CHAIN follows up your defense instead. Now let's go restore something.
+로그: 잘했어요. 연쇄가 붙으니까 한 번에 끝났죠? 이제 복구하러 가요.	ROGUE: Nice work. With CHAIN on top, it went down in one go, right? Now let's go restore something.
 로그: 두 번째 턴이에요. R로 다시 읽어요.	ROGUE: Second turn. Read again with R.
 로그: 4는 공격, 5는 연쇄, 1은 방어에 놔 봐요.	ROGUE: Try 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.
 로그: 이번엔 4는 공격, 5는 연쇄, 1은 방어예요.	ROGUE: This time it's 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.

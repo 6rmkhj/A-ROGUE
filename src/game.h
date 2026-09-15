@@ -319,7 +319,8 @@ struct GameState {
 // 그때는 uncertain이 서고, 미리보기 값은 확정이 아니라 현재 굴림 기준의 예상이다.
 struct TurnPreview {
     int valid;                    // 배치된 주사위가 없으면 0
-    int damageDealt;              // 적이 잃을 체력
+    int damageDealt;              // 적에게 들어갈 피해
+    int enemyHpLost;              // 적 행동(회복 등)까지 끝난 뒤 적 체력의 실제 변화. 음수면 오히려 늘어난다
     int damageTaken;              // 내가 잃을 체력
     int blockGained;              // 이번 턴 얻는 방어도
     int slotOutput[SLOT_COUNT];   // 슬롯별 산출량
