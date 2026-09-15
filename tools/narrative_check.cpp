@@ -15,6 +15,12 @@ static int CheckNarrativeInput() {
     InitCampaign(&gCampaign); gCampaignCorrupt = 1;
     ResetPresentation(); gFxLevel = FX_OFF;
     NewRun(&gGame, 100, 0); AttachNarrative(&gGame, &gCampaign.narrative);
+    // With motion on, the first input at P01 only skips the greeting beat.
+    gFxLevel = FX_FULL; gSceneKey = 1; gSceneStart = gCheckTick;
+    HandleKey(VK_RETURN);
+    if (gGame.phase != PHASE_STORY || SceneElapsed() < StoryStageMs() || StoryShownLine() != 0
+        || StoryLineElapsed() >= StoryLineTypeMs(0)) return NFail("first input skips only the P01 greeting beat");
+    gFxLevel = FX_OFF;
     HandleKey(VK_RETURN);
     if (gGame.phase != PHASE_STORY || StoryShownLine() != 1) return NFail("Enter opens P01's next line, not the next screen");
     ClickCenter(MakeRect(600, 300, 610, 310));
@@ -62,7 +68,18 @@ static int CheckNarrativeInput() {
     ClickCenter(TutorialNextRect());
     if (gGame.tutorial.step != TUTORIAL_EXECUTE) return NFail("forecast acknowledgment");
     HandleKey(VK_SPACE);
-    if (gGame.tutorial.step != TUTORIAL_COMPLETE) return NFail("training resolves real combat");
+    if (gGame.tutorial.step != TUTORIAL_CHAIN_READ) return NFail("training resolves real combat");
+    if (gTurnTraceActive) FinishTurnTrace();
+    HandleKey('R'); StopRead();
+    if (!gRolled || gGame.tutorial.step != TUTORIAL_CHAIN_PLACE) return NFail("second turn reads new dice");
+    int chainSlots[3] = {SLOT_ATTACK, SLOT_CHAIN, SLOT_DEFEND};
+    for (int d = 0; d < 3; ++d) {
+        ClickCenter(DieRect(d)); ClickCenter(SlotRect(chainSlots[d]));
+        if (gGame.dice[d].assignedSlot != chainSlots[d]) return NFail("chain placement by mouse");
+    }
+    if (gGame.tutorial.step != TUTORIAL_CHAIN_EXECUTE) return NFail("chain placement opens execution");
+    HandleKey(VK_SPACE);
+    if (gGame.tutorial.step != TUTORIAL_COMPLETE || gGame.enemies[0].alive) return NFail("chain finishes training combat");
     if (gTurnTraceActive) FinishTurnTrace();
     ClickCenter(TutorialNextRect());
     if (gGame.tutorial.active || !gGame.narrative.tutorialSeen || gGame.phase != PHASE_STORY)
@@ -138,7 +155,15 @@ int main(int argc, char** argv) {
                 for (int page = 0; page < StoryPageCount(&gGame); ++page) {
                     gGame.story.page = (uint8_t)page;
                     if (!CurrentStoryFragment(&gGame)) return NFail("missing authored story page");
-                    gSceneKey = 1; gSceneStart = 10000; gCheckTick = 12800;
+                    gSceneKey = 1; gSceneStart = 10000;
+                    // The P01 greeting beat: typing, breaking, ROGUE scanned in and settling.
+                    static const int stageAges[4] = {900, 2150, 2900, 3500};
+                    for (int s = 0; StoryStageMs() && s < 4; ++s) {
+                        gCheckTick = 10000 + stageAges[s];
+                        char stageName[90]; sprintf_s(stageName, "story_%s_intro_stage_%d", language ? "en" : "ko", stageAges[s]);
+                        if (CheckStoryFrame(dc, bits, w, h, folder, stageName, &frames)) return 1;
+                    }
+                    gCheckTick = 12800 + StoryStageMs();
                     // Mid-typing on the second line (colour split, caret), then the whole card.
                     gStoryLineKey = StoryLineKey(); gStoryLineTyped = 0; gStoryLineAt = gCheckTick - 120;
                     gStoryLine = StoryLineCount() > 1 ? 1 : 0;
@@ -162,9 +187,20 @@ int main(int argc, char** argv) {
                 AssignDieToSlot(&gGame, 2, SLOT_AMPLIFY);
             }
             if (step == TUTORIAL_EXECUTE) AcknowledgeTutorialPreview(&gGame);
+            if (step == TUTORIAL_CHAIN_READ) EndTurn(&gGame);
+            if (step == TUTORIAL_CHAIN_PLACE) TutorialReadDice(&gGame);
+            if (step == TUTORIAL_CHAIN_EXECUTE) {
+                AssignDieToSlot(&gGame, 0, SLOT_ATTACK);
+                AssignDieToSlot(&gGame, 1, SLOT_CHAIN);
+                AssignDieToSlot(&gGame, 2, SLOT_DEFEND);
+            }
             if (step == TUTORIAL_COMPLETE) EndTurn(&gGame);
-            gRolled = step != TUTORIAL_READ;
+            if (gGame.tutorial.step != step) return NFail("tutorial review fixture reached the wrong step");
+            gRolled = !TutorialReadStep(step);
             sprintf_s(name, "tutorial_%s_%d", language ? "en" : "ko", step);
+            wchar_t speech[640]; int speechHeight;
+            TutorialSpeech(speech, 640); TutorialSpeechLayout(dc, speech, &speechHeight);
+            if (speechHeight > TUTORIAL_SPEECH_H) { printf("Overflow at %s: %d pixels\n", name, speechHeight); return NFail("tutorial speech overflow"); }
             if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
         }
         SelectObject(dc, old); DeleteObject(bmp); DeleteDC(dc);

@@ -3,8 +3,10 @@
 // all dialogue, stage labels, costs and actionable control highlights.
 RECT NarrativeNameRect() { return MakeRect(436, 391, 916, 443); }
 RECT NarrativeNameConfirmRect() { return MakeRect(546, 520, 806, 566); }
-RECT TutorialNextRect() { return MakeRect(1040, 720, 1180, 755); }
-RECT TutorialSkipRect() { return MakeRect(1190, 720, 1324, 755); }
+// ROGUE's training guide sits over the lower sidebar; its buttons live inside it.
+static RECT TutorialGuideRect() { return MakeRect(SIDEBAR_LEFT - 8, 386, SIDEBAR_RIGHT + 8, 740); }
+RECT TutorialNextRect() { return MakeRect(SIDEBAR_LEFT + 10, 690, SIDEBAR_LEFT + 188, 726); }
+RECT TutorialSkipRect() { return MakeRect(SIDEBAR_RIGHT - 164, 690, SIDEBAR_RIGHT - 10, 726); }
 RECT TutorialReplayRect() { return MakeRect(830, 164, 1238, 206); }
 
 static const wchar_t* NarrativeName() {
@@ -106,6 +108,67 @@ static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, CO
     }
 }
 
+// The story art panel and where ROGUE sits in it. The first-contact beat moves
+// ROGUE onto exactly this seat before the dialogue layout appears.
+static RECT StoryArtRect() { return MakeRect(64, 136, 394, 638); }
+static RECT StoryPortraitRect(const RECT& r) { return MakeRect(r.left + 24, r.top + 52, r.right - 24, r.top + 292); }
+
+// Before P01: the greeting types alone, breaks from its edges into noise, and
+// ROGUE is scanned in where it stood, then slides to the story seat.
+static void DrawIntroStage(HDC dc, int width, int height, int t) {
+    Fill(dc, MakeRect(0, 68, width, height), RGB(2, 5, 8));
+    const int cy = (68 + height) / 2;
+    if (t < INTRO_ROGUE_AT) {
+        const wchar_t* greeting = LocalizeText(L"환영합니다. 마스터.");
+        const int length = lstrlenW(greeting);
+        HFONT old = (HFONT)SelectObject(dc, gFontHuge);
+        SetBkMode(dc, TRANSPARENT);
+        SIZE full = {0, 0}; GetTextExtentPoint32W(dc, greeting, length, &full);
+        const int x0 = (width - full.cx) / 2, y0 = cy - full.cy / 2;
+        const int typed = length * Track(t, INTRO_TYPE_AT, INTRO_TYPE_END) / 1000;
+        const int eaten = (length + 1) / 2 * Track(t, INTRO_BREAK_AT, INTRO_ROGUE_AT - 150) / 1000;
+        int x = x0;
+        for (int i = 0; i < typed; ++i) {
+            SIZE cell = {0, 0}; GetTextExtentPoint32W(dc, greeting + i, 1, &cell);
+            if (i < eaten || i >= length - eaten) {
+                uint32_t h = Hash3(i, t / 60, 5);
+                if (h % 3u) {
+                    wchar_t noise[2] = { L"#%&?01"[h / 3u % 6u], 0 };
+                    SetTextColor(dc, MixColor(C_BG, h % 3u == 1 ? C_RED : C_GREEN, 70));
+                    TextOutW(dc, x, y0, noise, 1);
+                }
+            } else {
+                SetTextColor(dc, C_GREEN);
+                TextOutW(dc, x, y0, greeting + i, 1);
+            }
+            x += cell.cx;
+        }
+        if (t >= INTRO_TYPE_AT && t < INTRO_BREAK_AT && (typed < length || (t / 260) % 2 == 0))
+            Fill(dc, MakeRect(x + 6, y0 + 8, x + 6 + full.cy / 3, y0 + full.cy - 8), C_GREEN);
+        SelectObject(dc, old);
+        if (t >= INTRO_BREAK_AT)
+            DrawBandGlitch(dc, MakeRect(x0 - 40, y0 - 12, x0 + full.cx + 40, y0 + full.cy + 12), t,
+                FxScale(4 + 16 * Track(t, INTRO_BREAK_AT, INTRO_ROGUE_AT) / 1000), 913, 6);
+        return;
+    }
+    const RECT center = MakeRect(width / 2 - 128, cy - 128, width / 2 + 128, cy + 128);
+    const RECT seat = StoryPortraitRect(StoryArtRect());
+    const int move = EaseOutCubic(Track(t, INTRO_SETTLE_AT, INTRO_STAGE_MS));
+    const RECT face = MakeRect(Lerp(center.left, seat.left, move), Lerp(center.top, seat.top, move),
+        Lerp(center.right, seat.right, move), Lerp(center.bottom, seat.bottom, move));
+    // Drawn from the top down behind a scan line, the way a sector is read.
+    const int reveal = Track(t, INTRO_ROGUE_AT, INTRO_ROGUE_AT + 640);
+    const int scanY = face.top + (face.bottom - face.top) * reveal / 1000;
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, face.left - 16, face.top - 16, face.right + 16, scanY);
+    DrawRoguePortrait(dc, face, 0, 0, C_BLUE, 0);
+    RestoreDC(dc, saved);
+    if (reveal < 1000) {
+        Fill(dc, MakeRect(face.left - 24, scanY - 1, face.right + 24, scanY + 2), MixColor(C_BG, C_BLUE, 90));
+        Fill(dc, MakeRect(face.left - 24, scanY + 2, face.right + 24, scanY + 6), MixColor(C_BG, C_BLUE, 30));
+    }
+}
+
 static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed, int talking) {
     int kind = gGame.story.kind;
     int milestone = kind == STORY_MILESTONE ? gGame.story.fragment + 1 : count;
@@ -184,7 +247,7 @@ static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed, int tal
     }
     int corruption = antagonist || revelation ? 6 : count > 0 ? count - 1 : 0;
     if (terminal && gGame.story.selectedEnding == 0) corruption = 0;
-    RECT portrait = MakeRect(r.left + 24, r.top + 52, r.right - 24, r.top + 292);
+    RECT portrait = StoryPortraitRect(r);
     DrawRoguePortrait(dc, portrait, milestone, corruption, accent, talking);
     if (kind == STORY_A_GREETING || (terminal && !gGame.story.selectedEnding)) {
         RECT welcome = MakeRect(r.left + 8, r.top + 294, r.right - 8, r.top + 340);
@@ -328,7 +391,10 @@ static void DrawStory(HDC dc, int width, int height) {
     if (!story) return;
     const int count = RecoveredShardCount(gGame.clearedMask);
     const int decor = FxDecorOn();
-    const int scene = decor ? SceneElapsed() : 3000;
+    const int stage = StoryStageMs();
+    if (stage && SceneElapsed() < stage) { DrawIntroStage(dc, width, height, SceneElapsed()); return; }
+    // Entrance effects count from the end of any opening beat.
+    const int scene = decor ? SceneElapsed() - stage : 3000;
     COLORREF accent = gGame.story.kind == STORY_MILESTONE && gGame.story.fragment == 5 ? C_RED : C_BLUE;
     DrawSceneField(dc, PHASE_STORY, accent, width, height);
 
@@ -352,7 +418,7 @@ static void DrawStory(HDC dc, int width, int height) {
         Fill(dc, MakeRect(0, bottomBar - 1, width, bottomBar), lip);
     }
 
-    RECT art = MakeRect(64, 136, 394, 638);
+    RECT art = StoryArtRect();
     RECT panel = MakeRect(416, 136, width - 64, 638);
     const COLORREF panelFill = RGB(10, 19, 28);
     DrawNarrativeDiagram(dc, art, count, scene, typing && who == STORY_WHO_ROGUE);
@@ -492,15 +558,58 @@ static void DrawNarrativeName(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(220, 603, width - 220, 651), L"자기 이름을 말하듯, 당신이 원하는 이름을 입력하세요.", C_DIM, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
+// ---- Tutorial guide ---------------------------------------------------------
+// ROGUE explains each step from a guide window over the lower sidebar (the
+// SYSTEM and HISTORY panels carry nothing the practice needs). A tail points
+// at the control being explained; the line types while ROGUE's mouth moves.
+#define TUTORIAL_SPEECH_W 358
+#define TUTORIAL_SPEECH_H 132
+
+// Length of a leading "Name: " speaker tag, including the space, or 0.
+static int SpeakerTagLength(const wchar_t* text) {
+    for (int c = 1; c < 18 && text[c]; ++c) if (text[c] == L':' && text[c + 1] == L' ') return c + 2;
+    return 0;
+}
+
+static void TutorialSpeech(wchar_t* out, int capacity) {
+    wchar_t text[640];
+    NarrativeText(TutorialInstruction(&gGame), text, 640);
+    lstrcpynW(out, text + SpeakerTagLength(text), capacity);
+}
+
+// Shared with tools/narrative_check.cpp so every language is measured as drawn.
+static HFONT TutorialSpeechLayout(HDC dc, const wchar_t* speech, int* height) {
+    *height = NarrativeParagraph(dc, MakeRect(0, 0, TUTORIAL_SPEECH_W, 0), speech, C_TEXT, gFontMedium, 1);
+    if (*height <= TUTORIAL_SPEECH_H) return gFontMedium;
+    *height = NarrativeParagraph(dc, MakeRect(0, 0, TUTORIAL_SPEECH_W, 0), speech, C_TEXT, gFontSmall, 1);
+    return gFontSmall;
+}
+
+int TutorialTypeMs() {
+    wchar_t speech[640]; TutorialSpeech(speech, 640);
+    int ms = lstrlenW(speech) * 30;
+    return ms < 1400 ? ms : 1400;
+}
+
 static void DrawTutorialOverlay(HDC dc) {
     if (!gGame.tutorial.active || gGame.phase != PHASE_COMBAT || gTurnTraceActive) return;
-    int step = gGame.tutorial.step;
-    RECT focus = step == TUTORIAL_READ ? ReadButtonRect() : step == TUTORIAL_PREVIEW ? ForecastRect()
-        : step == TUTORIAL_EXECUTE ? EndTurnRect() : MakeRect(28, 408, 698, 708);
+    const int step = gGame.tutorial.step, decor = FxDecorOn();
+    const int age = decor ? TutorialStepElapsed() : 60000;
+    RECT focus = TutorialReadStep(step) ? ReadButtonRect() : step == TUTORIAL_PREVIEW ? ForecastRect()
+        : TutorialExecuteStep(step) ? EndTurnRect() : MakeRect(28, 408, 698, 708);
     if (step != TUTORIAL_COMPLETE) {
         Outline(dc, MakeRect(focus.left - 3, focus.top - 3, focus.right + 3, focus.bottom + 3), C_YELLOW, 2);
-        if (step == TUTORIAL_PLACE) {
-            const int slots[3] = {SLOT_ATTACK, SLOT_DEFEND, SLOT_AMPLIFY};
+        // Breathing corner brackets, so the eye finds the control first.
+        const int reach = 8 + (decor ? 3 * SinMille(age * 3) / 1000 : 0);
+        for (int corner = 0; corner < 4; ++corner) {
+            const int x = corner & 1 ? focus.right + reach : focus.left - reach;
+            const int y = corner & 2 ? focus.bottom + reach : focus.top - reach;
+            const int sx = corner & 1 ? -1 : 1, sy = corner & 2 ? -1 : 1;
+            Fill(dc, MakeRect(sx > 0 ? x : x - 14, sy > 0 ? y : y - 3, sx > 0 ? x + 14 : x, sy > 0 ? y + 3 : y), C_YELLOW);
+            Fill(dc, MakeRect(sx > 0 ? x : x - 3, sy > 0 ? y : y - 14, sx > 0 ? x + 3 : x, sy > 0 ? y + 14 : y), C_YELLOW);
+        }
+        if (step == TUTORIAL_PLACE || step == TUTORIAL_CHAIN_PLACE) {
+            const int* slots = TutorialExpectedSlots(&gGame);
             for (int d = 0; d < 3; ++d) {
                 RECT die = DieRect(d), slot = SlotRect(slots[d]);
                 DrawLine(dc, (die.left + die.right) / 2, die.top - 3,
@@ -509,12 +618,61 @@ static void DrawTutorialOverlay(HDC dc) {
             }
         }
     }
-    Fill(dc, MakeRect(16, 718, BASE_WIDTH - 16, 758), RGB(10, 28, 38));
-    Fill(dc, MakeRect(16, 718, 20, 758), C_YELLOW);
-    wchar_t instruction[640]; NarrativeText(TutorialInstruction(&gGame), instruction, 640);
-    NarrativeParagraph(dc, MakeRect(28, 721, 1020, 757), instruction, C_TEXT, gFontSmall, 0);
+
+    // The window slides in when training starts; later steps keep it still.
+    const RECT home = TutorialGuideRect();
+    const int slide = step == TUTORIAL_READ && decor ? FxScale(48) * (1000 - EaseOutCubic(Track(age, 0, 280))) / 1000 : 0;
+    const RECT g = MakeRect(home.left + slide, home.top, home.right + slide, home.bottom);
+    const COLORREF fill = RGB(9, 18, 27);
+    Panel(dc, g, fill, C_BLUE);
+    Fill(dc, MakeRect(g.left + 1, g.top + 1, g.right - 1, g.top + 4), MixColor(fill, C_BLUE, 70));
+    // Speech tail toward the control: up for the forecast, left otherwise.
+    const int fx = (focus.left + focus.right) / 2, fy = (focus.top + focus.bottom) / 2;
+    for (int i = 0; i <= 12; ++i) {
+        if (focus.bottom <= g.top) {
+            const int x = fx < g.left + 40 ? g.left + 40 : fx > g.right - 40 ? g.right - 40 : fx, y = g.top - 12 + i;
+            Fill(dc, MakeRect(x - i, y, x + i + 1, y + 1), fill);
+            Fill(dc, MakeRect(x - i, y, x - i + 1, y + 1), C_BLUE); Fill(dc, MakeRect(x + i, y, x + i + 1, y + 1), C_BLUE);
+        } else {
+            const int y = fy < g.top + 40 ? g.top + 40 : fy > g.bottom - 80 ? g.bottom - 80 : fy, x = g.left - 12 + i;
+            Fill(dc, MakeRect(x, y - i, x + 1, y + i + 1), fill);
+            Fill(dc, MakeRect(x, y - i, x + 1, y - i + 1), C_BLUE); Fill(dc, MakeRect(x, y + i, x + 1, y + i + 1), C_BLUE);
+        }
+    }
+
+    wchar_t speech[640]; TutorialSpeech(speech, 640);
+    const int talk = age - TUTORIAL_TYPE_DELAY_MS, span = TutorialTypeMs();
+    const int typing = decor && talk < span;
+    // ROGUE hops once when a new explanation begins.
+    const int hop = decor && age < 320 ? -8 * SinMille(Track(age, 0, 320) * 18 / 10) / 1000 : 0;
+    Panel(dc, MakeRect(g.left + 16, g.top + 16, g.left + 136, g.top + 136), RGB(7, 15, 23), MixColor(C_LINE, C_BLUE, 45));
+    DrawRoguePortrait(dc, MakeRect(g.left + 20, g.top + 20 + hop, g.left + 132, g.top + 132 + hop),
+        RecoveredShardCount(gGame.clearedMask), 0, C_BLUE, typing);
+    TextRect(dc, MakeRect(g.left + 152, g.top + 24, g.right - 18, g.top + 54), L"로그", C_BLUE, gFontMedium, DT_SINGLELINE);
+    const int steps = TUTORIAL_COMPLETE + 1;
+    static const wchar_t* const titles[TUTORIAL_COMPLETE + 1] = {
+        L"판독", L"배치", L"예측 확인", L"실행", L"다시 판독", L"연쇄 배치", L"연쇄 실행", L"결과"};
+    wchar_t label[96];
+    wsprintfW(label, L"%s  %d / %d", LocalizeText(L"실습 안내"), step + 1, steps);
+    TextRect(dc, MakeRect(g.left + 152, g.top + 58, g.right - 18, g.top + 80), label, C_DIM, gFontSmall, DT_SINGLELINE);
+    TextRect(dc, MakeRect(g.left + 152, g.top + 82, g.right - 18, g.top + 106), titles[step < steps ? step : steps - 1], C_TEXT, gFontSmall, DT_SINGLELINE);
+    for (int i = 0; i < steps; ++i) {
+        RECT pip = MakeRect(g.left + 152 + i * 18, g.top + 116, g.left + 164 + i * 18, g.top + 128);
+        if (i <= step) Fill(dc, pip, i == step ? C_BLUE : MixColor(fill, C_BLUE, 45)); else Outline(dc, pip, C_LINE, 1);
+    }
+
+    const RECT say = MakeRect(g.left + 18, g.top + 150, g.left + 18 + TUTORIAL_SPEECH_W, g.top + 150 + TUTORIAL_SPEECH_H);
+    int height;
+    HFONT font = TutorialSpeechLayout(dc, speech, &height);
+    StoryLineView line = {};
+    lstrcpynW(line.text, speech, 640);
+    const int length = lstrlenW(line.text);
+    const int typed = !typing ? length : talk <= 0 ? 0 : length * talk / span;
+    RECT caret = DrawStoryLine(dc, say, line, typed, font, C_TEXT, C_TEXT);
+    if (typing && talk > 0) Fill(dc, MakeRect(caret.left + 3, caret.top + 5, caret.left + 12, caret.bottom - 4), C_BLUE);
+
     RECT next = TutorialNextRect(), skip = TutorialSkipRect();
-    int canNext = step == TUTORIAL_PREVIEW || step == TUTORIAL_COMPLETE;
+    const int canNext = step == TUTORIAL_PREVIEW || step == TUTORIAL_COMPLETE;
     Panel(dc, next, C_PANEL, canNext ? C_YELLOW : C_LINE);
     TextRect(dc, next, step == TUTORIAL_COMPLETE ? L"훈련 완료" : L"확인 [ENTER]", canNext ? C_YELLOW : C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     Panel(dc, skip, C_PANEL, C_LINE);

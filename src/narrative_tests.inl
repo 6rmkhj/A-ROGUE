@@ -51,13 +51,29 @@ static int TestNarrativeTutorial() {
     AcknowledgeTutorialPreview(&game);
     if (game.tutorial.step != TUTORIAL_EXECUTE) return Fail("preview acknowledgement must enable execution");
     TurnPreview preview; PreviewTurn(&game, &preview);
+    uint32_t practiceRng = game.rng;
     EndTurn(&game);
-    if (game.tutorial.step != TUTORIAL_COMPLETE || game.enemies[0].hp >= enemyHp
+    if (game.tutorial.step != TUTORIAL_CHAIN_READ || game.enemies[0].hp >= enemyHp
         || game.playerHp <= 0 || !preview.valid || game.playerHp != hp - preview.damageTaken
         || game.enemies[0].hp != enemyHp - preview.damageDealt || !game.turnTraceCount)
         return Fail("tutorial execution must use the real preview, damage, defense and trace pipeline");
+    // Second turn: CHAIN finishes what the attack alone cannot, without gameplay RNG.
     enemyHp = game.enemies[0].hp; EndTurn(&game);
-    if (game.enemies[0].hp != enemyHp) return Fail("completed tutorial must not execute a second combat turn");
+    if (game.enemies[0].hp != enemyHp || game.rng != practiceRng || AssignDieToSlot(&game, 1, SLOT_CHAIN))
+        return Fail("chain practice must start by reading the new dice");
+    TutorialReadDice(&game);
+    if (game.tutorial.step != TUTORIAL_CHAIN_PLACE || AssignDieToSlot(&game, 1, SLOT_DEFEND)
+        || !AssignDieToSlot(&game, 0, SLOT_ATTACK) || !AssignDieToSlot(&game, 1, SLOT_CHAIN)
+        || !AssignDieToSlot(&game, 2, SLOT_DEFEND) || game.tutorial.step != TUTORIAL_CHAIN_EXECUTE)
+        return Fail("chain practice must accept only attack 4, chain 5 and defense 1");
+    TurnPreview chainPreview; PreviewTurn(&game, &chainPreview);
+    if (!chainPreview.valid || chainPreview.slotOutput[SLOT_ATTACK] >= enemyHp || chainPreview.damageDealt < enemyHp)
+        return Fail("chain practice must need the chain to finish the process");
+    EndTurn(&game);
+    if (game.tutorial.step != TUTORIAL_COMPLETE || game.enemies[0].alive || game.rng != practiceRng)
+        return Fail("executing the chain practice must finish the process and complete training");
+    enemyHp = game.enemies[0].hp; EndTurn(&game);
+    if (game.enemies[0].hp != enemyHp) return Fail("completed tutorial must not execute another combat turn");
     FinishTutorial(&game);
     if (game.tutorial.active || !game.narrative.tutorialSeen || game.narrative.introSeen
         || game.phase != PHASE_STORY || game.story.fragment != 2 || game.selectedDrive != -1
