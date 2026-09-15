@@ -27,6 +27,10 @@ static int CheckNarrativeInput() {
     SyncNarrativeControls();
     if (!gNarrativeNameEdit) return NFail("native name input creation");
     SetWindowTextW(gNarrativeNameEdit, L"민서");
+    RECT editBox; GetClientRect(gNarrativeNameEdit, &editBox);
+    NarrativeNameInput view; ReadNarrativeNameInput(&view);
+    if (editBox.right > 1 || editBox.bottom > 1 || wcscmp(view.text, L"민서"))
+        return NFail("name box must draw the hidden input's text instead of showing the native field");
     ConfirmNarrativeName();
     if (wcscmp(gGame.narrative.playerName, L"민서") || gGame.phase != PHASE_STORY)
         return NFail("native Korean name commit");
@@ -78,8 +82,6 @@ static int CheckNarrativeInput() {
     if (gTutorialPracticeActive || memcmp(&original, &gGame, sizeof(gGame)) || !gRolled)
         return NFail("practice must restore current combat, deck and read state");
     DestroyWindow(gWindow); gWindow = 0; gNarrativeNameEdit = 0;
-    if (gNarrativeNameFont) { DeleteObject(gNarrativeNameFont); gNarrativeNameFont = 0; }
-    gNarrativeNameFontHeight = 0;
     ResetPresentation();
     return 0;
 }

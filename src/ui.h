@@ -542,6 +542,9 @@ RECT ContinueRect(int width, int height);
 RECT StoryNextRect(int width, int height);
 // Narrative widgets use the same canvas coordinates for drawing and input.
 RECT NarrativeNameRect();
+// 이름 칸에 그릴 내용. 글자와 선택은 숨은 입력 창에서, 조합 중인 글자는 IME에서 온다.
+struct NarrativeNameInput { wchar_t text[NARRATIVE_NAME_MAX + 1]; int selStart, selEnd; wchar_t composition[16]; };
+void ReadNarrativeNameInput(NarrativeNameInput* out);
 RECT NarrativeNameConfirmRect();
 RECT TutorialNextRect();
 RECT TutorialSkipRect();

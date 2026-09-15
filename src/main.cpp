@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <mmsystem.h>   // timeBeginPeriod: 연출 타이머를 15.6ms 틱에서 풀어 준다
+#include <imm.h>        // 이름 입력의 한글 조합 문자열을 직접 읽는다
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
@@ -21,9 +22,8 @@ static int gCampaignSavePending;
 static int gCodexSavePending;
 static HWND gNarrativeNameEdit;
 static WNDPROC gNarrativeNameEditProc;
-static HFONT gNarrativeNameFont;
 static HBRUSH gNarrativeNameBrush;
-static int gNarrativeNameFontHeight;
+static wchar_t gNarrativeNameComposition[16];   // IME가 조합 중인 글자
 static int gNarrativeNameComposing;
 static int gNarrativeNameSession;
 static int gTutorialPracticeActive;
@@ -1923,7 +1923,10 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
-    else if (gGame.phase == PHASE_NAME_ENTRY) { if (Inside(NarrativeNameConfirmRect(), x, y)) ConfirmNarrativeName(); }
+    else if (gGame.phase == PHASE_NAME_ENTRY) {
+        if (Inside(NarrativeNameConfirmRect(), x, y)) ConfirmNarrativeName();
+        else if (gNarrativeNameEdit) SetFocus(gNarrativeNameEdit);
+    }
     // 스토리는 화면 어디를 눌러도 다음 대사로 간다 (AdvanceStoryLineUi가 치던 줄부터 끝낸다).
     else if (gGame.phase == PHASE_STORY) AdvanceStoryLineUi();
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
@@ -2272,7 +2275,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         ConfirmNarrativeName(); return 0;
     case WM_CTLCOLOREDIT:
         if ((HWND)lParam == gNarrativeNameEdit) {
-            SetTextColor((HDC)wParam, C_TEXT);
+            SetTextColor((HDC)wParam, C_PANEL);   // 1px 입력 창의 글자는 보이지 않는다
             SetBkColor((HDC)wParam, C_PANEL);
             if (!gNarrativeNameBrush) gNarrativeNameBrush = CreateSolidBrush(C_PANEL);
             return (LRESULT)gNarrativeNameBrush;
@@ -2403,7 +2406,6 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window, 4);
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
         KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID); KillTimer(window, BOSS_INTRO_TIMER_ID);
-        if (gNarrativeNameFont) { DeleteObject(gNarrativeNameFont); gNarrativeNameFont = 0; }
         if (gNarrativeNameBrush) { DeleteObject(gNarrativeNameBrush); gNarrativeNameBrush = 0; }
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
