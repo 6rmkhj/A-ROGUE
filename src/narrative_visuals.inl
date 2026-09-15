@@ -4,7 +4,7 @@
 RECT NarrativeNameRect() { return MakeRect(436, 391, 916, 443); }
 RECT NarrativeNameConfirmRect() { return MakeRect(546, 520, 806, 566); }
 // ROGUE's training guide sits over the lower sidebar; its buttons live inside it.
-static RECT TutorialGuideRect() { return MakeRect(SIDEBAR_LEFT - 8, 386, SIDEBAR_RIGHT + 8, 740); }
+static RECT TutorialGuideRect() { return MakeRect(SIDEBAR_LEFT - 8, ForecastRect().bottom + 12, SIDEBAR_RIGHT + 8, 740); }
 RECT TutorialNextRect() { return MakeRect(SIDEBAR_LEFT + 10, 690, SIDEBAR_LEFT + 188, 726); }
 RECT TutorialSkipRect() { return MakeRect(SIDEBAR_RIGHT - 164, 690, SIDEBAR_RIGHT - 10, 726); }
 RECT TutorialReplayRect() { return MakeRect(830, 164, 1238, 206); }
@@ -521,7 +521,7 @@ static void DrawNarrativeName(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_NAME_ENTRY, C_BLUE, width, height);
     TextRect(dc, MakeRect(80, 118, width - 80, 156), L"ROGUE / 첫 번째 질문", C_BLUE, gFontSmall, DT_CENTER | DT_SINGLELINE);
     DrawRoguePortrait(dc, MakeRect(width / 2 - 78, 160, width / 2 + 78, 320), 0, 0, C_BLUE);
-    TextRect(dc, MakeRect(80, 325, width - 80, 375), L"로그: 어떻게 불러드리면 될까요?", C_TEXT, gFontLarge, DT_CENTER | DT_SINGLELINE);
+    TextRect(dc, MakeRect(80, 325, width - 80, 375), L"로그: 뭐라고 불러 드릴까요?", C_TEXT, gFontLarge, DT_CENTER | DT_SINGLELINE);
     RECT input = NarrativeNameRect();
     Panel(dc, MakeRect(input.left - 3, input.top - 3, input.right + 3, input.bottom + 3), C_PANEL, C_BLUE);
     // The name is drawn here in the game font: text and selection from the
@@ -563,7 +563,7 @@ static void DrawNarrativeName(HDC dc, int width, int height) {
 // SYSTEM and HISTORY panels carry nothing the practice needs). A tail points
 // at the control being explained; the line types while ROGUE's mouth moves.
 #define TUTORIAL_SPEECH_W 358
-#define TUTORIAL_SPEECH_H 132
+#define TUTORIAL_SPEECH_H 300
 
 // Length of a leading "Name: " speaker tag, including the space, or 0.
 static int SpeakerTagLength(const wchar_t* text) {
@@ -679,12 +679,110 @@ static void DrawTutorialOverlay(HDC dc) {
     TextRect(dc, skip, L"훈련 건너뛰기", C_DIM, gFontSmall, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-static void DrawRogueStatus(HDC dc) {
+// ---- ROGUE call window ------------------------------------------------------
+// The sidebar space under FORECAST belongs to ROGUE during combat. ROGUE stands
+// in a small screen that shows the story state (cloak lights, corruption) and
+// says one short line only at notable moments; after the handover, and inside
+// A, the window no longer answers.
+RECT RogueCallRect() { return MakeRect(SIDEBAR_LEFT, ForecastRect().bottom + 10, SIDEBAR_RIGHT, SIDEBAR_BOTTOM); }
+#define ROGUE_BARK_TEXT_W 302
+#define ROGUE_BARK_TEXT_H 112
+
+// [kind][polite before three recovered volumes, casual after] - the same shift
+// the private milestone conversations make.
+static const wchar_t* const ROGUE_BARKS[ROGUE_BARK_COUNT][2] = {
+    {L"", L""},
+    {L"로그: 많이 맞았어요. 방어 좀 챙겨요.", L"로그: 괜찮아? 방어 좀 올려."},
+    {L"로그: 다 막았어요. 좋아요.", L"로그: 좋아, 하나도 안 들어왔어."},
+    {L"로그: 방금 거 제대로 들어갔어요.", L"로그: 방금 거 세다."},
+    {L"로그: 위험해요. 이번 턴은 버티는 쪽으로 가요.", L"로그: 위험해. 이번엔 버티자."},
+    {L"로그: 이게 이 층을 잠근 프로세스예요.", L"로그: 저거야. 이 층을 잠근 거."},
+    {L"로그: 하나 지웠어요. 남은 것만 봐요.", L"로그: 하나 지웠어. 남은 거 보자."},
+};
+
+static void RogueBarkLine(int kind, int casual, wchar_t* out, int capacity) {
+    wchar_t text[256];
+    NarrativeText(kind > 0 && kind < ROGUE_BARK_COUNT ? ROGUE_BARKS[kind][casual ? 1 : 0] : L"", text, 256);
+    lstrcpynW(out, text + SpeakerTagLength(text), capacity);
+}
+
+static void RogueBarkText(wchar_t* out, int capacity) {
+    RogueBarkLine(RogueBarkKind(), RecoveredShardCount(gGame.clearedMask) >= 3, out, capacity);
+}
+
+int RogueBarkTypeMs() {
+    wchar_t speech[256]; RogueBarkText(speech, 256);
+    int ms = lstrlenW(speech) * 32;
+    return ms < 1100 ? ms : 1100;
+}
+
+// Shared with tools/narrative_check.cpp so every line is measured as drawn.
+static HFONT RogueBarkLayout(HDC dc, const wchar_t* speech, int* height) {
+    *height = NarrativeParagraph(dc, MakeRect(0, 0, ROGUE_BARK_TEXT_W, 0), speech, C_TEXT, gFontMedium, 1);
+    if (*height <= ROGUE_BARK_TEXT_H) return gFontMedium;
+    *height = NarrativeParagraph(dc, MakeRect(0, 0, ROGUE_BARK_TEXT_W, 0), speech, C_TEXT, gFontSmall, 1);
+    return gFontSmall;
+}
+
+static void DrawRogueCall(HDC dc) {
     if (!gGame.narrativeEnabled || gGame.tutorial.active || gGame.phase != PHASE_COMBAT || gTurnTraceActive) return;
-    int count = RecoveredShardCount(gGame.clearedMask);
-    COLORREF tone = count >= 6 ? C_DIM : count >= 4 ? C_YELLOW : C_BLUE;
-    Fill(dc, MakeRect(28, 733, 33, 738), tone);
-    const wchar_t* status = count >= 6 ? L"ROGUE / 응답 없음  ·  남겨진 기록만 연결됨"
-        : count >= 3 ? L"ROGUE / 연결됨  ·  잠식 신호 감지" : L"ROGUE / 연결됨";
-    TextRect(dc, MakeRect(42, 723, 702, 751), status, tone, gFontSmall, DT_VCENTER | DT_SINGLELINE);
+    const RECT r = RogueCallRect();
+    const int count = RecoveredShardCount(gGame.clearedMask), decor = FxDecorOn();
+    const int silent = count >= 6 || gGame.selectedDrive == DRIVE_FINAL;
+    const DWORD now = decor ? GetTickCount() : 0;
+    const COLORREF ink = RGB(5, 10, 15);
+    DrawSidebarFrame(dc, r, L"ROGUE / CALL", silent ? C_DIM : C_BLUE);
+    TextRect(dc, MakeRect(r.left + 150, r.top + 7, r.right - 12, r.top + 25),
+        silent ? L"응답 없음" : count >= 3 ? L"잠식 신호 감지" : L"연결됨",
+        silent ? C_DIM : count >= 3 ? C_YELLOW : C_GREEN, gFontSmall, DT_RIGHT | DT_SINGLELINE);
+    const RECT screen = MakeRect(r.left + 12, r.top + 38, r.right - 12, r.bottom - 12);
+    Fill(dc, screen, ink);
+    if (decor) DrawScanlines(dc, screen);
+    const int cx = (screen.left + screen.right) / 2;
+    const RECT stage = MakeRect(cx - 120, screen.top + 20, cx + 120, screen.top + 260);
+    if (silent) {
+        // Only noise remains; inside A a red outline of ROGUE surfaces now and then.
+        if (gGame.selectedDrive == DRIVE_FINAL && decor && now % 2600 < 180) DrawRoguePortrait(dc, stage, 6, 6, C_RED, 0);
+        DrawScreenStatic(dc, screen, (int)(now / 90), 240);
+        TextRect(dc, MakeRect(screen.left, stage.bottom + 40, screen.right, stage.bottom + 72), L"NO RESPONSE", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+        return;
+    }
+
+    wchar_t speech[256]; RogueBarkText(speech, 256);
+    const int speaking = speech[0] != 0, age = RogueBarkElapsed(), span = RogueBarkTypeMs();
+    const int typing = speaking && decor && age < span;
+    const int bob = decor ? 2 * SinMille((int)(now / 4 % 3600)) / 1000 : 0;
+    DrawRoguePortrait(dc, MakeRect(stage.left, stage.top + bob, stage.right, stage.bottom + bob), count, count > 0 ? count - 1 : 0, C_BLUE, typing);
+    Fill(dc, MakeRect(cx - 104, stage.bottom + 8, cx + 104, stage.bottom + 10), MixColor(ink, C_BLUE, 35));
+    // Voice link bars: flat while ROGUE is quiet.
+    for (int i = 0; i < 25; ++i) {
+        int x = cx - 137 + i * 11;
+        int level = typing ? 1 + (int)(Hash3(i, age / 70, 3) % 7u) : 1;
+        Fill(dc, MakeRect(x, stage.bottom + 30 - level, x + 6, stage.bottom + 31 + level), MixColor(ink, C_BLUE, typing ? 70 : 25));
+    }
+    // The corruption the story describes stays inside ROGUE's window.
+    if (decor && count >= 3 && now % 4200 < 140) DrawBandGlitch(dc, screen, (int)now, FxScale(6), 77, 8);
+    if (!speaking) return;
+
+    int height;
+    HFONT font = RogueBarkLayout(dc, speech, &height);
+    // The bubble hugs its text; long lines still stop at the screen edge.
+    const int bubbleBottom = stage.bottom + 52 + height + 26;
+    const RECT bubble = MakeRect(screen.left + 12, stage.bottom + 52, screen.right - 12,
+        bubbleBottom < screen.bottom - 12 ? bubbleBottom : screen.bottom - 12);
+    const COLORREF fill = RGB(9, 18, 27);
+    Panel(dc, bubble, fill, C_BLUE);
+    for (int i = 0; i <= 10; ++i) {   // tail up toward ROGUE
+        const int y = bubble.top - 10 + i;
+        Fill(dc, MakeRect(cx - i, y, cx + i + 1, y + 1), fill);
+        Fill(dc, MakeRect(cx - i, y, cx - i + 1, y + 1), C_BLUE); Fill(dc, MakeRect(cx + i, y, cx + i + 1, y + 1), C_BLUE);
+    }
+    StoryLineView line = {};
+    lstrcpynW(line.text, speech, 640);
+    const int length = lstrlenW(line.text);
+    const int typed = !decor || age >= span || span <= 0 ? length : length * age / span;
+    const RECT say = MakeRect(bubble.left + 14, bubble.top + 12, bubble.left + 14 + ROGUE_BARK_TEXT_W, bubble.top + 12 + ROGUE_BARK_TEXT_H);
+    RECT caret = DrawStoryLine(dc, say, line, typed, font, C_TEXT, C_TEXT);
+    if (typing) Fill(dc, MakeRect(caret.left + 3, caret.top + 5, caret.left + 12, caret.bottom - 4), C_BLUE);
+    if (decor && age > ROGUE_BARK_MS - 260) DrawBandGlitch(dc, bubble, age, FxScale(8), 41, 5);
 }

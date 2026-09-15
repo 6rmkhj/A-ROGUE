@@ -98,6 +98,20 @@ static int CheckNarrativeInput() {
     FinishTutorialUi(1);
     if (gTutorialPracticeActive || memcmp(&original, &gGame, sizeof(gGame)) || !gRolled)
         return NFail("practice must restore current combat, deck and read state");
+    // ROGUE's call window: one ordinary line per three turns, the warning once per combat,
+    // a fresh combat starts over, and ROGUE is silent after the six volumes.
+    gGame.turn = 5; QueueRogueBark(ROGUE_BARK_HURT);
+    gGame.turn = 6; QueueRogueBark(ROGUE_BARK_BLOCKED);
+    if (gRogueBark != ROGUE_BARK_HURT) return NFail("ordinary rogue lines wait three turns");
+    QueueRogueBark(ROGUE_BARK_CRITICAL);
+    if (gRogueBark != ROGUE_BARK_CRITICAL) return NFail("rogue warns at critical health");
+    gRogueBark = ROGUE_BARK_NONE; gGame.turn = 9; QueueRogueBark(ROGUE_BARK_CRITICAL);
+    if (gRogueBark != ROGUE_BARK_NONE) return NFail("rogue warns once per combat");
+    ++gGame.encounter; QueueRogueBark(ROGUE_BARK_BLOCKED);
+    if (gRogueBark != ROGUE_BARK_BLOCKED) return NFail("a new combat resets rogue pacing");
+    gRogueBark = ROGUE_BARK_NONE; gGame.clearedMask = 0x3F; ++gGame.encounter; QueueRogueBark(ROGUE_BARK_BOSS);
+    if (gRogueBark != ROGUE_BARK_NONE) return NFail("rogue stays silent after the handover");
+    gGame = original; gRogueBark = ROGUE_BARK_NONE; gRogueCombat = -1;
     DestroyWindow(gWindow); gWindow = 0; gNarrativeNameEdit = 0;
     ResetPresentation();
     return 0;
@@ -203,6 +217,24 @@ int main(int argc, char** argv) {
             if (speechHeight > TUTORIAL_SPEECH_H) { printf("Overflow at %s: %d pixels\n", name, speechHeight); return NFail("tutorial speech overflow"); }
             if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
         }
+        // ROGUE call window in combat: speaking (both tones) and silent after the handover.
+        for (int bark = ROGUE_BARK_HURT; bark < ROGUE_BARK_COUNT; ++bark) for (int casual = 0; casual < 2; ++casual) {
+            wchar_t speech[256]; int barkHeight;
+            RogueBarkLine(bark, casual, speech, 256); RogueBarkLayout(dc, speech, &barkHeight);
+            if (barkHeight > ROGUE_BARK_TEXT_H) return NFail("rogue call line overflow");
+        }
+        NewRun(&gGame, 4242, 0); AttachNarrative(&gGame, &progress);
+        SelectDrive(&gGame, 0); SelectDirectoryChoice(&gGame, 0);
+        for (int guard = 0; gGame.phase == PHASE_STORY && guard < 8; ++guard) AdvanceStory(&gGame);
+        if (gGame.phase != PHASE_COMBAT) return NFail("rogue call fixture must reach combat");
+        gRolled = 1; gSceneKey = 1; gSceneStart = 10000; gCheckTick = 13000;
+        for (int state = 0; state < 3; ++state) {
+            gGame.clearedMask = state == 0 ? 0 : state == 1 ? 0x0F : 0x3F;
+            gRogueBark = state < 2 ? ROGUE_BARK_HURT : ROGUE_BARK_NONE; gRogueBarkAt = gCheckTick - 500;
+            sprintf_s(name, "rogue_call_%s_%d", language ? "en" : "ko", state);
+            if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
+        }
+        gRogueBark = ROGUE_BARK_NONE; gRogueBarkAt = 0;
         SelectObject(dc, old); DeleteObject(bmp); DeleteDC(dc);
     }
     FxSnapshotDestroy(); DestroyRenderFonts();

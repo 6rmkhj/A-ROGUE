@@ -1417,18 +1417,18 @@ void BeginTutorial(GameState* game) {
     game->dice[2].rolledFace = 1; // 2 amplify -> +1 to attack and defense
     ClearTurnTrace(game);
     ClearCombatFx(game);
-    PushLog(game, L"로그: 안전한 판독 연습이에요. R로 눈을 읽으세요.");
+    PushLog(game, L"로그: 연습이니까 편하게 해요. R로 눈부터 읽어요.");
 }
 
 void TutorialReadDice(GameState* game) {
     if (!game || !game->tutorial.active || !TutorialReadStep(game->tutorial.step)) return;
     if (game->tutorial.step == TUTORIAL_CHAIN_READ) {
         game->tutorial.step = TUTORIAL_CHAIN_PLACE;
-        PushLog(game, L"로그: 4는 공격, 5는 연쇄, 1은 방어에 놓아보세요.");
+        PushLog(game, L"로그: 4는 공격, 5는 연쇄, 1은 방어에 놔 봐요.");
         return;
     }
     game->tutorial.step = TUTORIAL_PLACE;
-    PushLog(game, L"로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.");
+    PushLog(game, L"로그: 6은 공격, 4는 방어, 2는 증폭에 놔 봐요.");
 }
 
 const int* TutorialExpectedSlots(const GameState* game) {
@@ -1453,27 +1453,27 @@ static void BeginTutorialChainTurn(GameState* game) {
     for (int d = 0; d < 3; ++d) { game->dice[d].rolledFace = faces[d]; game->dice[d].assignedSlot = -1; }
     game->selectedDie = -1;
     game->tutorial.step = TUTORIAL_CHAIN_READ;
-    PushLog(game, L"로그: 두 번째 턴이에요. 다시 R로 눈을 읽으세요.");
+    PushLog(game, L"로그: 두 번째 턴이에요. R로 다시 읽어요.");
 }
 
 void AcknowledgeTutorialPreview(GameState* game) {
     if (!game || !game->tutorial.active || game->tutorial.step != TUTORIAL_PREVIEW
         || !TutorialPlacementComplete(game)) return;
     game->tutorial.step = TUTORIAL_EXECUTE;
-    PushLog(game, L"로그: 증폭 2는 공격과 방어에 1씩 더해요. 스페이스로 실행하세요.");
+    PushLog(game, L"로그: 증폭 2가 공격이랑 방어에 1씩 붙어요. 이제 스페이스 눌러 봐요.");
 }
 
 const wchar_t* TutorialInstruction(const GameState* game) {
     if (!game || !game->tutorial.active) return L"";
     switch (game->tutorial.step) {
-    case TUTORIAL_READ: return L"로그: 먼저 주사위를 읽어야 해요. R을 누르면 이번 턴에 나온 눈이 보여요. 연습이니까 6, 4, 2가 나오게 해뒀어요.";
-    case TUTORIAL_PLACE: return L"로그: 이제 눈을 칸에 놓을 차례예요. 6은 공격 칸에, 4는 방어 칸에, 2는 증폭 칸에 놓아 주세요. 주사위를 누른 다음 칸을 누르면 돼요.";
-    case TUTORIAL_PREVIEW: return L"로그: 실행하기 전에 오른쪽 위 예측을 보세요. 증폭 덕분에 공격은 7, 방어는 5가 됐어요. 적이 4만큼 때려도 전부 막아요. 확인했으면 Enter를 눌러 주세요.";
-    case TUTORIAL_EXECUTE: return L"로그: 방금 본 예측이 맞는지 직접 확인해 봐요. 스페이스를 누르면 이 배치대로 실행돼요.";
-    case TUTORIAL_CHAIN_READ: return L"로그: 적이 5만큼 남았어요. 이번 턴에는 연쇄를 써 볼게요. 다시 R을 눌러 새로 나온 눈을 읽어 주세요.";
-    case TUTORIAL_CHAIN_PLACE: return L"로그: 연쇄는 같은 턴에 먼저 한 공격을 한 번 더 이어서 해요. 4는 공격 칸에, 5는 연쇄 칸에, 1은 방어 칸에 놓아 주세요. 연쇄에 놓은 눈이 클수록 더 많이 이어져요.";
-    case TUTORIAL_CHAIN_EXECUTE: return L"로그: 공격 4만으로는 적이 1 남아요. 연쇄가 2를 더 이어 주니까 이번 턴에 끝낼 수 있어요. 스페이스로 실행해 보세요.";
-    case TUTORIAL_COMPLETE: return L"로그: 잘했어요. 공격이 없는 턴에는 연쇄가 방어를 이어 줘요. 이제 복구할 연결을 고르러 가요.";
+    case TUTORIAL_READ: return L"로그: 먼저 주사위부터 읽어요. R 누르면 이번 턴 눈이 나와요. 연습이라 6, 4, 2로 맞춰 놨어요.";
+    case TUTORIAL_PLACE: return L"로그: 이제 칸에 놓을 차례예요. 6은 공격, 4는 방어, 2는 증폭에 놔 주세요. 주사위 누르고 칸 누르면 돼요.";
+    case TUTORIAL_PREVIEW: return L"로그: 실행하기 전에 오른쪽 위 예측 한번 봐요. 증폭이 붙어서 공격 7, 방어 5예요. 적이 4로 때려도 다 막혀요. 다 봤으면 Enter 눌러 주세요.";
+    case TUTORIAL_EXECUTE: return L"로그: 예측대로 되는지 직접 해 봐요. 스페이스 누르면 바로 실행돼요.";
+    case TUTORIAL_CHAIN_READ: return L"로그: 적이 5 남았네요. 이번엔 연쇄를 써 볼게요. R로 새 눈부터 읽어요.";
+    case TUTORIAL_CHAIN_PLACE: return L"로그: 연쇄는 방금 한 공격을 한 번 더 이어서 쳐요. 4는 공격, 5는 연쇄, 1은 방어에 놔 주세요. 연쇄 눈이 클수록 더 세게 이어져요.";
+    case TUTORIAL_CHAIN_EXECUTE: return L"로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.";
+    case TUTORIAL_COMPLETE: return L"로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.";
     default: return L"";
     }
 }
@@ -2216,8 +2216,8 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
         if (TutorialReadStep(game->tutorial.step) || game->tutorial.step == TUTORIAL_COMPLETE) return 0;
         if (slotIndex != TutorialExpectedSlots(game)[dieIndex]) {
             PushLog(game, game->tutorial.step >= TUTORIAL_CHAIN_READ
-                ? L"로그: 이번에는 4를 공격, 5를 연쇄, 1을 방어 칸에 놓아 주세요."
-                : L"로그: 이번 연습에서는 6을 공격, 4를 방어, 2를 증폭 칸에 놓아 주세요.");
+                ? L"로그: 이번엔 4는 공격, 5는 연쇄, 1은 방어예요."
+                : L"로그: 이번엔 6은 공격, 4는 방어, 2는 증폭이에요.");
             return 0;
         }
     }

@@ -1197,6 +1197,25 @@ int TutorialStepElapsed() {
     if (!gGame.tutorial.active || gTutorialStepShown != gGame.tutorial.step) return 60000;
     return (int)(GetTickCount() - gTutorialStepAt);
 }
+// 로그 호출창의 한마디. 한 전투 안에서 보통 한마디는 세 턴에 한 번까지이고, 위험
+// 경고는 전투마다 한 번, 보스 등장은 늘 말한다. 여섯 볼륨 이후와 A에서는 말하지 않는다.
+// 결과가 보이는 순간(계산 재생·보스 등장이 끝난 첫 프레임)부터 시계를 센다.
+static int gRogueBark, gRogueBarkTurn = -99, gRogueCriticalSaid, gRogueCombat = -1, gRogueBlip;
+static DWORD gRogueBarkAt;
+static int RogueCallTalks() {
+    return gGame.narrativeEnabled && !gGame.tutorial.active && gGame.selectedDrive != DRIVE_FINAL
+        && RecoveredShardCount(gGame.clearedMask) < 6;
+}
+static void QueueRogueBark(int kind) {
+    if (!RogueCallTalks()) return;
+    int combat = (gGame.selectedDrive + 1) * 64 + gGame.floor * 4 + gGame.encounter + gGame.combatsWon * 256;
+    if (combat != gRogueCombat) { gRogueCombat = combat; gRogueBarkTurn = -99; gRogueCriticalSaid = 0; }
+    if (kind == ROGUE_BARK_CRITICAL) { if (gRogueCriticalSaid) return; gRogueCriticalSaid = 1; }
+    else if (kind != ROGUE_BARK_BOSS && gGame.turn - gRogueBarkTurn < 3) return;
+    gRogueBark = kind; gRogueBarkTurn = gGame.turn; gRogueBarkAt = 0; gRogueBlip = 0;
+}
+int RogueBarkKind() { return gRogueBarkAt ? gRogueBark : ROGUE_BARK_NONE; }
+int RogueBarkElapsed() { return gRogueBarkAt ? (int)(GetTickCount() - gRogueBarkAt) : 0; }
 // 시스템이 끼어드는 줄은 화면을 한 번 친다. 로그와 나의 대화는 흔들지 않는다.
 static int StoryShakeAmplitude() {
     if (gGame.phase != PHASE_STORY || gSceneKey < 0) return 0;
@@ -1230,6 +1249,7 @@ void SyncIdleAnimation() {
                 && !(gBossIntroFloor == gGame.floor && gBossIntroDrive == gGame.selectedDrive)) {
                 gBossIntroFloor = gGame.floor; gBossIntroDrive = gGame.selectedDrive;
                 BeginBossIntro();
+                QueueRogueBark(ROGUE_BARK_BOSS);
             }
             else if (gGame.phase == PHASE_REWARD) PlaySfx(SFX_LOOT_REVEAL);
         }
@@ -1266,6 +1286,15 @@ void SyncIdleAnimation() {
             int pitch = who == STORY_WHO_ROGUE ? 5 : who == STORY_WHO_PLAYER ? 1 : who == STORY_WHO_NARRATION ? 0 : 3;
             if (who != STORY_WHO_NARRATION || beat % 2) PlaySfxPitched(SFX_UI_FOCUS, pitch + (int)(Hash3(line, beat, 7) % 2u));
         }
+    }
+    // 한마디는 호출창이 드러난 첫 프레임부터 ROGUE_BARK_MS 동안만 뜨고, 치는 동안 입과 소리가 따라간다.
+    if (gRogueBark) {
+        int covered = gTurnTraceActive || gCombatClearActive || gBossIntroActive || gDeathActive;
+        if (gGame.phase != PHASE_COMBAT && !covered) gRogueBark = ROGUE_BARK_NONE;
+        else if (!gRogueBarkAt && !covered && gGame.phase == PHASE_COMBAT) gRogueBarkAt = GetTickCount();
+        else if (gRogueBarkAt && RogueBarkElapsed() >= ROGUE_BARK_MS) gRogueBark = ROGUE_BARK_NONE;
+        int beat = gRogueBarkAt && FxDecorOn() && RogueBarkElapsed() < RogueBarkTypeMs() ? RogueBarkElapsed() / 75 + 1 : 0;
+        if (gWindow && beat > gRogueBlip) { gRogueBlip = beat; PlaySfxPitched(SFX_UI_FOCUS, 5 + (int)(Hash3(gRogueBark, beat, 11) % 2u)); }
     }
     int tutorialStep = gGame.tutorial.active && gGame.phase == PHASE_COMBAT && !gTurnTraceActive && !gCombatClearActive
         ? gGame.tutorial.step : -1;
@@ -1498,8 +1527,21 @@ static void ExecuteCombatTurn() {
     for (int i = 0; i < 3; ++i) gTraceDice[i] = gGame.dice[i];
     for (int i = 0; i < 3; ++i) gTraceEnemies[i] = gGame.enemies[i];
     gTraceTurn = gGame.turn;
+    int livingBefore = LivingEnemyCount(&gGame), threat = 0;
+    for (int i = 0; i < gGame.enemyCount; ++i) {
+        const EnemyState* e = &gGame.enemies[i];
+        if (e->alive && (e->intent == INTENT_ATTACK || e->intent == INTENT_HEAVY || e->intent == INTENT_CORRUPT)) threat += e->intentValue;
+    }
     EndTurn(&gGame);
     PersistCampaignProgress();
+    // 로그는 결과를 보고 한마디만 한다. 위험이 먼저고, 칭찬은 제일 뒤다.
+    if (gGame.phase == PHASE_COMBAT && gGame.turn != turn && !gGame.tutorial.active) {
+        if (gGame.playerHp <= CRITICAL_HP) QueueRogueBark(ROGUE_BARK_CRITICAL);
+        else if (gGame.lastTurnDamageTaken >= 8) QueueRogueBark(ROGUE_BARK_HURT);
+        else if (LivingEnemyCount(&gGame) < livingBefore) QueueRogueBark(ROGUE_BARK_KILL);
+        else if (gGame.lastTurnDamageDealt >= 12) QueueRogueBark(ROGUE_BARK_BIG_HIT);
+        else if (threat >= 6 && gGame.lastTurnDamageTaken == 0) QueueRogueBark(ROGUE_BARK_BLOCKED);
+    }
     int resolved = before == PHASE_COMBAT && (gGame.phase != before || gGame.turn != turn
         || (gGame.tutorial.active && gGame.tutorial.step == TUTORIAL_COMPLETE));
     int cleared = !gGame.tutorial.active && LivingEnemyCount(&gGame) == 0;
