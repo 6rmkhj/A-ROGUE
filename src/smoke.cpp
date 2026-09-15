@@ -1239,9 +1239,13 @@ static int CheckRestoreGimmicks() {
     if (m.enemies[0].hp > checkpoint) return Fail("backup must never restore above the checkpoint");
     int afterBackup = m.enemies[0].hp;
     if (afterBackup <= backupMax - 40) return Fail("backup must actually heal the boss");
+    // 두 번째 폭발은 복원을 다시 부르지 않는다. D:\ 법칙이 같은 자리 반복 배치에
+    // 출력을 더해 주므로 피해량을 못박지 않고, 복원 횟수와 체력 방향만 본다.
     SetAllFaces(&m, FACE_NUMBER, 20);
+    int beforeSecond = m.enemies[0].hp;
     if (!AttackTurn(&m)) return Fail("master backup second burst must resolve");
-    if (m.enemies[0].hp != afterBackup - 20) return Fail("master backup must fire only once");
+    if (m.boss.restoresUsed != 1 || m.enemies[0].hp >= beforeSecond)
+        return Fail("master backup must fire only once");
     return 0;
 }
 

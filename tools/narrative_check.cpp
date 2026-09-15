@@ -219,9 +219,10 @@ int main(int argc, char** argv) {
         }
         // ROGUE call window in combat: speaking (both tones) and silent after the handover.
         for (int bark = ROGUE_BARK_HURT; bark < ROGUE_BARK_COUNT; ++bark) for (int casual = 0; casual < 2; ++casual) {
-            wchar_t speech[256]; int barkHeight;
-            RogueBarkLine(bark, casual, speech, 256); RogueBarkLayout(dc, speech, &barkHeight);
-            if (barkHeight > ROGUE_BARK_TEXT_H) return NFail("rogue call line overflow");
+            wchar_t speech[256]; SIZE barkSize;
+            RogueBarkLine(bark, casual, speech, 256);
+            RogueSpeechLayout(dc, speech, ROGUE_BARK_TEXT_W, ROGUE_BARK_TEXT_H, &barkSize);
+            if (barkSize.cy > ROGUE_BARK_TEXT_H) return NFail("rogue call line overflow");
         }
         NewRun(&gGame, 4242, 0); AttachNarrative(&gGame, &progress);
         SelectDrive(&gGame, 0); SelectDirectoryChoice(&gGame, 0);
@@ -234,6 +235,28 @@ int main(int argc, char** argv) {
             sprintf_s(name, "rogue_call_%s_%d", language ? "en" : "ko", state);
             if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
         }
+        // ROGUE's hint panel fills the empty column of the reward and cleanup screens.
+        for (int advice = ADVICE_REPAIR; advice < ADVICE_COUNT; ++advice) for (int casual = 0; casual < 2; ++casual) {
+            wchar_t speech[256]; SIZE adviceSize;
+            RogueAdviceLine(advice, casual, 188, 160, speech, 256);
+            RogueSpeechLayout(dc, speech, ROGUE_ADVICE_TEXT_W, ROGUE_ADVICE_TEXT_H, &adviceSize);
+            if (adviceSize.cy > ROGUE_ADVICE_TEXT_H) return NFail("rogue hint line overflow");
+        }
+        for (int state = 0; state < 5; ++state) {
+            if (!RuleReward(0, 0, state == 4)) return NFail("rogue hint fixture must reach the reward screen");
+            gGame.narrativeEnabled = 1; gGame.narrative = progress;
+            gGame.clearedMask = state == 2 ? 0x3F : state == 0 ? 0 : 0x0F;
+            gFxLevel = fx; gSceneKey = 1; gSceneStart = 10000; gCheckTick = 13000;
+            if (state == 1 || state == 3) SelectReward(&gGame, 0);
+            if (state == 3) gFaceSwapArmed = 0;
+            if (state == 4) {
+                SelectReward(&gGame, 0); InstallSelectedReward(&gGame, 0, 0);
+                if (gGame.phase != PHASE_PRUNE) return NFail("rogue hint fixture must reach the cleanup screen");
+            }
+            sprintf_s(name, "rogue_hint_%s_%d", language ? "en" : "ko", state);
+            if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
+        }
+        gFaceSwapArmed = -1;
         gRogueBark = ROGUE_BARK_NONE; gRogueBarkAt = 0;
         SelectObject(dc, old); DeleteObject(bmp); DeleteDC(dc);
     }

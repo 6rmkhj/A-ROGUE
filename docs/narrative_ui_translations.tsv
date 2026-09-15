@@ -99,3 +99,23 @@ ROGUE / 연결됨	ROGUE / CONNECTED
 연결됨	Connected
 잠식 신호 감지	Corruption detected
 응답 없음	No response
+로그: 체력이 반도 안 남았어요. 이번엔 섹터 복구부터 챙겨요.	Rogue: You are under half health. Take the sector repair this time.
+로그: 체력 반도 안 남았어. 이번엔 복구부터 하자.	Rogue: Under half health. Let's repair first this time.
+로그: 지금 %dB / %dB 썼어요. 남는 만큼만 실을 수 있어요.	Rogue: You are using %dB / %dB. Only what is left will fit.
+로그: 지금 %dB / %dB 썼어. 남는 만큼만 실을 수 있어.	Rogue: You're at %dB / %dB. Only what's left will fit.
+로그: 이제 덮을 면을 고르세요. 제일 안 쓰는 걸로요.	Rogue: Now pick the face to overwrite. The one you never use.
+로그: 이제 덮을 면 골라. 제일 안 쓰는 걸로.	Rogue: Now pick what to overwrite. Whatever you never use.
+로그: 그렇게 바꾸면 %dB예요. 한도를 넘으니 다른 면을 덮어요.	Rogue: That swap lands at %dB. Over the limit, so overwrite another face.
+로그: 그렇게 바꾸면 %dB야. 한도 넘어, 다른 면으로 가.	Rogue: That swap lands at %dB. Over the limit, pick another face.
+로그: 좋아요. 한 번 더 누르면 확정이에요.	Rogue: Good. One more press commits it.
+로그: 좋아. 한 번 더 누르면 끝이야.	Rogue: Good. One more press and it's done.
+로그: 상주 프로그램은 면을 바꾸지 않아요. 대신 용량을 계속 물고 있어요.	Rogue: A resident program does not replace a face. It holds capacity the whole way.
+로그: 이건 면을 안 바꿔. 대신 용량을 계속 물고 있어.	Rogue: This one doesn't replace a face. It holds capacity the whole way.
+로그: %dB를 계속 내주는 거예요. 그래도 괜찮으면 한 번 더 누르세요.	Rogue: You are giving up %dB for good. If that is fine, press again.
+로그: %dB를 계속 내주는 거야. 괜찮으면 한 번 더.	Rogue: That's %dB gone for good. If that's fine, press again.
+로그: %dB 넘었어요. 그만큼 지워야 다음 층으로 갈 수 있어요.	Rogue: You are %dB over. Delete that much to reach the next floor.
+로그: %dB 넘었어. 그만큼 지워야 내려가.	Rogue: You're %dB over. Delete that much or we don't go down.
+로그: 전부 지우면 굴릴 게 없어요. 하나는 남겨 둬요.	Rogue: Delete them all and there is nothing to roll. Leave one.
+로그: 전부 지우면 굴릴 게 없어. 하나는 남겨.	Rogue: Delete them all and there's nothing to roll. Leave one.
+로그: 한도 안으로 들어왔어요. 이대로 진행해도 돼요.	Rogue: You are inside the limit now. You can go on.
+로그: 한도 안이야. 이대로 가도 돼.	Rogue: Inside the limit now. We can go.

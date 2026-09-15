@@ -2667,7 +2667,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
     int defendMode = forcedMode == 1 || (forcedMode < 0 && !attackMode && game->lastBlock > 0);
     if (attackMode && game->lastDamage > 0 && LivingEnemyCount(game) > 0) {
         int repeat = (game->lastDamage * (chainPower + 4)) / 13;
-        if (chainKind == FACE_ECHO) repeat = game->lastDamage;
+        if (chainKind == FACE_ECHO) repeat = game->lastDamage * ECHO_REPEAT_PERCENT / 100;
         if (chainKind == FACE_WILD) repeat += 2;
         int chainTarget = ChainTarget(game);
         int hpBefore = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
@@ -2676,7 +2676,7 @@ static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
         int hpAfter = chainTarget >= 0 ? game->enemies[chainTarget].hp : 0;
         int absorbed = blockBefore < repeat ? blockBefore : repeat;
         ctx->slotOutput[SLOT_CHAIN] = repeat;
-        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, repeat, absorbed, hpBefore - hpAfter);
+        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 공격 %d × %d%% = %d · 방어도 %d → 체력 -%d", game->lastDamage, ECHO_REPEAT_PERCENT, repeat, absorbed, hpBefore - hpAfter);
         else if (chainKind == FACE_WILD) wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
         else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d", game->lastDamage, chainPower, repeat, absorbed, hpBefore - hpAfter);
         if (chainTarget >= 0) {
@@ -2694,10 +2694,10 @@ static void ResolveChain(GameState* game, ResolveContext* ctx, int forcedMode) {
         PushTurnTrace(game, trace);
     } else if (defendMode && game->lastBlock > 0) {
         int repeat = (game->lastBlock * (chainPower + 4)) / 13;
-        if (chainKind == FACE_ECHO) repeat = game->lastBlock;
+        if (chainKind == FACE_ECHO) repeat = game->lastBlock * ECHO_REPEAT_PERCENT / 100;
         game->playerBlock += repeat;
         ctx->slotOutput[SLOT_CHAIN] = repeat;
-        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d", game->lastBlock, repeat);
+        if (chainKind == FACE_ECHO) wsprintfW(trace, L"[연쇄] 메아리: 직전 방어 %d × %d%% = 방어도 +%d", game->lastBlock, ECHO_REPEAT_PERCENT, repeat);
         else wsprintfW(trace, L"[연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d", game->lastBlock, chainPower, repeat);
         if (repeat > 0) {
             CombatFxEvent* fx = PushCombatFx(game, CFX_CHAIN, game->turnTraceCount);

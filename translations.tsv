@@ -98,7 +98,7 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 공격 슬롯: 피해 +4, 대상에게 화상 2턴 (적 행동 직전 3 피해).\n다른 슬롯에서는 출력만 쓰입니다.	ATTACK slot: +4 damage and inflict Burn for 2 turns (3 damage before enemy action).\nIn other slots it contributes output only.
 방어 슬롯: (출력 + 증폭 보너스) × 2 만큼 방어도.\n다른 슬롯에서는 출력만 쓰입니다.	DEFEND slot: Gain (output + amplify bonus) × 2 armor.\nIn other slots it contributes output only.
 증폭 슬롯: 보너스가 출력의 절반이 아니라 100%. 공격·방어에 그대로 더해집니다.	AMPLIFY slot: Adds 100% output instead of half to attack and defense.
-연쇄 슬롯: 직전 공격 또는 방어를 감쇠 없이 100% 반복합니다.	CHAIN slot: Repeat the previous attack or defense at full strength.
+연쇄 슬롯: 직전 공격 또는 방어를 85% 반복합니다.\n일반 면의 연쇄보다 높지만 그대로 두 번은 아닙니다.	CHAIN slot: Repeat 85% of the previous attack or defense.\nStronger than an ordinary chain, but not a second full hit.
 공격	ATTACK
 강공	HEAVY
 방어	DEFEND
@@ -286,8 +286,8 @@ KEYB · 판독 후	KEYB · AFTER SCAN
 [연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d	[CHAIN] %d × (%d + 4) ÷ 13 + 2 = %d · armor %d → HP -%d
 [연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d	[CHAIN] %d × (%d + 4) ÷ 13 = %d · armor %d → HP -%d
 [연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d	[CHAIN] %d × (%d + 4) ÷ 13 = armor +%d
-[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d	[CHAIN] Echo: attack %d × 100%% = %d · armor %d → HP -%d
-[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d	[CHAIN] Echo: previous defense %d × 100%% = armor +%d
+[연쇄] 메아리: 공격 %d × %d%% = %d · 방어도 %d → 체력 -%d	[CHAIN] Echo: attack %d × %d%% = %d · armor %d → HP -%d
+[연쇄] 메아리: 직전 방어 %d × %d%% = 방어도 +%d	[CHAIN] Echo: previous defense %d × %d%% = armor +%d
 [연쇄] 반복할 공격·방어가 없어 발동하지 않음	[CHAIN] No attack or defense to repeat
 [연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음	[CHAIN] Chain slot empty → no repeat
 [오프라인] 주사위 %d 연결 끊김 → 이번 턴 출력 0	[OFFLINE] Die %d disconnected → output 0 this turn
@@ -939,7 +939,7 @@ LOCKED DESTINATION  ·  잠긴 목적지	LOCKED DESTINATION
 공격 +4, 대상에게 화상 2회	Attack +4 and 2 burns on the target
 방어 슬롯에서 출력 2배	Double output in the DEFEND slot
 공격 피해 일부를 체력으로 회복	Heals part of the attack damage
-연쇄 슬롯에서 직전 효과 100% 반복	Repeats the last effect 100% in CHAIN
+연쇄 슬롯에서 직전 효과 85% 반복	Repeats the last effect 85% in CHAIN
 효과 없음	No effect
 = 값	= value
 강화 보상으로 받은 특수 면은 비용은 같고 출력만 +2 높습니다.	Special faces from enhanced rewards cost the same but output +2.
@@ -1648,3 +1648,23 @@ ROGUE / 연결됨	ROGUE / CONNECTED
 연결됨	Connected
 잠식 신호 감지	Corruption detected
 응답 없음	No response
+로그: 체력이 반도 안 남았어요. 이번엔 섹터 복구부터 챙겨요.	Rogue: You are under half health. Take the sector repair this time.
+로그: 체력 반도 안 남았어. 이번엔 복구부터 하자.	Rogue: Under half health. Let's repair first this time.
+로그: 지금 %dB / %dB 썼어요. 남는 만큼만 실을 수 있어요.	Rogue: You are using %dB / %dB. Only what is left will fit.
+로그: 지금 %dB / %dB 썼어. 남는 만큼만 실을 수 있어.	Rogue: You're at %dB / %dB. Only what's left will fit.
+로그: 이제 덮을 면을 고르세요. 제일 안 쓰는 걸로요.	Rogue: Now pick the face to overwrite. The one you never use.
+로그: 이제 덮을 면 골라. 제일 안 쓰는 걸로.	Rogue: Now pick what to overwrite. Whatever you never use.
+로그: 그렇게 바꾸면 %dB예요. 한도를 넘으니 다른 면을 덮어요.	Rogue: That swap lands at %dB. Over the limit, so overwrite another face.
+로그: 그렇게 바꾸면 %dB야. 한도 넘어, 다른 면으로 가.	Rogue: That swap lands at %dB. Over the limit, pick another face.
+로그: 좋아요. 한 번 더 누르면 확정이에요.	Rogue: Good. One more press commits it.
+로그: 좋아. 한 번 더 누르면 끝이야.	Rogue: Good. One more press and it's done.
+로그: 상주 프로그램은 면을 바꾸지 않아요. 대신 용량을 계속 물고 있어요.	Rogue: A resident program does not replace a face. It holds capacity the whole way.
+로그: 이건 면을 안 바꿔. 대신 용량을 계속 물고 있어.	Rogue: This one doesn't replace a face. It holds capacity the whole way.
+로그: %dB를 계속 내주는 거예요. 그래도 괜찮으면 한 번 더 누르세요.	Rogue: You are giving up %dB for good. If that is fine, press again.
+로그: %dB를 계속 내주는 거야. 괜찮으면 한 번 더.	Rogue: That's %dB gone for good. If that's fine, press again.
+로그: %dB 넘었어요. 그만큼 지워야 다음 층으로 갈 수 있어요.	Rogue: You are %dB over. Delete that much to reach the next floor.
+로그: %dB 넘었어. 그만큼 지워야 내려가.	Rogue: You're %dB over. Delete that much or we don't go down.
+로그: 전부 지우면 굴릴 게 없어요. 하나는 남겨 둬요.	Rogue: Delete them all and there is nothing to roll. Leave one.
+로그: 전부 지우면 굴릴 게 없어. 하나는 남겨.	Rogue: Delete them all and there's nothing to roll. Leave one.
+로그: 한도 안으로 들어왔어요. 이대로 진행해도 돼요.	Rogue: You are inside the limit now. You can go on.
+로그: 한도 안이야. 이대로 가도 돼.	Rogue: Inside the limit now. We can go.

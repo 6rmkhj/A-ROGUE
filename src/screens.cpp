@@ -4784,7 +4784,7 @@ static const wchar_t* FaceAbilityDetail(int kind) {
     case FACE_LEECH:  return L"공격 슬롯: 실제로 넣은 피해의 1/3 + 1 만큼 체력 회복.\n다른 슬롯에서는 출력만 쓰입니다.";
     case FACE_WILD:   return L"모든 슬롯에서 추가 출력: 공격 +2 · 방어 +3 · 증폭 +2 · 연쇄(공격) +2.";
     case FACE_BOOST:  return L"증폭 슬롯: 보너스가 출력의 절반이 아니라 100%. 공격·방어에 그대로 더해집니다.";
-    case FACE_ECHO:   return L"연쇄 슬롯: 직전 공격 또는 방어를 감쇠 없이 100% 반복합니다.";
+    case FACE_ECHO:   return L"연쇄 슬롯: 직전 공격 또는 방어를 85% 반복합니다.\n일반 면의 연쇄보다 높지만 그대로 두 번은 아닙니다.";
     default:          return L"";
     }
 }
@@ -4962,6 +4962,7 @@ static void DrawReward(HDC dc, int width, int height) {
     if (gRewardSkipArmed)
         TextRect(dc, MakeRect(skip.left - 460, skip.top, skip.left - 12, skip.bottom),
             L"한 번 더 누르면 이 보상을 버리고 진행합니다.", C_RED, gFontSmall, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    DrawRogueAdvice(dc);
 }
 
 RECT PruneTsrRect(int i) { int left = LEGACY_X + 150 + i * 180; return MakeRect(left, 252, left + 164, 320); }
@@ -4994,6 +4995,7 @@ static void DrawPrune(HDC dc, int width, int height) {
     int ready = UsedBytes(&gGame) <= EffectiveCapacity(&gGame) && faces > 0;
     const wchar_t* confirmLabel = faces == 0 ? L"면 1개 이상 필요" : L"계속 [엔터]";
     Panel(dc, confirm, ready ? RGB(28, 70, 57) : C_PANEL_2, ready ? C_GREEN : C_LINE); TextRect(dc, confirm, confirmLabel, ready ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawRogueAdvice(dc);
 }
 
 static void DrawChapterClear(HDC dc, int width, int height) {
@@ -5687,7 +5689,7 @@ static void DrawGuideSlotsPage(HDC dc) {
         L"공격 피해 일부를 체력으로 회복",
         L"어느 슬롯에서도 높은 출력",
         L"증폭 슬롯에서 보너스 2배",
-        L"연쇄 슬롯에서 직전 효과 100% 반복",
+        L"연쇄 슬롯에서 직전 효과 85% 반복",
         L"효과 없음"
     };
     for (int i = 0; i < FACE_KIND_COUNT; ++i) {

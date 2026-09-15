@@ -716,73 +716,265 @@ int RogueBarkTypeMs() {
     return ms < 1100 ? ms : 1100;
 }
 
+// ---- ROGUE screen -----------------------------------------------------------
+// 로그가 서 있는 작은 화면. 전투 사이드바의 호출창과 보상·정리 화면의 조언창이
+// 이 그림 하나를 같이 쓴다. 다른 것은 창 크기와 문장뿐이다.
+//
+// 세로로 초상 - 구분선 - 음성 막대 - 말풍선이 한 기둥으로 서고, 기둥 전체가 검은
+// 화면 가운데에 놓인다. 말풍선은 제 글에 맞춰 좌우·위아래로 줄고 꼬리는 늘 그
+// 한가운데에서 로그를 가리킨다 - 짧은 한마디 옆에 빈 상자가 남지 않는다.
+static const COLORREF ROGUE_INK = RGB(5, 10, 15);
+#define ROGUE_RULE_GAP   12   // 초상 아래 구분선까지
+#define ROGUE_BAR_GAP    19   // 구분선에서 음성 막대 중심까지
+#define ROGUE_BUBBLE_GAP 24   // 막대 중심에서 말풍선 꼬리 끝까지
+#define ROGUE_BUBBLE_PAD_X 14
+#define ROGUE_BUBBLE_PAD_Y 11
+#define ROGUE_TAIL 10
+
+// 접힌 글의 실제 크기. 가장 긴 줄의 폭이 곧 말풍선의 폭이 된다.
+static SIZE NarrativeParagraphSize(HDC dc, const wchar_t* text, HFONT font, int maxWidth) {
+    HFONT old = (HFONT)SelectObject(dc, font);
+    wchar_t wrapped[1024];
+    const wchar_t* value = WrapAtSpaces(dc, text, maxWidth, wrapped, 1024, 1);
+    RECT r = MakeRect(0, 0, maxWidth, 0);
+    DrawTextW(dc, value, -1, &r, DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    SelectObject(dc, old);
+    SIZE size = { r.right - r.left, r.bottom - r.top };
+    return size;
+}
+
+// 칸을 넘기면 한 단계 작은 글꼴로 내린다.
 // Shared with tools/narrative_check.cpp so every line is measured as drawn.
-static HFONT RogueBarkLayout(HDC dc, const wchar_t* speech, int* height) {
-    *height = NarrativeParagraph(dc, MakeRect(0, 0, ROGUE_BARK_TEXT_W, 0), speech, C_TEXT, gFontMedium, 1);
-    if (*height <= ROGUE_BARK_TEXT_H) return gFontMedium;
-    *height = NarrativeParagraph(dc, MakeRect(0, 0, ROGUE_BARK_TEXT_W, 0), speech, C_TEXT, gFontSmall, 1);
+static HFONT RogueSpeechLayout(HDC dc, const wchar_t* speech, int maxW, int maxH, SIZE* size) {
+    *size = NarrativeParagraphSize(dc, speech, gFontMedium, maxW);
+    if (size->cy <= maxH) return gFontMedium;
+    *size = NarrativeParagraphSize(dc, speech, gFontSmall, maxW);
     return gFontSmall;
 }
 
-static void DrawRogueCall(HDC dc) {
-    if (!gGame.narrativeEnabled || gGame.tutorial.active || gGame.phase != PHASE_COMBAT || gTurnTraceActive) return;
-    const RECT r = RogueCallRect();
+// 말풍선까지 세운 기둥의 높이. 창 높이를 먼저 정해야 하는 조언창도 이 값을 본다.
+static int RogueSpeechHeight(int portrait, int speechHeight) {
+    return portrait + ROGUE_RULE_GAP + 2 + ROGUE_BAR_GAP
+        + (speechHeight ? ROGUE_BUBBLE_GAP + ROGUE_TAIL + speechHeight + ROGUE_BUBBLE_PAD_Y * 2 : 8);
+}
+
+// 창틀·상태 줄과 로그가 설 검은 화면. 여섯 볼륨 이후와 A에서는 잡음만 남으므로
+// 몸통을 그릴 필요가 없다는 뜻으로 0을 돌려준다.
+static int DrawRogueScreenFrame(HDC dc, const RECT& r, const wchar_t* title, RECT* out) {
     const int count = RecoveredShardCount(gGame.clearedMask), decor = FxDecorOn();
     const int silent = count >= 6 || gGame.selectedDrive == DRIVE_FINAL;
     const DWORD now = decor ? GetTickCount() : 0;
-    const COLORREF ink = RGB(5, 10, 15);
-    DrawSidebarFrame(dc, r, L"ROGUE / CALL", silent ? C_DIM : C_BLUE);
+    DrawSidebarFrame(dc, r, title, silent ? C_DIM : C_BLUE);
     TextRect(dc, MakeRect(r.left + 150, r.top + 7, r.right - 12, r.top + 25),
         silent ? L"응답 없음" : count >= 3 ? L"잠식 신호 감지" : L"연결됨",
         silent ? C_DIM : count >= 3 ? C_YELLOW : C_GREEN, gFontSmall, DT_RIGHT | DT_SINGLELINE);
     const RECT screen = MakeRect(r.left + 12, r.top + 38, r.right - 12, r.bottom - 12);
-    Fill(dc, screen, ink);
+    *out = screen;
+    Fill(dc, screen, ROGUE_INK);
     if (decor) DrawScanlines(dc, screen);
-    const int cx = (screen.left + screen.right) / 2;
-    const RECT stage = MakeRect(cx - 120, screen.top + 20, cx + 120, screen.top + 260);
-    if (silent) {
-        // Only noise remains; inside A a red outline of ROGUE surfaces now and then.
-        if (gGame.selectedDrive == DRIVE_FINAL && decor && now % 2600 < 180) DrawRoguePortrait(dc, stage, 6, 6, C_RED, 0);
-        DrawScreenStatic(dc, screen, (int)(now / 90), 240);
-        TextRect(dc, MakeRect(screen.left, stage.bottom + 40, screen.right, stage.bottom + 72), L"NO RESPONSE", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
-        return;
+    if (!silent) return 1;
+    // Only noise remains; inside A a red outline of ROGUE surfaces now and then.
+    const int cy = (screen.top + screen.bottom) / 2, cx = (screen.left + screen.right) / 2;
+    if (gGame.selectedDrive == DRIVE_FINAL && decor && now % 2600 < 180) {
+        // 창이 납작한 조언창에서는 윤곽도 그만큼 작게 선다.
+        int span = screen.bottom - screen.top - 20;
+        if (span > 240) span = 240;
+        DrawRoguePortrait(dc, MakeRect(cx - span / 2, cy - span / 2 - 20, cx + span / 2, cy + span / 2 - 20), 6, 6, C_RED, 0);
     }
+    DrawScreenStatic(dc, screen, (int)(now / 90), 240);
+    TextRect(dc, MakeRect(screen.left, cy - 16, screen.right, cy + 16), L"NO RESPONSE", C_DIM, gFontMedium, DT_CENTER | DT_SINGLELINE);
+    return 0;
+}
 
-    wchar_t speech[256]; RogueBarkText(speech, 256);
-    const int speaking = speech[0] != 0, age = RogueBarkElapsed(), span = RogueBarkTypeMs();
-    const int typing = speaking && decor && age < span;
+// typed < 0 이면 문장이 다 서 있고, 0 이상이면 그만큼만 치는 중이다 (캐럿이 붙는다).
+static void DrawRogueSpeech(HDC dc, const RECT& screen, int portrait, const wchar_t* speech,
+    COLORREF color, int typed, int maxW, int maxH) {
+    const int count = RecoveredShardCount(gGame.clearedMask), decor = FxDecorOn();
+    const DWORD now = decor ? GetTickCount() : 0;
+    const int cx = (screen.left + screen.right) / 2, speaking = speech && speech[0];
+    const int typing = speaking && typed >= 0;
+    SIZE size = {0, 0};
+    HFONT font = speaking ? RogueSpeechLayout(dc, speech, maxW, maxH, &size) : gFontMedium;
+    int top = screen.top + (screen.bottom - screen.top - RogueSpeechHeight(portrait, speaking ? size.cy : 0)) / 2;
+    if (top < screen.top + 10) top = screen.top + 10;
+    const int half = portrait / 2;
     const int bob = decor ? 2 * SinMille((int)(now / 4 % 3600)) / 1000 : 0;
-    DrawRoguePortrait(dc, MakeRect(stage.left, stage.top + bob, stage.right, stage.bottom + bob), count, count > 0 ? count - 1 : 0, C_BLUE, typing);
-    Fill(dc, MakeRect(cx - 104, stage.bottom + 8, cx + 104, stage.bottom + 10), MixColor(ink, C_BLUE, 35));
-    // Voice link bars: flat while ROGUE is quiet.
-    for (int i = 0; i < 25; ++i) {
-        int x = cx - 137 + i * 11;
-        int level = typing ? 1 + (int)(Hash3(i, age / 70, 3) % 7u) : 1;
-        Fill(dc, MakeRect(x, stage.bottom + 30 - level, x + 6, stage.bottom + 31 + level), MixColor(ink, C_BLUE, typing ? 70 : 25));
+    DrawRoguePortrait(dc, MakeRect(cx - half, top + bob, cx + half, top + portrait + bob),
+        count, count > 0 ? count - 1 : 0, C_BLUE, typing);
+    int y = top + portrait + ROGUE_RULE_GAP;
+    Fill(dc, MakeRect(cx - half + 16, y, cx + half - 16, y + 2), MixColor(ROGUE_INK, C_BLUE, 35));
+    // Voice link bars, as wide as ROGUE itself: flat while ROGUE is quiet.
+    y += 2 + ROGUE_BAR_GAP;
+    const int barW = portrait >= 160 ? 6 : 4, pitch = barW + 5;
+    const int bars = (portrait - 8) / pitch, span = bars * pitch - (pitch - barW);
+    for (int i = 0; i < bars; ++i) {
+        const int x = cx - span / 2 + i * pitch;
+        const int level = typing ? 1 + (int)(Hash3(i, typed, 3) % 7u) : 1;
+        Fill(dc, MakeRect(x, y - level, x + barW, y + 1 + level), MixColor(ROGUE_INK, C_BLUE, typing ? 70 : 25));
     }
-    // The corruption the story describes stays inside ROGUE's window.
-    if (decor && count >= 3 && now % 4200 < 140) DrawBandGlitch(dc, screen, (int)now, FxScale(6), 77, 8);
     if (!speaking) return;
-
-    int height;
-    HFONT font = RogueBarkLayout(dc, speech, &height);
-    // The bubble hugs its text; long lines still stop at the screen edge.
-    const int bubbleBottom = stage.bottom + 52 + height + 26;
-    const RECT bubble = MakeRect(screen.left + 12, stage.bottom + 52, screen.right - 12,
-        bubbleBottom < screen.bottom - 12 ? bubbleBottom : screen.bottom - 12);
+    // 말풍선은 글을 감싸고 화면 한가운데에 선다.
+    const int wide = size.cx + ROGUE_BUBBLE_PAD_X * 2, tall = size.cy + ROGUE_BUBBLE_PAD_Y * 2;
+    const RECT bubble = MakeRect(cx - wide / 2, y + ROGUE_BUBBLE_GAP + ROGUE_TAIL,
+        cx - wide / 2 + wide, y + ROGUE_BUBBLE_GAP + ROGUE_TAIL + tall);
     const COLORREF fill = RGB(9, 18, 27);
     Panel(dc, bubble, fill, C_BLUE);
-    for (int i = 0; i <= 10; ++i) {   // tail up toward ROGUE
-        const int y = bubble.top - 10 + i;
-        Fill(dc, MakeRect(cx - i, y, cx + i + 1, y + 1), fill);
-        Fill(dc, MakeRect(cx - i, y, cx - i + 1, y + 1), C_BLUE); Fill(dc, MakeRect(cx + i, y, cx + i + 1, y + 1), C_BLUE);
+    for (int i = 0; i <= ROGUE_TAIL; ++i) {   // tail up toward ROGUE, on the bubble's own centre
+        const int ty = bubble.top - ROGUE_TAIL + i;
+        Fill(dc, MakeRect(cx - i, ty, cx + i + 1, ty + 1), fill);
+        Fill(dc, MakeRect(cx - i, ty, cx - i + 1, ty + 1), C_BLUE); Fill(dc, MakeRect(cx + i, ty, cx + i + 1, ty + 1), C_BLUE);
     }
     StoryLineView line = {};
     lstrcpynW(line.text, speech, 640);
     const int length = lstrlenW(line.text);
-    const int typed = !decor || age >= span || span <= 0 ? length : length * age / span;
-    const RECT say = MakeRect(bubble.left + 14, bubble.top + 12, bubble.left + 14 + ROGUE_BARK_TEXT_W, bubble.top + 12 + ROGUE_BARK_TEXT_H);
-    RECT caret = DrawStoryLine(dc, say, line, typed, font, C_TEXT, C_TEXT);
-    if (typing) Fill(dc, MakeRect(caret.left + 3, caret.top + 5, caret.left + 12, caret.bottom - 4), C_BLUE);
-    if (decor && age > ROGUE_BARK_MS - 260) DrawBandGlitch(dc, bubble, age, FxScale(8), 41, 5);
+    const RECT say = MakeRect(bubble.left + ROGUE_BUBBLE_PAD_X, bubble.top + ROGUE_BUBBLE_PAD_Y,
+        bubble.right - ROGUE_BUBBLE_PAD_X, bubble.bottom - ROGUE_BUBBLE_PAD_Y);
+    RECT caret = DrawStoryLine(dc, say, line, typing && typed < length ? typed : length, font, color, color);
+    if (typing && typed < length) Fill(dc, MakeRect(caret.left + 3, caret.top + 5, caret.left + 12, caret.bottom - 4), C_BLUE);
+}
+
+static void DrawRogueCall(HDC dc) {
+    if (!gGame.narrativeEnabled || gGame.tutorial.active || gGame.phase != PHASE_COMBAT || gTurnTraceActive) return;
+    RECT screen;
+    if (!DrawRogueScreenFrame(dc, RogueCallRect(), L"ROGUE / CALL", &screen)) return;
+    wchar_t speech[256]; RogueBarkText(speech, 256);
+    const int age = RogueBarkElapsed(), span = RogueBarkTypeMs(), decor = FxDecorOn();
+    const int length = lstrlenW(speech);
+    const int typed = speech[0] && decor && age < span && span > 0 ? length * age / span : -1;
+    DrawRogueSpeech(dc, screen, 240, speech, C_TEXT, typed, ROGUE_BARK_TEXT_W, ROGUE_BARK_TEXT_H);
+    // The corruption the story describes stays inside ROGUE's window.
+    const DWORD now = decor ? GetTickCount() : 0;
+    if (decor && RecoveredShardCount(gGame.clearedMask) >= 3 && now % 4200 < 140)
+        DrawBandGlitch(dc, screen, (int)now, FxScale(6), 77, 8);
+    if (speech[0] && decor && age > ROGUE_BARK_MS - 260) DrawBandGlitch(dc, screen, age, FxScale(8), 41, 5);
+}
+
+// 납작한 창은 기둥 대신 한 줄로 선다 - 초상이 왼쪽, 말풍선이 오른쪽이고 꼬리는
+// 옆에서 초상을 가리킨다. 세로로 긴 사이드바(호출창)만 기둥을 쓴다.
+static int RogueRowHeight(int portrait, int speechHeight) {
+    const int bubble = speechHeight + ROGUE_BUBBLE_PAD_Y * 2;
+    return portrait > bubble ? portrait : bubble;
+}
+
+static void DrawRogueRow(HDC dc, const RECT& screen, int portrait, const wchar_t* speech,
+    COLORREF color, int maxW, int maxH) {
+    const int count = RecoveredShardCount(gGame.clearedMask), decor = FxDecorOn();
+    SIZE size = {0, 0};
+    HFONT font = RogueSpeechLayout(dc, speech, maxW, maxH, &size);
+    const int wide = size.cx + ROGUE_BUBBLE_PAD_X * 2, tall = size.cy + ROGUE_BUBBLE_PAD_Y * 2;
+    const int row = RogueRowHeight(portrait, size.cy);
+    const int top = screen.top + (screen.bottom - screen.top - row) / 2;
+    const int left = screen.left + 12;
+    const int bob = decor ? 2 * SinMille((int)(GetTickCount() / 4 % 3600)) / 1000 : 0;
+    const int portraitTop = top + (row - portrait) / 2 + bob;
+    DrawRoguePortrait(dc, MakeRect(left, portraitTop, left + portrait, portraitTop + portrait),
+        count, count > 0 ? count - 1 : 0, C_BLUE, 0);
+    const int bubbleTop = top + (row - tall) / 2, cy = bubbleTop + tall / 2;
+    // 풍선은 초상 바로 옆에서 시작한다. 짧은 한 줄이 오른쪽 끝으로 달아나면
+    // 꼬리가 빈자리를 가리킨다.
+    const int bubbleLeft = left + portrait + 10 + ROGUE_TAIL;
+    const RECT bubble = MakeRect(bubbleLeft, bubbleTop,
+        bubbleLeft + wide < screen.right - 12 ? bubbleLeft + wide : screen.right - 12, bubbleTop + tall);
+    const COLORREF fill = RGB(9, 18, 27);
+    Panel(dc, bubble, fill, C_BLUE);
+    for (int i = 0; i <= ROGUE_TAIL; ++i) {   // tail sideways toward ROGUE
+        const int x = bubble.left - ROGUE_TAIL + i;
+        Fill(dc, MakeRect(x, cy - i, x + 1, cy + i + 1), fill);
+        Fill(dc, MakeRect(x, cy - i, x + 1, cy - i + 1), C_BLUE); Fill(dc, MakeRect(x, cy + i, x + 1, cy + i + 1), C_BLUE);
+    }
+    StoryLineView line = {};
+    lstrcpynW(line.text, speech, 640);
+    DrawStoryLine(dc, MakeRect(bubble.left + ROGUE_BUBBLE_PAD_X, bubble.top + ROGUE_BUBBLE_PAD_Y,
+        bubble.right - ROGUE_BUBBLE_PAD_X, bubble.bottom - ROGUE_BUBBLE_PAD_Y),
+        line, lstrlenW(line.text), font, color, color);
+}
+
+// ---- ROGUE advice panel -----------------------------------------------------
+// 보상·정리 화면은 면 격자 오른쪽이 통째로 비어 있었다. 전투 사이드바의 호출창과
+// 같은 자리·같은 틀을 그대로 주고, 여기서는 한마디 대신 지금 화면에서 무엇을
+// 정해야 하는지 로그가 일러 준다. 창의 세 상태(연결·잠식·응답 없음)는 호출창과
+// 같은 규칙을 따른다 - 여섯 볼륨 이후와 A에서는 이 창도 답하지 않는다.
+RECT RogueAdviceRect() { return MakeRect(948, 340, 1310, 640); }
+#define ROGUE_ADVICE_TEXT_W 178
+#define ROGUE_ADVICE_TEXT_H 104
+#define ROGUE_ADVICE_PORTRAIT 88
+
+enum RogueAdviceKind { ADVICE_NONE = 0, ADVICE_REPAIR, ADVICE_PICK, ADVICE_SWAP, ADVICE_OVER,
+    ADVICE_CONFIRM, ADVICE_TSR, ADVICE_TSR_ARMED, ADVICE_PRUNE_OVER, ADVICE_PRUNE_EMPTY,
+    ADVICE_PRUNE_READY, ADVICE_COUNT };
+
+// [kind][polite before three recovered volumes, casual after] - the same shift
+// the call window and the private milestone conversations make.
+static const wchar_t* const ROGUE_ADVICES[ADVICE_COUNT][2] = {
+    {L"", L""},
+    {L"로그: 체력이 반도 안 남았어요. 이번엔 섹터 복구부터 챙겨요.", L"로그: 체력 반도 안 남았어. 이번엔 복구부터 하자."},
+    {L"로그: 지금 %dB / %dB 썼어요. 남는 만큼만 실을 수 있어요.", L"로그: 지금 %dB / %dB 썼어. 남는 만큼만 실을 수 있어."},
+    {L"로그: 이제 덮을 면을 고르세요. 제일 안 쓰는 걸로요.", L"로그: 이제 덮을 면 골라. 제일 안 쓰는 걸로."},
+    {L"로그: 그렇게 바꾸면 %dB예요. 한도를 넘으니 다른 면을 덮어요.", L"로그: 그렇게 바꾸면 %dB야. 한도 넘어, 다른 면으로 가."},
+    {L"로그: 좋아요. 한 번 더 누르면 확정이에요.", L"로그: 좋아. 한 번 더 누르면 끝이야."},
+    {L"로그: 상주 프로그램은 면을 바꾸지 않아요. 대신 용량을 계속 물고 있어요.", L"로그: 이건 면을 안 바꿔. 대신 용량을 계속 물고 있어."},
+    {L"로그: %dB를 계속 내주는 거예요. 그래도 괜찮으면 한 번 더 누르세요.", L"로그: %dB를 계속 내주는 거야. 괜찮으면 한 번 더."},
+    {L"로그: %dB 넘었어요. 그만큼 지워야 다음 층으로 갈 수 있어요.", L"로그: %dB 넘었어. 그만큼 지워야 내려가."},
+    {L"로그: 전부 지우면 굴릴 게 없어요. 하나는 남겨 둬요.", L"로그: 전부 지우면 굴릴 게 없어. 하나는 남겨."},
+    {L"로그: 한도 안으로 들어왔어요. 이대로 진행해도 돼요.", L"로그: 한도 안이야. 이대로 가도 돼."},
+};
+
+// 지금 화면이 묻고 있는 것 하나만 고른다. 숫자는 화면이 이미 쓰는 것과 같은 값이다.
+static int RogueAdviceFor(int* a, int* b) {
+    *a = *b = 0;
+    if (gGame.phase == PHASE_PRUNE) {
+        if (!NonEmptyFaceCount(&gGame)) return ADVICE_PRUNE_EMPTY;
+        int over = UsedBytes(&gGame) - EffectiveCapacity(&gGame);
+        if (over <= 0) return ADVICE_PRUNE_READY;
+        *a = over; return ADVICE_PRUNE_OVER;
+    }
+    if (gGame.phase != PHASE_REWARD) return ADVICE_NONE;
+    if (gGame.rewardIsTsr) {
+        int tsr = gTsrArmed >= 0 && gTsrArmed < 3 ? gGame.rewardKinds[gTsrArmed] : -1;
+        if (tsr < 0 || tsr >= TSR_COUNT) return ADVICE_TSR;
+        *a = TSR_INFO[tsr].cost; return ADVICE_TSR_ARMED;
+    }
+    int reward = gGame.selectedReward;
+    if (reward < 0 || reward >= 3) {
+        // 체력이 반 아래면 면 하나보다 이번 층을 버티는 쪽이 급하다.
+        if (CanRepairSector() && gGame.playerHp * 2 <= gGame.playerMaxHp) return ADVICE_REPAIR;
+        *a = UsedBytes(&gGame); *b = EffectiveCapacity(&gGame); return ADVICE_PICK;
+    }
+    if (gFaceSwapArmed < 0 || gFaceSwapArmed >= 18) return ADVICE_SWAP;
+    const Face* old = &gGame.dice[gFaceSwapArmed / 6].faces[gFaceSwapArmed % 6];
+    int kind = gGame.rewardKinds[reward];
+    int newCost = kind == FACE_NUMBER ? gGame.rewardValues[reward] : FACE_INFO[kind].cost;
+    int after = UsedBytes(&gGame) - FaceCost(old) + newCost;
+    if (after <= EffectiveCapacity(&gGame)) return ADVICE_CONFIRM;
+    *a = after; return ADVICE_OVER;
+}
+
+// 숫자를 먼저 한국어 문장에 끼우고, 번역은 그 완성된 문장을 표에서 찾는다
+// (localization.cpp의 서식 행 규칙). 이름 토큰도 그 뒤에 들어간다.
+static void RogueAdviceLine(int kind, int casual, int a, int b, wchar_t* out, int capacity) {
+    wchar_t filled[256], text[256];
+    wsprintfW(filled, kind > 0 && kind < ADVICE_COUNT ? ROGUE_ADVICES[kind][casual ? 1 : 0] : L"", a, b);
+    NarrativeText(filled, text, 256);
+    lstrcpynW(out, text + SpeakerTagLength(text), capacity);
+}
+
+static void DrawRogueAdvice(HDC dc) {
+    if (!gGame.narrativeEnabled || gGame.tutorial.active) return;
+    int a = 0, b = 0, kind = RogueAdviceFor(&a, &b);
+    if (!kind) return;
+    wchar_t speech[256]; RogueAdviceLine(kind, RecoveredShardCount(gGame.clearedMask) >= 3, a, b, speech, 256);
+    SIZE size = {0, 0};
+    RogueSpeechLayout(dc, speech, ROGUE_ADVICE_TEXT_W, ROGUE_ADVICE_TEXT_H, &size);
+    // 창은 제 글에 맞춰 줄어든다. 두 줄짜리 안내 밑에 검은 자리를 남기지 않는다.
+    RECT r = RogueAdviceRect();
+    const int hugged = r.top + 38 + 20 + RogueRowHeight(ROGUE_ADVICE_PORTRAIT, size.cy) + 12;
+    if (hugged < r.bottom) r.bottom = hugged;
+    RECT screen;
+    if (!DrawRogueScreenFrame(dc, r, L"ROGUE / HINT", &screen)) return;
+    DrawRogueRow(dc, screen, ROGUE_ADVICE_PORTRAIT, speech,
+        kind == ADVICE_OVER || kind == ADVICE_PRUNE_EMPTY ? C_RED : kind == ADVICE_PRUNE_OVER ? C_YELLOW : C_TEXT,
+        ROGUE_ADVICE_TEXT_W, ROGUE_ADVICE_TEXT_H);
+    const DWORD now = FxDecorOn() ? GetTickCount() : 0;
+    if (now && RecoveredShardCount(gGame.clearedMask) >= 3 && now % 4200 < 140)
+        DrawBandGlitch(dc, screen, (int)now, FxScale(6), 77, 8);
 }
