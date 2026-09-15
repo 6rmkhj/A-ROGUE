@@ -458,8 +458,33 @@ static void DrawNarrativeName(HDC dc, int width, int height) {
     TextRect(dc, MakeRect(80, 325, width - 80, 375), L"로그: 어떻게 불러드리면 될까요?", C_TEXT, gFontLarge, DT_CENTER | DT_SINGLELINE);
     RECT input = NarrativeNameRect();
     Panel(dc, MakeRect(input.left - 3, input.top - 3, input.right + 3, input.bottom + 3), C_PANEL, C_BLUE);
-    // A native Unicode EDIT control is placed in this rectangle by main.cpp.
-    // Its own IME and selection rendering must not be simulated with WM_CHAR.
+    // The name is drawn here in the game font: text and selection from the
+    // hidden EDIT, the syllable being composed from the IME (underlined).
+    // Player input is never passed through LocalizeText.
+    NarrativeNameInput name; ReadNarrativeNameInput(&name);
+    int length = lstrlenW(name.text), comp = lstrlenW(name.composition);
+    int from = name.selStart < name.selEnd ? name.selStart : name.selEnd;
+    int to = name.selStart < name.selEnd ? name.selEnd : name.selStart;
+    if (to > length) to = length;
+    if (from > to) from = to;
+    wchar_t shown[NARRATIVE_NAME_MAX + 17];
+    lstrcpynW(shown, name.text, (comp ? from : length) + 1);
+    if (comp) { lstrcatW(shown, name.composition); lstrcatW(shown, name.text + to); }
+    const int caret = comp ? from + comp : to;
+    HFONT oldFont = (HFONT)SelectObject(dc, gFontMedium);
+    TEXTMETRICW metric; GetTextMetricsW(dc, &metric);
+    const int textX = input.left + 16, textY = (input.top + input.bottom - metric.tmHeight) / 2;
+    SIZE a = {0, 0}, b = {0, 0}, c = {0, 0};
+    GetTextExtentPoint32W(dc, shown, from, &a);
+    GetTextExtentPoint32W(dc, shown, comp ? from + comp : to, &b);
+    GetTextExtentPoint32W(dc, shown, caret, &c);
+    if (!comp && from != to) Fill(dc, MakeRect(textX + a.cx, textY, textX + b.cx, textY + metric.tmHeight), MixColor(C_PANEL, C_BLUE, 45));
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, C_TEXT);
+    TextOutW(dc, textX, textY, shown, lstrlenW(shown));
+    if (comp) Fill(dc, MakeRect(textX + a.cx, textY + metric.tmHeight - 2, textX + b.cx, textY + metric.tmHeight), C_BLUE);
+    if (!FxDecorOn() || GetTickCount() % 1060 < 530)
+        Fill(dc, MakeRect(textX + c.cx + 2, textY + 3, textX + c.cx + 4, textY + metric.tmHeight - 3), C_TEXT);
+    SelectObject(dc, oldFont);
     TextRect(dc, MakeRect(300, 460, width - 300, 490), L"이 이름으로 당신을 기억합니다. · 최대 16자", C_DIM, gFontSmall, DT_CENTER | DT_SINGLELINE);
     RECT confirm = NarrativeNameConfirmRect(); int hover = Inside(confirm, gMouse.x, gMouse.y);
     Panel(dc, confirm, hover ? RGB(28, 60, 69) : C_PANEL, hover ? C_BLUE : C_LINE);
