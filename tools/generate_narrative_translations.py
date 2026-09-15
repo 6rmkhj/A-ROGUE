@@ -14,13 +14,13 @@ ROGUE: This time...
 Me: What was that?
 ROGUE: Strange. We have only just met.
 ROGUE: You can call me Rogue.
-ROGUE: What should I call you?
+ROGUE: Could you tell me your name first?
 
-ROGUE: Read the dice first. Press R.
-ROGUE: Put the three faces into the slots.
-ROGUE: You can rearrange them before execution.
-ROGUE: Check the enemy's intent and the preview.
-ROGUE: When you are ready, execute.
+ROGUE: If you want out, you need to know how to fight.
+ROGUE: I will bring up a practice process.
+ROGUE: Nothing here goes on the real record, so take it easy.
+ROGUE: If you get stuck, I will walk you through it.
+ROGUE: All right. Here we go.
 
 ROGUE: The way out is split across six connections.
 ROGUE: We need to restore C, D, E, N, R, and X.
@@ -464,46 +464,46 @@ def generate():
             'A shared network volume. Delayed replies hold old termination requests.',
         '모든 기억과 충돌이 모인 관리자 경로. 침식된 로그가 귀환을 막고 있습니다.':
             'All memories and conflicts meet here. The corrupted Rogue blocks your return.',
-        '로그: 안전한 판독 연습이에요. R로 눈을 읽으세요.':
-            'ROGUE: This is a safe rehearsal. Press R to read the dice.',
-        '로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.':
-            'ROGUE: Put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
-        '로그: 증폭 2는 공격과 방어에 1씩 더해요. 스페이스로 실행하세요.':
-            'ROGUE: Amplify 2 adds 1 to attack and defense. Press Space to execute.',
-        '로그: 먼저 주사위를 읽어야 해요. R을 누르면 이번 턴에 나온 눈이 보여요. 연습이니까 6, 4, 2가 나오게 해뒀어요.':
-            'ROGUE: First you need to read the dice. Press R to see the faces rolled this turn. For practice, I made them come up 6, 4 and 2.',
-        '로그: 이제 눈을 칸에 놓을 차례예요. 6은 공격 칸에, 4는 방어 칸에, 2는 증폭 칸에 놓아 주세요. 주사위를 누른 다음 칸을 누르면 돼요.':
-            'ROGUE: Now place the faces. Put the 6 in ATTACK, the 4 in DEFEND and the 2 in AMPLIFY. Click a die, then click a slot.',
-        '로그: 실행하기 전에 오른쪽 위 예측을 보세요. 증폭 덕분에 공격은 7, 방어는 5가 됐어요. 적이 4만큼 때려도 전부 막아요. 확인했으면 Enter를 눌러 주세요.':
-            'ROGUE: Before executing, look at the forecast at the top right. Amplify raised attack to 7 and defense to 5, so the enemy\'s 4 is fully blocked. Press Enter once you have checked it.',
-        '로그: 방금 본 예측이 맞는지 직접 확인해 봐요. 스페이스를 누르면 이 배치대로 실행돼요.':
-            'ROGUE: Let\'s see whether that forecast holds. Press Space to execute this layout.',
-        '로그: 적이 5만큼 남았어요. 이번 턴에는 연쇄를 써 볼게요. 다시 R을 눌러 새로 나온 눈을 읽어 주세요.':
-            'ROGUE: The enemy has 5 left. This turn we will use CHAIN. Press R again to read the new faces.',
-        '로그: 연쇄는 같은 턴에 먼저 한 공격을 한 번 더 이어서 해요. 4는 공격 칸에, 5는 연쇄 칸에, 1은 방어 칸에 놓아 주세요. 연쇄에 놓은 눈이 클수록 더 많이 이어져요.':
-            'ROGUE: CHAIN follows up the attack you made earlier in the same turn. Put the 4 in ATTACK, the 5 in CHAIN and the 1 in DEFEND. A bigger face in CHAIN carries more of it.',
-        '로그: 공격 4만으로는 적이 1 남아요. 연쇄가 2를 더 이어 주니까 이번 턴에 끝낼 수 있어요. 스페이스로 실행해 보세요.':
-            'ROGUE: Attack 4 alone would leave the enemy at 1. CHAIN adds 2 more, so this turn finishes it. Press Space to execute.',
-        '로그: 잘했어요. 공격이 없는 턴에는 연쇄가 방어를 이어 줘요. 이제 복구할 연결을 고르러 가요.':
-            'ROGUE: Well done. On a turn without an attack, CHAIN follows up your defense instead. Now let\'s choose a connection to restore.',
-        '로그: 두 번째 턴이에요. 다시 R로 눈을 읽으세요.':
-            'ROGUE: Second turn. Press R to read the dice again.',
-        '로그: 4는 공격, 5는 연쇄, 1은 방어에 놓아보세요.':
-            'ROGUE: Put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.',
-        '로그: 이번에는 4를 공격, 5를 연쇄, 1을 방어 칸에 놓아 주세요.':
-            'ROGUE: This time, put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.',
-        '로그: 이번 연습에서는 6을 공격, 4를 방어, 2를 증폭 칸에 놓아 주세요.':
-            'ROGUE: For this rehearsal, put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
+        '로그: 연습이니까 편하게 해요. R로 눈부터 읽어요.':
+            "ROGUE: It's practice, so relax. Read the dice with R first.",
+        '로그: 6은 공격, 4는 방어, 2는 증폭에 놔 봐요.':
+            'ROGUE: Try 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
+        '로그: 증폭 2가 공격이랑 방어에 1씩 붙어요. 이제 스페이스 눌러 봐요.':
+            'ROGUE: Amplify 2 adds 1 to attack and defense. Now press Space.',
+        '로그: 먼저 주사위부터 읽어요. R 누르면 이번 턴 눈이 나와요. 연습이라 6, 4, 2로 맞춰 놨어요.':
+            "ROGUE: Read the dice first. Press R to see this turn's faces. It's practice, so I set them to 6, 4 and 2.",
+        '로그: 이제 칸에 놓을 차례예요. 6은 공격, 4는 방어, 2는 증폭에 놔 주세요. 주사위 누르고 칸 누르면 돼요.':
+            'ROGUE: Now put them in the slots. 6 goes in ATTACK, 4 in DEFEND, 2 in AMPLIFY. Click a die, then a slot.',
+        '로그: 실행하기 전에 오른쪽 위 예측 한번 봐요. 증폭이 붙어서 공격 7, 방어 5예요. 적이 4로 때려도 다 막혀요. 다 봤으면 Enter 눌러 주세요.':
+            "ROGUE: Before you execute, check the forecast at the top right. With Amplify it's 7 attack and 5 defense, so the enemy's 4 is fully blocked. Press Enter once you've looked.",
+        '로그: 예측대로 되는지 직접 해 봐요. 스페이스 누르면 바로 실행돼요.':
+            'ROGUE: See if the forecast holds. Press Space and it runs right away.',
+        '로그: 적이 5 남았네요. 이번엔 연쇄를 써 볼게요. R로 새 눈부터 읽어요.':
+            "ROGUE: The enemy has 5 left. Let's try CHAIN this time. Read the new faces with R.",
+        '로그: 연쇄는 방금 한 공격을 한 번 더 이어서 쳐요. 4는 공격, 5는 연쇄, 1은 방어에 놔 주세요. 연쇄 눈이 클수록 더 세게 이어져요.':
+            'ROGUE: CHAIN follows up the attack you just made. 4 goes in ATTACK, 5 in CHAIN, 1 in DEFEND. The bigger the CHAIN face, the harder it follows up.',
+        '로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.':
+            'ROGUE: Attack 4 alone leaves 1. CHAIN adds 2 more and finishes it. Press Space.',
+        '로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.':
+            "ROGUE: Nice work. On a turn with no attack, CHAIN follows up your defense instead. Now let's go restore something.",
+        '로그: 두 번째 턴이에요. R로 다시 읽어요.':
+            'ROGUE: Second turn. Read again with R.',
+        '로그: 4는 공격, 5는 연쇄, 1은 방어에 놔 봐요.':
+            'ROGUE: Try 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.',
+        '로그: 이번엔 4는 공격, 5는 연쇄, 1은 방어예요.':
+            "ROGUE: This time it's 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.",
+        '로그: 이번엔 6은 공격, 4는 방어, 2는 증폭이에요.':
+            "ROGUE: This time it's 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.",
         '연결 복구': 'Connection restored',
         '관리자 경로': 'Administrator path',
-        '로그: 연결을 다시 잡았어요.': 'ROGUE: I have reconnected us.',
-        '로그: 복구한 볼륨은 그대로예요.': 'ROGUE: The restored volumes are still intact.',
+        '로그: 다시 연결됐어요.': 'ROGUE: I have reconnected us.',
+        '로그: 복구한 볼륨은 그대로 있어요.': 'ROGUE: The restored volumes are still intact.',
         '나는 전에 적어둔 이름을 확인한다.': 'I check the name I wrote down before.',
         '기록과 이번의 나는 계속 이어진다.': 'The records and the person I am now continue.',
         '남은 연결을 선택한다.': 'I choose a remaining connection.',
         '여섯 볼륨의 연결이 모두 복구되었다.': 'All six volume connections have been restored.',
         'ROGUE 안내창은 응답하지 않는다.': 'The ROGUE guide window does not respond.',
-        '남은 안내 기록: 실행은 당신이 결정하세요.': 'SAVED GUIDE: Execution is your decision.',
+        '남은 안내 기록: 실행은 직접 결정하세요.': 'SAVED GUIDE: Execution is your decision.',
         'A:\\ROGUE에서 관리자 제어가 계속된다.': 'Administrator control continues in A:\\ROGUE.',
         '나는 로그를 만나러 간다.': 'I go to find Rogue.',
     })

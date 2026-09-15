@@ -410,6 +410,16 @@ int StoryLineWho(int line);
 int StoryStageMs();   // 지금 장면 앞에 붙은 연출 길이. 없거나 연출을 껐으면 0
 int TutorialStepElapsed();
 int TutorialTypeMs();
+// 전투 사이드바의 로그 호출창. 실행 결과·보스 등장 같은 순간에만 짧은 한마디가 뜨고,
+// 창이 보인 첫 프레임부터 ROGUE_BARK_MS 뒤 사라진다. 말할 순간은 main.cpp가,
+// 문장과 그림은 화면(narrative_visuals.inl)이 정한다.
+enum RogueBark { ROGUE_BARK_NONE = 0, ROGUE_BARK_HURT, ROGUE_BARK_BLOCKED, ROGUE_BARK_BIG_HIT,
+    ROGUE_BARK_CRITICAL, ROGUE_BARK_BOSS, ROGUE_BARK_KILL, ROGUE_BARK_COUNT };
+#define ROGUE_BARK_MS 4200
+int RogueBarkKind();      // 지금 보이는 한마디. 없거나 아직 창이 가려져 있으면 NONE
+int RogueBarkElapsed();   // 그 한마디가 보이기 시작한 뒤 흐른 ms
+int RogueBarkTypeMs();
+RECT RogueCallRect();
 int UiFocusElapsed(); // ms on the current actionable hover target, -1 when absent
 // 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
 // 동안에도 리페인트를 계속 돌려야 노이즈가 멈추지 않는다.
@@ -570,14 +580,10 @@ RECT EndingRestartRect();
 RECT KeybButtonRect();
 RECT TurnTraceTickerRect();
 RECT TurnTracePanelRect();
-// 전투 정보 사이드바. 위에서부터 대상 → 예상 → 시스템 → 기록이고, 계산 재생
-// 중에는 예상부터 기록까지가 TurnTracePanelRect 하나로 합쳐진다. 전부 표시
-// 전용이라 클릭을 받지 않는다.
+// 전투 정보 사이드바. 실행 전 예상(FORECAST) 하나만 두고, 계산 재생 중에는
+// 사이드바 전체가 TurnTracePanelRect가 된다. 표시 전용이라 클릭을 받지 않는다.
 RECT CombatSidebarRect();
-RECT TargetInfoRect();
 RECT ForecastRect();
-RECT SystemInfoRect();
-RECT CombatHistoryRect();
 RECT PruneTsrRect(int i);
 
 int DieForSlotUI(int slot);

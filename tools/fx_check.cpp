@@ -485,15 +485,11 @@ static int CheckTransitionFrames(HDC dc, void* bits, int w, int h, const char* f
 // 사이드바는 판독 전용이라 어느 점도 클릭 대상을 돌려주지 않고, 각 조작의 한가운데는
 // 자기 hover id를 돌려준다 (그린 자리와 누르는 자리가 같다).
 static int CheckCombatLayout() {
-    RECT tmp, sidebar = CombatSidebarRect();
-    RECT panels[4] = {TargetInfoRect(), ForecastRect(), SystemInfoRect(), CombatHistoryRect()};
-    for (int i = 0; i < 4; ++i) {
-        if (!IntersectRect(&tmp, &panels[i], &sidebar) || !EqualRect(&tmp, &panels[i])) return 1;
-        for (int j = i + 1; j < 4; ++j) if (IntersectRect(&tmp, &panels[i], &panels[j])) return 2;
-    }
+    RECT tmp, sidebar = CombatSidebarRect(), forecast = ForecastRect();
+    if (!IntersectRect(&tmp, &forecast, &sidebar) || !EqualRect(&tmp, &forecast)) return 1;
     if (sidebar.right > BASE_WIDTH || sidebar.left <= COMBAT_MAIN_RIGHT || sidebar.bottom > BASE_HEIGHT) return 3;
     RECT trace = TurnTracePanelRect();
-    if (!IntersectRect(&tmp, &trace, &sidebar) || !EqualRect(&tmp, &trace) || IntersectRect(&tmp, &trace, &panels[0])) return 4;
+    if (!IntersectRect(&tmp, &trace, &sidebar) || !EqualRect(&tmp, &trace)) return 4;
     RECT controls[16]; int n = 0;
     for (int i = 0; i < 3; ++i) controls[n++] = EnemyRect(i);
     for (int i = 0; i < SLOT_COUNT; ++i) controls[n++] = SlotRect(i);

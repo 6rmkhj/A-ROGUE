@@ -52,11 +52,11 @@ def generate():
     array('NARRATIVE_INTRO_DATA', intro)
     single('STORY_INTRO_DATA', intro[0])
     single('STORY_RESUME_DATA', card('연결 복구', 'ROGUE / RECONNECT', 'SAME SESSION', [
-        '로그: 연결을 다시 잡았어요.', '로그: 복구한 볼륨은 그대로예요.',
+        '로그: 다시 연결됐어요.', '로그: 복구한 볼륨은 그대로 있어요.',
         '나는 전에 적어둔 이름을 확인한다.', '기록과 이번의 나는 계속 이어진다.', '남은 연결을 선택한다.']))
     single('STORY_RECOVERED_DATA', card('관리자 경로', 'A:\\ROGUE', '6 / 6 VERIFIED', [
         '여섯 볼륨의 연결이 모두 복구되었다.', 'ROGUE 안내창은 응답하지 않는다.',
-        '남은 안내 기록: 실행은 당신이 결정하세요.', 'A:\\ROGUE에서 관리자 제어가 계속된다.', '나는 로그를 만나러 간다.']))
+        '남은 안내 기록: 실행은 직접 결정하세요.', 'A:\\ROGUE에서 관리자 제어가 계속된다.', '나는 로그를 만나러 간다.']))
     bosses, shards = [], []
     for drive, letter in enumerate('CDENRX'):
         bosses.append(' {' + ',\n'.join(card(f'{letter}{floor+1} / 복구 기록',

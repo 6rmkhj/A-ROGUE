@@ -116,6 +116,8 @@ static int gFloorUsable[3];
 static int gPruneCount;
 static unsigned long gLawActivations[DRIVE_COUNT], gHotSwaps[DRIVE_COUNT], gPacketChains[DRIVE_COUNT], gContrabandUses[DRIVE_COUNT];
 static unsigned long gTurns[DRIVE_COUNT], gDamage[DRIVE_COUNT], gBlock[DRIVE_COUNT], gSlotChosen[DRIVE_COUNT][SLOT_COUNT];
+// 보스전이 몇 턴에 끝나는가. 층마다 합계·횟수와 2턴 이하로 끝난 수를 센다.
+static unsigned long gBossTurns[3], gBossFights[3], gBossFast[3];
 
 // 덱의 평균 출력. 위험 노드를 감당할 화력이 있는지 재는 대용치다.
 static int AverageFacePower(const GameState* game) {
@@ -178,7 +180,7 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
     game.driveChoices[0] = drive;   // 검사 대상 드라이브를 강제로 첫 카드에 놓는다
     *difficulty = game.driveDifficulty[0];
     int runChosen[DIR_NODE_COUNT] = {};
-    int steps = 0;
+    int steps = 0, bossTurns = 0;
     while (game.phase != PHASE_VICTORY && game.phase != PHASE_CHAPTER_CLEAR && game.phase != PHASE_GAMEOVER && steps++ < 600) {
         if (game.phase == PHASE_DRIVE_SELECT) {
             SelectDrive(&game, 0);
@@ -190,8 +192,18 @@ static int Run(int drive, unsigned int seed, int* combats, int* difficulty) {
             if (target >= 0) SelectEnemy(&game, target);
             AssignDice(&game);
             for (int d = 0; d < 3; ++d) if (game.dice[d].assignedSlot >= 0) ++gSlotChosen[drive][game.dice[d].assignedSlot];
+            int bossFight = game.encounter == 2, floor = game.floor < 0 ? 0 : (game.floor > 2 ? 2 : game.floor);
+            int wonBefore = game.combatsWon;
             EndTurn(&game);
             ++gTurns[drive]; gDamage[drive] += (unsigned long)game.lastTurnDamageDealt; gBlock[drive] += (unsigned long)game.lastTurnBlockGained;
+            if (bossFight) {
+                ++bossTurns;
+                if (game.combatsWon > wonBefore) {
+                    gBossTurns[floor] += (unsigned long)bossTurns; ++gBossFights[floor];
+                    if (bossTurns <= 2) ++gBossFast[floor];
+                    bossTurns = 0;
+                }
+            }
         } else if (game.phase == PHASE_REWARD) {
             // 체력이 절반 아래로 떨어지면 덱 강화를 한 번 포기하고 회복한다.
             if (game.playerHp * 100 < game.playerMaxHp * 55) RepairSector(&game);
@@ -312,6 +324,16 @@ int main() {
     }
     printf("  prune screens entered: %d\n", gPruneCount);
 
+    printf("BOSS fights (heuristic player)\n");
+    for (int f = 0; f < 3; ++f) {
+        if (!gBossFights[f]) { printf("  floor %d: no boss kills\n", f + 1); continue; }
+        printf("  floor %d: %lu kills, avg %.2f turns, %lu%% in two turns or fewer\n", f + 1,
+            gBossFights[f], (double)gBossTurns[f] / (double)gBossFights[f], gBossFast[f] * 100 / gBossFights[f]);
+        // 운 좋은 굴림 한 번에 보스가 무너지면 기믹이 한 바퀴도 돌지 못한다.
+        if (gBossFast[f] * 100 / gBossFights[f] > 10) {
+            printf("  GATE FAIL: floor %d bosses die in two turns too often\n", f + 1); failed = 1;
+        }
+    }
     printf("BALANCE: %d/%d total heuristic wins, %.2f average combats\n",
         totalWins, runsPerDrive * DRIVE_SELECTABLE_COUNT, totalAvg / DRIVE_SELECTABLE_COUNT);
     // 최종 볼륨은 일반 볼륨과 같은 줄자로 재되 목표 구간이 다르다. 클라이맥스라

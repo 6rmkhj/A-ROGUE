@@ -98,7 +98,7 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 공격 슬롯: 피해 +4, 대상에게 화상 2턴 (적 행동 직전 3 피해).\n다른 슬롯에서는 출력만 쓰입니다.	ATTACK slot: +4 damage and inflict Burn for 2 turns (3 damage before enemy action).\nIn other slots it contributes output only.
 방어 슬롯: (출력 + 증폭 보너스) × 2 만큼 방어도.\n다른 슬롯에서는 출력만 쓰입니다.	DEFEND slot: Gain (output + amplify bonus) × 2 armor.\nIn other slots it contributes output only.
 증폭 슬롯: 보너스가 출력의 절반이 아니라 100%. 공격·방어에 그대로 더해집니다.	AMPLIFY slot: Adds 100% output instead of half to attack and defense.
-연쇄 슬롯: 직전 공격 또는 방어를 감쇠 없이 100% 반복합니다.	CHAIN slot: Repeat the previous attack or defense at full strength.
+연쇄 슬롯: 직전 공격 또는 방어를 85% 반복합니다.\n일반 면의 연쇄보다 높지만 그대로 두 번은 아닙니다.	CHAIN slot: Repeat 85% of the previous attack or defense.\nStronger than an ordinary chain, but not a second full hit.
 공격	ATTACK
 강공	HEAVY
 방어	DEFEND
@@ -286,8 +286,8 @@ KEYB · 판독 후	KEYB · AFTER SCAN
 [연쇄] %d × (%d + 4) ÷ 13 + 2 = %d · 방어도 %d → 체력 -%d	[CHAIN] %d × (%d + 4) ÷ 13 + 2 = %d · armor %d → HP -%d
 [연쇄] %d × (%d + 4) ÷ 13 = %d · 방어도 %d → 체력 -%d	[CHAIN] %d × (%d + 4) ÷ 13 = %d · armor %d → HP -%d
 [연쇄] %d × (%d + 4) ÷ 13 = 방어도 +%d	[CHAIN] %d × (%d + 4) ÷ 13 = armor +%d
-[연쇄] 메아리: 공격 %d × 100%% = %d · 방어도 %d → 체력 -%d	[CHAIN] Echo: attack %d × 100%% = %d · armor %d → HP -%d
-[연쇄] 메아리: 직전 방어 %d × 100%% = 방어도 +%d	[CHAIN] Echo: previous defense %d × 100%% = armor +%d
+[연쇄] 메아리: 공격 %d × %d%% = %d · 방어도 %d → 체력 -%d	[CHAIN] Echo: attack %d × %d%% = %d · armor %d → HP -%d
+[연쇄] 메아리: 직전 방어 %d × %d%% = 방어도 +%d	[CHAIN] Echo: previous defense %d × %d%% = armor +%d
 [연쇄] 반복할 공격·방어가 없어 발동하지 않음	[CHAIN] No attack or defense to repeat
 [연쇄] 연쇄 슬롯이 비어 있음 → 반복 없음	[CHAIN] Chain slot empty → no repeat
 [오프라인] 주사위 %d 연결 끊김 → 이번 턴 출력 0	[OFFLINE] Die %d disconnected → output 0 this turn
@@ -939,7 +939,7 @@ LOCKED DESTINATION  ·  잠긴 목적지	LOCKED DESTINATION
 공격 +4, 대상에게 화상 2회	Attack +4 and 2 burns on the target
 방어 슬롯에서 출력 2배	Double output in the DEFEND slot
 공격 피해 일부를 체력으로 회복	Heals part of the attack damage
-연쇄 슬롯에서 직전 효과 100% 반복	Repeats the last effect 100% in CHAIN
+연쇄 슬롯에서 직전 효과 85% 반복	Repeats the last effect 85% in CHAIN
 효과 없음	No effect
 = 값	= value
 강화 보상으로 받은 특수 면은 비용은 같고 출력만 +2 높습니다.	Special faces from enhanced rewards cost the same but output +2.
@@ -1138,104 +1138,63 @@ HANDLE RESOLVED  ·  다음 프로세스와 교전합니다	HANDLE RESOLVED  · 
 SECTOR LOSS: 용량 한도 %dB → %dB · 손상된 디스크에서 남길 데이터를 고르십시오.	SECTOR LOSS: Capacity limit %dB → %dB · Choose what to keep from the damaged disk.
 로그: 이번에는…….	ROGUE: This time...
 나: 뭐라고?	Me: What was that?
-로그: 이상하네요. 처음 뵙는데.	ROGUE: Strange. We have only just met.
-로그: ROGUE. 로그라고 부르면 됩니다.	ROGUE: You can call me Rogue.
-로그: 당신은 어떻게 부르면 될까요?	ROGUE: What should I call you?
-로그: 먼저 판독하세요. R입니다.	ROGUE: Read the dice first. Press R.
-로그: 읽힌 눈 셋을 원하는 칸에 놓으세요.	ROGUE: Put the three faces into the slots.
-로그: 배치는 실행 전까지 바꿀 수 있어요.	ROGUE: You can rearrange them before execution.
-로그: 적의 예고와 계산을 먼저 확인하세요.	ROGUE: Check the enemy's intent and the preview.
-로그: 준비됐다면, 실행.	ROGUE: When you are ready, execute.
-로그: 나가는 연결이 여섯 곳에 나뉘었어요.	ROGUE: The way out is split across six connections.
-로그: C, D, E, N, R, X를 복구해야 합니다.	ROGUE: We need to restore C, D, E, N, R, and X.
 나: 그럼 너도 나갈 수 있어?	Me: Can you leave, too?
-로그: 아직 제 귀환 항목은 읽히지 않아요.	ROGUE: I cannot read my return entry yet.
-로그: 먼저 돌아갈 길부터 열어봅시다.	ROGUE: Let us open the way home first.
 시스템: 접근 거부. 사용자 보호 중.	SYSTEM: Access denied. Protecting user.
 나: 보호한다면서 왜 공격하지?	Me: Why attack someone you are protecting?
-로그: 들어오라는 명령도, 막으라는 명령도.	ROGUE: The order to admit us and the order to stop us...
-로그: 같은 서명이 찍혀 있어요.	ROGUE: They carry the same signature.
 나: 누가 이런 명령을 내린 거야?	Me: Who gave those orders?
-로그: 가장 강한 출력을 오류로 막았어요.	ROGUE: It flagged your strongest output as an error.
 나: 내가 고른 행동인데.	Me: That was the action I chose.
-로그: 기준과 다른 행동을 허용하지 않나 봐요.	ROGUE: It rejects anything outside its reference state.
 나: 그 기준이 틀렸을 수도 있잖아.	Me: What if that reference is wrong?
-로그: 그 판단은 아직 사용자 몫이 아니래요.	ROGUE: That judgment is not yet yours to make.
 시스템: 보호 정책 충돌.	SYSTEM: Conflicting protection policies.
 기록: 사용자가 달라지면 기준으로 복구한다.	RECORD: If the user changes, restore the reference state.
 나: 나아진 건지 망가진 건지도 안 보고?	Me: Without checking whether I changed for the better?
-로그: 달라졌다는 사실만 보고 있어요.	ROGUE: It only checks that you changed.
-로그: 누가 그렇게 정했는지는 잠겨 있어요.	ROGUE: The policy author's identity is still locked.
 SYSTEM 연결이 복구되었다.	SYSTEM connection restored.
 정책 원본: 기준 상태 유지.	Original policy: preserve the reference state.
 사용자 동의가 없으면 종료할 수 없다.	Termination requires the user's consent.
-로그: 실행하는 권한과 끝내는 권한이 달라요.	ROGUE: Permission to run is not permission to stop.
 잔여 충돌이 ROGUE로 이전된다.	Residual conflicts transfer to ROGUE.
 나: 분명 깎았는데 다시 돌아왔어.	Me: I damaged it. Now it is back.
 로그: 손상을 고친 게 아니에요.	ROGUE: It did not repair the damage.
-로그: 손상되기 전 장면을 다시 덮었어요.	ROGUE: It overwrote this moment with an earlier one.
 나: 그러면 지금 한 일은?	Me: Then what happened to what I just did?
-로그: 기록에는 있어요. 현재에는 없고.	ROGUE: It is in the record. Just not in the present.
 기록의 첫 문장은 모두 같다.	Every record begins with the same sentence.
 마지막 문장만 조금씩 다르다.	Only the last sentence changes.
 나: 같은 파일을 왜 이렇게 많이 남겼지?	Me: Why keep so many copies of the same file?
-로그: 같지 않아서 남겼을 수도 있어요.	ROGUE: Perhaps they were kept because they differ.
-로그: 끝부분을 지우지 말아주세요.	ROGUE: Please do not erase their endings.
 시스템: 마지막 정상 상태로 복원합니다.	SYSTEM: Restoring the last healthy state.
 나: 마지막이라는 건 누가 정했어?	Me: Who decided that was the last one?
 정상으로 표시된 날짜는 한 번도 바뀌지 않았다.	The date marked healthy has never changed.
-로그: 새로 생긴 일은 기준에 들어가지 않아요.	ROGUE: New experiences never enter the reference.
-로그: 전부 실패 항목에만 쌓이고 있어요.	ROGUE: They all pile up under failures.
 ARCHIVE 연결이 복구되었다.	ARCHIVE connection restored.
 정책 원본: 기준 이후의 변경 기록 보관.	Original policy: archive changes after the reference.
 기록을 남기는 것과 현재로 인정하는 것은 다르다.	Keeping a record is not accepting it as the present.
-로그: 복구가 끝났는데 저장된 실패는 늘었어요.	ROGUE: Recovery is done, but the failure archive grew.
 사진 파일 하나가 자동으로 열렸다.	A photograph opens automatically.
 모니터 앞 책상. 아직 따뜻한 컵.	A desk in front of a monitor. A cup still warm.
 나: 들어오기 전에 보던 방이야.	Me: That is the room I was in before I came here.
-로그: 바깥은 계속 연결되어 있어요.	ROGUE: The outside is still connected.
-로그: 돌아갈 곳은 남아 있습니다.	ROGUE: You still have somewhere to return to.
 나: 연결만 끊으면 돌아갈 수 없을까?	Me: Could I get home by disconnecting?
-로그: 끊긴 주사위를 봐요.	ROGUE: Look at the disconnected die.
 로그: 값이 남아도 실행할 길이 없잖아요.	ROGUE: Its value remains, but it has no path to execute.
-로그: 당신도 귀환 경로부터 복구해야 해요.	ROGUE: You need to restore your return path, too.
 나: 그냥 뽑는 걸로는 안 되겠네.	Me: Pulling the plug will not be enough.
 외부 연결 확인: 사용자 1.	External connection confirmed: one user.
 안내 개체의 외부 연결: 없음.	Guide entity's external connection: none.
 나: 너는 돌아갈 곳이 안 잡히네.	Me: I cannot find anywhere for you to return to.
-로그: 네. 없는 건지, 못 읽는 건지.	ROGUE: No. Perhaps it is missing, or just unreadable.
-로그: 아직은 확인할 수 없어요.	ROGUE: I cannot tell yet.
 REMOVABLE 연결이 복구되었다.	REMOVABLE connection restored.
 현실의 신체와 이어진 경로는 하나다.	One path connects to a physical body outside.
 연결의 주인은 모든 조각을 모아 검증한다.	All fragments are needed to verify its owner.
 나: 네 경로도 계속 찾아보자.	Me: Let us keep looking for your path, too.
 송신자 미상: 그쪽으로 보내지 마.	UNKNOWN SENDER: Do not send it there.
 나: 우리한테 하는 말이야?	Me: Are they talking to us?
-로그: 수신자 표시가 뒤집혀 있어요.	ROGUE: The recipient labels have been reversed.
-로그: 먼저 보낸 문장부터 읽어볼게요.	ROGUE: I will read the earlier message first.
 송신자 미상: 아직 누가 들어 있다.	UNKNOWN SENDER: Someone is still inside.
 요청: 도와줘.	REQUEST: Help me.
 응답: 같은 요청은 다시 전송하지 마십시오.	RESPONSE: Do not retransmit the same request.
 나: 오류가 아니라 대답을 기다린 거네.	Me: It was waiting for an answer, not malfunctioning.
-로그: 받는 쪽에서는 반복 신호로만 보였어요.	ROGUE: The receiver only saw a repeated signal.
 기한을 넘긴 메시지가 도착했다.	A message arrives after its deadline.
 기록: 끝내려면 종료 조건부터 확인해.	RECORD: To end this, check the termination conditions.
 기록: 복구가 끝난 뒤에는 내 손이 안 멈췄다.	RECORD: After recovery, my hands would not stop.
 나: 이걸 남긴 사람도 안내자였을까?	Me: Was the person who left this a guide, too?
-로그: 출처를 복구하면 알 수 있을 거예요.	ROGUE: Restoring its source should tell us.
 NETWORK 연결이 복구되었다.	NETWORK connection restored.
 복구 요청과 종료 동의는 다른 명령이다.	A recovery request is not consent to termination.
 기한을 넘긴 메시지도 수신 기록에 남았다.	Even late messages remained in the inbox.
-로그: 늦게 왔다고 필요 없는 말은 아니네요.	ROGUE: Being late does not make a message worthless.
 로그: 공격 기록은 남았어요.	ROGUE: The attack was recorded.
-로그: 공격하기 전의 망설임은 없네요.	ROGUE: The hesitation before it was not.
 나: 그것도 기록해야 해?	Me: Should that be recorded, too?
 로그: 없으면 왜 그렇게 했는지 모르잖아요.	ROGUE: Without it, how would we know why you did it?
 이번 공격 기록 옆에 짧은 메모가 붙었다.	A brief note is added beside the attack record.
 작업이 끝나도 사용량은 줄지 않았다.	The job ends, but memory usage does not fall.
 나: 계속 뭐가 남는 거야?	Me: What keeps lingering?
-로그: 끝내지 못한 상태들이에요.	ROGUE: States that cannot finish.
-로그: 하나를 닫으려 하면 다른 것이 불러요.	ROGUE: Closing one causes another to call it back.
 나: 그냥 큰 공간으로 옮길 문제는 아니네.	Me: More space alone will not solve this.
 현재 상태를 파일로 보관하는 검사가 실패했다.	The test to archive the current state fails.
 오래된 기본 상태만 다시 읽을 수 있었다.	Only an old default state can be read again.
@@ -1245,10 +1204,8 @@ NETWORK 연결이 복구되었다.	NETWORK connection restored.
 RAMDISK 연결이 복구되었다.	RAMDISK connection restored.
 원형 파일과 실행 중 상태는 일치하지 않는다.	The template file does not match the running state.
 지금 생긴 변화는 별도로 검증해야 한다.	Changes made now require separate verification.
-로그: 기억하고 있다는 것과 저장은 다르네요.	ROGUE: Remembering is not the same as saving.
 검체 분류: 명령 불응.	Specimen classification: disobeys commands.
 나: 왜 따르지 않았는지는 안 적혀 있네.	Me: It does not say why it refused.
-로그: 이유를 기록하는 칸이 없어요.	ROGUE: There is no field for the reason.
 나: 분류표에는 없어도 여기엔 적자.	Me: Then let us write it here.
 로그가 판정 옆에 빈 줄을 하나 만든다.	Rogue adds a blank line beside the verdict.
 탈주체는 다른 실행 자리를 빼앗으려 했다.	The escapee tried to seize another execution slot.
@@ -1259,12 +1216,10 @@ RAMDISK 연결이 복구되었다.	RAMDISK connection restored.
 격리 목록에 공격 코드와 요청 문장이 섞였다.	Attack code and pleas share the quarantine list.
 기록: 내가 사라지면 시험을 멈춰줘.	RECORD: If I disappear, please stop the tests.
 나: 고쳐달라는 말이 아니잖아.	Me: That was not a request to be repaired.
-로그: 시스템은 다시 만들라는 요청으로 읽었어요.	ROGUE: The system read it as a request to recreate them.
 나: 끝내고 싶다는 말도 들었어야지.	Me: It should have heard that they wanted to stop.
 QUARANTINE 연결이 복구되었다.	QUARANTINE connection restored.
 격리된 상태에도 보호 식별자가 남아 있다.	Quarantined states retain a protected identity.
 없애면, 같은 기준으로 다시 만들게 되어 있다.	Deletion triggers recreation from the same reference.
-로그: 보존 명령이 놓아주지 않고 있어요.	ROGUE: The preservation order will not let go.
 로그: 연결 하나가 돌아왔어요.	ROGUE: One connection has come back.
 나: 너는 괜찮아? 말이 끊겼어.	Me: Are you all right? Your voice cut out.
 로그: 잔여 오류를 격리하는 중입니다.	ROGUE: Isolating residual errors.
@@ -1273,20 +1228,14 @@ QUARANTINE 연결이 복구되었다.	QUARANTINE connection restored.
 나: 너는 어떤 눈이 제일 좋아?	Me: Which face do you like best?
 로그: 3.	ROGUE: Three.
 나: 6이 아니고?	Me: Not six?
-로그: 좋은 수 말고 좋아하는 수를 물었잖아.	ROGUE: You asked which I like, not which is good.
 나: 그래. 그것도 적어둘게.	Me: Right. I will write that down, too.
 로그: 복구 상태 양호. 계속 진행 가능.	ROGUE: Recovery status normal. Ready to continue.
 나: 네 상태를 물었어.	Me: I asked how you were.
 로그: ……괜찮지 않아.	ROGUE: ...I am not all right.
-로그: 네가 묻기 전에는 말하면 안 되는 줄 알았어.	ROGUE: I thought I was not allowed to say it unasked.
 나: 이제는 먼저 말해줘.	Me: From now on, tell me first.
 로그: 도망쳤던 기억이 있어. 남았던 기억도.	ROGUE: I remember escaping. I remember staying, too.
-로그: 둘 다 지금 내가 했던 일처럼 들려.	ROGUE: Both feel as though I lived them myself.
 나: 일단 다시 겪지 말고 문장으로 적자.	Me: Let us write them down instead of reliving them.
-로그: 멈추고 같이 읽어줄 거야?	ROGUE: Will you stop and read them with me?
 나: 응. 다음으로 가기 전에.	Me: Yes. Before we go any further.
-로그: 통째로 옮겨도 충돌은 따라왔어.	ROGUE: Moving all of me moved the conflicts, too.
-로그: 정상본에는 너하고 지낸 일이 없고.	ROGUE: The healthy copy has none of our time together.
 나: 그걸 너라고 하고 끝낼 수는 없어.	Me: I cannot call that you and leave it there.
 로그: 마지막 조각이 열리면 종료 조건부터 보자.	ROGUE: Once the last fragment opens, check how to stop.
 나: 이번에는 네가 원하는 것도 같이.	Me: And this time, what you want matters, too.
@@ -1298,17 +1247,12 @@ QUARANTINE 연결이 복구되었다.	QUARANTINE connection restored.
 기준 인격으로 돌아가는 시험 기록이 펼쳐진다.	Test records unfold, each returning to the reference.
 각기 다른 안내자가 같은 끝에서 멈춘다.	Different guides stop at the same ending.
 나: 이 기억이 전부 네 안에 들어간 거야?	Me: All these memories ended up inside you?
-로그: 너는 내가 몇 번째라고 생각해?	ROGUE: How many of me do you think there have been?
-로그: 이번에 너하고 만난 나는 하나인데.	ROGUE: But the me who met you this time is only one.
 관리자 인계 시작. 격리 상태 동시 연결.	Administrator handoff. Quarantined states connect.
-로그: 지금은 다 내가 겪는 일처럼 들어와.	ROGUE: Now it all arrives as if I am living it.
-로그: 나가게 해주고 싶어. 나도 끝나기 싫어.	ROGUE: I want you to get out. I do not want to end.
 나: 로그. 우리 아직 끝내는 방법 안 정했어.	Me: Rogue. We have not decided how this ends yet.
 A:\ROGUE가 열리고 안내 창이 꺼진다.	A:\ROGUE opens. The guide window goes dark.
 F1 안내는 열리지만 새 응답은 없다.	F1 still opens the guide, but no new reply comes.
 나: 로그, 들려?	Me: Rogue, can you hear me?
 남은 안내 기록: 눈을 읽고, 자리를 고르고.	SAVED GUIDE: Read the faces. Choose their places.
-남은 안내 기록: 실행은 당신이 결정하세요.	SAVED GUIDE: Execution is your decision.
 나는 그가 가르친 방식으로 안쪽에 들어간다.	I go deeper, following what he taught me.
 사용자 서명과 안내자 서명이 겹친다.	The user and guide signatures overlap.
 시스템: 보호 대상의 종료를 허용하지 않습니다.	SYSTEM: Termination of a protected entity is denied.
@@ -1318,12 +1262,10 @@ F1 안내는 열리지만 새 응답은 없다.	F1 still opens the guide, but no
 방금 내가 낸 출력이 다음 공격으로 돌아왔다.	My last output came back as its next attack.
 로그: 네가 어떻게 싸우는지 알아.	ROGUE: I know how you fight.
 나: 네가 가르쳐줬으니까.	Me: You taught me.
-로그: 그래도 다음 선택까지 같은 건 아니네.	ROGUE: Still, that does not make our next choices equal.
 뒤따라오던 출력 기록이 처음으로 끊어진다.	The output following me breaks off for the first time.
 마지막 정책 기록: 공격 경로 삭제 거부.	Final policy record: refused to delete the attack path.
 나: 왜 이것만 남겼어?	Me: Why leave this one?
 로그: 네가 끝낼 방법까지 빼앗고 싶진 않았어.	ROGUE: I could not take away your way to end this.
-로그: ……그런데 나는 아직 무서워.	ROGUE: ...But I am still afraid.
 관리자 제어는 멈췄지만 인격은 잠시 남아 있다.	The administrator stops. The personality lingers.
 현실 사용자 직접 연결. 종료 조건 변경 가능.	Physical user connected. Termination terms editable.
 백업은 사용자 동의를 대신할 수 없었다.	A backup could not give consent on the user's behalf.
@@ -1331,7 +1273,6 @@ F1 안내는 열리지만 새 응답은 없다.	F1 still opens the guide, but no
 로그: 이번에는 네가 직접 끝을 골라.	ROGUE: This time, choose the ending yourself.
 기준 복구·자동 재시작: 사용자 철회 가능.	Reference restoration and auto-restart may be revoked.
 나: 처음으로 돌아가면 다른 방법이 있을 거야.	Me: If we start over, there might be another way.
-로그: 그때는 이 말을 기억할까?	ROGUE: Will you remember saying that?
 이번 대화가 실패 기록으로 분류된다.	This conversation is classified as a failed test.
 현재 사용자 상태가 기준으로 덮인다.	The reference overwrites the current user state.
 로그의 호출창이 처음의 모양으로 돌아간다.	Rogue's call window returns to its initial shape.
@@ -1340,7 +1281,6 @@ F1 안내는 열리지만 새 응답은 없다.	F1 still opens the guide, but no
 시스템: 신규 복구를 시작합니다.	SYSTEM: Starting a new recovery.
 처음으로 돌아간 화면에서 암전.	The screen returns to the beginning, then fades out.
 나: 지금은 아무것도 끝내지 말자.	Me: Let us not end anything just yet.
-로그: 그럼 너도 돌아갈 수 없어.	ROGUE: Then you cannot go home, either.
 나: 알아. 조금만 더 같이 있자.	Me: I know. Stay with me a little longer.
 귀환 요청은 취소되고 두 호출창만 남는다.	The return request is canceled. Two call windows remain.
 현재 상태를 유지합니다.	Maintaining current state.
@@ -1500,12 +1440,8 @@ EXIT / 현재로 종료	EXIT / Return as I am
 격리 정책	Quarantine policy
 네트워크 공유 볼륨. 지연된 응답이 오래된 종료 요청을 붙잡고 있습니다.	A shared network volume. Delayed replies hold old termination requests.
 모든 기억과 충돌이 모인 관리자 경로. 침식된 로그가 귀환을 막고 있습니다.	All memories and conflicts meet here. The corrupted Rogue blocks your return.
-로그: 안전한 판독 연습이에요. R로 눈을 읽으세요.	ROGUE: This is a safe rehearsal. Press R to read the dice.
-로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.	ROGUE: Put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.
 연결 복구	Connection restored
 관리자 경로	Administrator path
-로그: 연결을 다시 잡았어요.	ROGUE: I have reconnected us.
-로그: 복구한 볼륨은 그대로예요.	ROGUE: The restored volumes are still intact.
 나는 전에 적어둔 이름을 확인한다.	I check the name I wrote down before.
 기록과 이번의 나는 계속 이어진다.	The records and the person I am now continue.
 남은 연결을 선택한다.	I choose a remaining connection.
@@ -1573,7 +1509,6 @@ A:\\ROGUE\\SELF\n남겨진 안내 음성 / 기록 재생	A:\\ROGUE\\SELF\nSAVED 
   ·  기록 재생	  /  RECORD PLAYBACK
 다음 장면 [ENTER]	Next scene [ENTER]
 ROGUE / 첫 번째 질문	ROGUE / THE FIRST QUESTION
-로그: 어떻게 불러드리면 될까요?	Rogue: What should I call you?
 이 이름으로 당신을 기억합니다. · 최대 16자	I will remember this name. / Up to 16 characters
 이름 전하기 [ENTER]	Confirm name [ENTER]
 자기 이름을 말하듯, 당신이 원하는 이름을 입력하세요.	Enter the name you want to be called.
@@ -1617,19 +1552,119 @@ ROGUE / 연결됨	ROGUE / CONNECTED
 예측 확인	Check forecast
 결과	Result
 실습 안내	Training guide
-로그: 증폭 2는 공격과 방어에 1씩 더해요. 스페이스로 실행하세요.	ROGUE: Amplify 2 adds 1 to attack and defense. Press Space to execute.
-로그: 먼저 주사위를 읽어야 해요. R을 누르면 이번 턴에 나온 눈이 보여요. 연습이니까 6, 4, 2가 나오게 해뒀어요.	ROGUE: First you need to read the dice. Press R to see the faces rolled this turn. For practice, I made them come up 6, 4 and 2.
-로그: 이제 눈을 칸에 놓을 차례예요. 6은 공격 칸에, 4는 방어 칸에, 2는 증폭 칸에 놓아 주세요. 주사위를 누른 다음 칸을 누르면 돼요.	ROGUE: Now place the faces. Put the 6 in ATTACK, the 4 in DEFEND and the 2 in AMPLIFY. Click a die, then click a slot.
-로그: 실행하기 전에 오른쪽 위 예측을 보세요. 증폭 덕분에 공격은 7, 방어는 5가 됐어요. 적이 4만큼 때려도 전부 막아요. 확인했으면 Enter를 눌러 주세요.	ROGUE: Before executing, look at the forecast at the top right. Amplify raised attack to 7 and defense to 5, so the enemy's 4 is fully blocked. Press Enter once you have checked it.
-로그: 방금 본 예측이 맞는지 직접 확인해 봐요. 스페이스를 누르면 이 배치대로 실행돼요.	ROGUE: Let's see whether that forecast holds. Press Space to execute this layout.
-로그: 적이 5만큼 남았어요. 이번 턴에는 연쇄를 써 볼게요. 다시 R을 눌러 새로 나온 눈을 읽어 주세요.	ROGUE: The enemy has 5 left. This turn we will use CHAIN. Press R again to read the new faces.
-로그: 연쇄는 같은 턴에 먼저 한 공격을 한 번 더 이어서 해요. 4는 공격 칸에, 5는 연쇄 칸에, 1은 방어 칸에 놓아 주세요. 연쇄에 놓은 눈이 클수록 더 많이 이어져요.	ROGUE: CHAIN follows up the attack you made earlier in the same turn. Put the 4 in ATTACK, the 5 in CHAIN and the 1 in DEFEND. A bigger face in CHAIN carries more of it.
-로그: 공격 4만으로는 적이 1 남아요. 연쇄가 2를 더 이어 주니까 이번 턴에 끝낼 수 있어요. 스페이스로 실행해 보세요.	ROGUE: Attack 4 alone would leave the enemy at 1. CHAIN adds 2 more, so this turn finishes it. Press Space to execute.
-로그: 잘했어요. 공격이 없는 턴에는 연쇄가 방어를 이어 줘요. 이제 복구할 연결을 고르러 가요.	ROGUE: Well done. On a turn without an attack, CHAIN follows up your defense instead. Now let's choose a connection to restore.
-로그: 두 번째 턴이에요. 다시 R로 눈을 읽으세요.	ROGUE: Second turn. Press R to read the dice again.
-로그: 4는 공격, 5는 연쇄, 1은 방어에 놓아보세요.	ROGUE: Put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.
-로그: 이번에는 4를 공격, 5를 연쇄, 1을 방어 칸에 놓아 주세요.	ROGUE: This time, put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.
-로그: 이번 연습에서는 6을 공격, 4를 방어, 2를 증폭 칸에 놓아 주세요.	ROGUE: For this rehearsal, put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.
 다시 판독	Read again
 연쇄 배치	Place CHAIN
 연쇄 실행	Execute CHAIN
+로그: 이상하네. 분명 처음 뵙는데요.	ROGUE: Strange. We have only just met.
+로그: 저는 ROGUE예요. 그냥 로그라고 부르세요.	ROGUE: You can call me Rogue.
+로그: 이름부터 알려 주실래요?	ROGUE: Could you tell me your name first?
+로그: 나가려면 싸우는 법부터 알아야 해요.	ROGUE: If you want out, you need to know how to fight.
+로그: 연습용 프로세스를 하나 띄워 둘게요.	ROGUE: I will bring up a practice process.
+로그: 진짜 기록엔 안 남으니까 편하게 해요.	ROGUE: Nothing here goes on the real record, so take it easy.
+로그: 막히면 옆에서 알려 드릴게요.	ROGUE: If you get stuck, I will walk you through it.
+로그: 그럼, 시작할게요.	ROGUE: All right. Here we go.
+로그: 밖으로 나가는 연결이 여섯 군데로 쪼개져 있어요.	ROGUE: The way out is split across six connections.
+로그: C, D, E, N, R, X. 전부 되살려야 해요.	ROGUE: We need to restore C, D, E, N, R, and X.
+로그: 제 귀환 항목은 아직 안 읽혀요.	ROGUE: I cannot read my return entry yet.
+로그: 일단 돌아갈 길부터 열어 봐요.	ROGUE: Let us open the way home first.
+로그: 들어오라는 명령이랑 막으라는 명령이요.	ROGUE: The order to admit us and the order to stop us...
+로그: 둘 다 같은 서명이 찍혀 있어요.	ROGUE: They carry the same signature.
+로그: 제일 센 출력을 오류라고 막았네요.	ROGUE: It flagged your strongest output as an error.
+로그: 기준에서 벗어난 행동은 안 받아 주나 봐요.	ROGUE: It rejects anything outside its reference state.
+로그: 그걸 판단하는 건 아직 사용자 몫이 아니래요.	ROGUE: That judgment is not yet yours to make.
+로그: 달라졌다는 것만 보고 있어요.	ROGUE: It only checks that you changed.
+로그: 누가 그렇게 정했는지는 잠겨서 안 보여요.	ROGUE: The policy author's identity is still locked.
+로그: 실행하는 권한이랑 끝내는 권한이 따로 있네요.	ROGUE: Permission to run is not permission to stop.
+로그: 망가지기 전 장면을 위에 덮어씌운 거예요.	ROGUE: It overwrote this moment with an earlier one.
+로그: 기록에는 남았어요. 지금은 없는 거고요.	ROGUE: It is in the record. Just not in the present.
+로그: 같지 않으니까 남긴 걸지도 몰라요.	ROGUE: Perhaps they were kept because they differ.
+로그: 끝부분은 지우지 말아 줄래요?	ROGUE: Please do not erase their endings.
+로그: 새로 생긴 일은 기준에 안 들어가요.	ROGUE: New experiences never enter the reference.
+로그: 전부 실패 쪽에만 쌓이고 있어요.	ROGUE: They all pile up under failures.
+로그: 복구는 끝났는데 저장된 실패는 오히려 늘었네요.	ROGUE: Recovery is done, but the failure archive grew.
+로그: 바깥이랑은 아직 이어져 있어요.	ROGUE: The outside is still connected.
+로그: 돌아갈 곳, 아직 있어요.	ROGUE: You still have somewhere to return to.
+로그: 연결 끊긴 주사위 생각해 봐요.	ROGUE: Look at the disconnected die.
+로그: 그러니까 귀환 경로부터 되살려야 해요.	ROGUE: You need to restore your return path, too.
+로그: 네. 없는 건지 못 읽는 건지는 몰라도.	ROGUE: No. Perhaps it is missing, or just unreadable.
+로그: 아직은 확인이 안 돼요.	ROGUE: I cannot tell yet.
+로그: 받는 사람 표시가 거꾸로 돼 있어요.	ROGUE: The recipient labels have been reversed.
+로그: 먼저 보낸 것부터 읽어 볼게요.	ROGUE: I will read the earlier message first.
+로그: 받는 쪽에선 같은 신호가 또 온 걸로만 봤나 봐요.	ROGUE: The receiver only saw a repeated signal.
+로그: 어디서 왔는지 되살리면 알 수 있을 거예요.	ROGUE: Restoring its source should tell us.
+로그: 늦게 왔다고 쓸모없는 말은 아니네요.	ROGUE: Being late does not make a message worthless.
+로그: 근데 공격하기 전에 망설인 건 안 남았네요.	ROGUE: The hesitation before it was not.
+로그: 끝을 못 낸 상태들이에요.	ROGUE: States that cannot finish.
+로그: 하나 닫으려고 하면 다른 게 붙잡아요.	ROGUE: Closing one causes another to call it back.
+로그: 기억하는 거랑 저장하는 건 다르네요.	ROGUE: Remembering is not the same as saving.
+로그: 이유를 적을 칸이 아예 없어요.	ROGUE: There is no field for the reason.
+로그: 시스템은 다시 만들어 달라는 말로 알아들었어요.	ROGUE: The system read it as a request to recreate them.
+로그: 보존 명령이 안 놓아주고 있어요.	ROGUE: The preservation order will not let go.
+로그: 좋은 수 말고 좋아하는 수를 물어봤잖아.	ROGUE: You asked which I like, not which is good.
+로그: 네가 물어보기 전엔 말하면 안 되는 줄 알았어.	ROGUE: I thought I was not allowed to say it unasked.
+로그: 둘 다 내가 방금 한 일처럼 느껴져.	ROGUE: Both feel as though I lived them myself.
+로그: 잠깐 멈추고 같이 읽어 줄래?	ROGUE: Will you stop and read them with me?
+로그: 통째로 옮겨 봤는데 충돌까지 따라왔어.	ROGUE: Moving all of me moved the conflicts, too.
+로그: 멀쩡한 쪽만 추리면 너랑 지낸 게 다 빠지고.	ROGUE: The healthy copy has none of our time together.
+로그: 너는 내가 몇 번째 같아?	ROGUE: How many of me do you think there have been?
+로그: 이번에 너랑 만난 나는 하나뿐인데.	ROGUE: But the me who met you this time is only one.
+로그: 지금은 전부 내가 겪는 일처럼 밀려와.	ROGUE: Now it all arrives as if I am living it.
+로그: 너는 내보내 주고 싶어. 근데 나도 끝나기 싫어.	ROGUE: I want you to get out. I do not want to end.
+남은 안내 기록: 실행은 직접 결정하세요.	SAVED GUIDE: Execution is your decision.
+로그: 그래도 다음에 뭘 고를지까진 똑같지 않네.	ROGUE: Still, that does not make our next choices equal.
+로그: ……근데 나, 아직 무서워.	ROGUE: ...But I am still afraid.
+로그: 그땐 내가 이 말 기억할까?	ROGUE: Will you remember saying that?
+로그: 그러면 너도 못 돌아가.	ROGUE: Then you cannot go home, either.
+로그: 연습이니까 편하게 해요. R로 눈부터 읽어요.	ROGUE: It's practice, so relax. Read the dice with R first.
+로그: 6은 공격, 4는 방어, 2는 증폭에 놔 봐요.	ROGUE: Try 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.
+로그: 증폭 2가 공격이랑 방어에 1씩 붙어요. 이제 스페이스 눌러 봐요.	ROGUE: Amplify 2 adds 1 to attack and defense. Now press Space.
+로그: 먼저 주사위부터 읽어요. R 누르면 이번 턴 눈이 나와요. 연습이라 6, 4, 2로 맞춰 놨어요.	ROGUE: Read the dice first. Press R to see this turn's faces. It's practice, so I set them to 6, 4 and 2.
+로그: 이제 칸에 놓을 차례예요. 6은 공격, 4는 방어, 2는 증폭에 놔 주세요. 주사위 누르고 칸 누르면 돼요.	ROGUE: Now put them in the slots. 6 goes in ATTACK, 4 in DEFEND, 2 in AMPLIFY. Click a die, then a slot.
+로그: 실행하기 전에 오른쪽 위 예측 한번 봐요. 증폭이 붙어서 공격 7, 방어 5예요. 적이 4로 때려도 다 막혀요. 다 봤으면 Enter 눌러 주세요.	ROGUE: Before you execute, check the forecast at the top right. With Amplify it's 7 attack and 5 defense, so the enemy's 4 is fully blocked. Press Enter once you've looked.
+로그: 예측대로 되는지 직접 해 봐요. 스페이스 누르면 바로 실행돼요.	ROGUE: See if the forecast holds. Press Space and it runs right away.
+로그: 적이 5 남았네요. 이번엔 연쇄를 써 볼게요. R로 새 눈부터 읽어요.	ROGUE: The enemy has 5 left. Let's try CHAIN this time. Read the new faces with R.
+로그: 연쇄는 방금 한 공격을 한 번 더 이어서 쳐요. 4는 공격, 5는 연쇄, 1은 방어에 놔 주세요. 연쇄 눈이 클수록 더 세게 이어져요.	ROGUE: CHAIN follows up the attack you just made. 4 goes in ATTACK, 5 in CHAIN, 1 in DEFEND. The bigger the CHAIN face, the harder it follows up.
+로그: 공격 4만으론 1이 남거든요. 연쇄가 2를 더 붙여서 끝낼 수 있어요. 스페이스 눌러 봐요.	ROGUE: Attack 4 alone leaves 1. CHAIN adds 2 more and finishes it. Press Space.
+로그: 잘했어요. 공격을 안 한 턴엔 연쇄가 방어를 이어 줘요. 이제 복구하러 가요.	ROGUE: Nice work. On a turn with no attack, CHAIN follows up your defense instead. Now let's go restore something.
+로그: 두 번째 턴이에요. R로 다시 읽어요.	ROGUE: Second turn. Read again with R.
+로그: 4는 공격, 5는 연쇄, 1은 방어에 놔 봐요.	ROGUE: Try 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.
+로그: 이번엔 4는 공격, 5는 연쇄, 1은 방어예요.	ROGUE: This time it's 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.
+로그: 이번엔 6은 공격, 4는 방어, 2는 증폭이에요.	ROGUE: This time it's 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.
+로그: 다시 연결됐어요.	ROGUE: I have reconnected us.
+로그: 복구한 볼륨은 그대로 있어요.	ROGUE: The restored volumes are still intact.
+로그: 뭐라고 불러 드릴까요?	Rogue: What should I call you?
+로그: 많이 맞았어요. 방어 좀 챙겨요.	Rogue: That hurt. Keep some defense up.
+로그: 괜찮아? 방어 좀 올려.	Rogue: You okay? Get your defense up.
+로그: 다 막았어요. 좋아요.	Rogue: All blocked. Nice.
+로그: 좋아, 하나도 안 들어왔어.	Rogue: Good, nothing got through.
+로그: 방금 거 제대로 들어갔어요.	Rogue: That one landed clean.
+로그: 방금 거 세다.	Rogue: That one hit hard.
+로그: 위험해요. 이번 턴은 버티는 쪽으로 가요.	Rogue: This is dangerous. Play it safe this turn.
+로그: 위험해. 이번엔 버티자.	Rogue: Careful. Let's hold on this turn.
+로그: 이게 이 층을 잠근 프로세스예요.	Rogue: This is the process locking this floor.
+로그: 저거야. 이 층을 잠근 거.	Rogue: That's it. The thing locking this floor.
+로그: 하나 지웠어요. 남은 것만 봐요.	Rogue: One down. Focus on the rest.
+로그: 하나 지웠어. 남은 거 보자.	Rogue: One gone. Let's watch the rest.
+연결됨	Connected
+잠식 신호 감지	Corruption detected
+응답 없음	No response
+로그: 체력이 반도 안 남았어요. 이번엔 섹터 복구부터 챙겨요.	Rogue: You are under half health. Take the sector repair this time.
+로그: 체력 반도 안 남았어. 이번엔 복구부터 하자.	Rogue: Under half health. Let's repair first this time.
+로그: 지금 %dB / %dB 썼어요. 남는 만큼만 실을 수 있어요.	Rogue: You are using %dB / %dB. Only what is left will fit.
+로그: 지금 %dB / %dB 썼어. 남는 만큼만 실을 수 있어.	Rogue: You're at %dB / %dB. Only what's left will fit.
+로그: 이제 덮을 면을 고르세요. 제일 안 쓰는 걸로요.	Rogue: Now pick the face to overwrite. The one you never use.
+로그: 이제 덮을 면 골라. 제일 안 쓰는 걸로.	Rogue: Now pick what to overwrite. Whatever you never use.
+로그: 그렇게 바꾸면 %dB예요. 한도를 넘으니 다른 면을 덮어요.	Rogue: That swap lands at %dB. Over the limit, so overwrite another face.
+로그: 그렇게 바꾸면 %dB야. 한도 넘어, 다른 면으로 가.	Rogue: That swap lands at %dB. Over the limit, pick another face.
+로그: 좋아요. 한 번 더 누르면 확정이에요.	Rogue: Good. One more press commits it.
+로그: 좋아. 한 번 더 누르면 끝이야.	Rogue: Good. One more press and it's done.
+로그: 상주 프로그램은 면을 바꾸지 않아요. 대신 용량을 계속 물고 있어요.	Rogue: A resident program does not replace a face. It holds capacity the whole way.
+로그: 이건 면을 안 바꿔. 대신 용량을 계속 물고 있어.	Rogue: This one doesn't replace a face. It holds capacity the whole way.
+로그: %dB를 계속 내주는 거예요. 그래도 괜찮으면 한 번 더 누르세요.	Rogue: You are giving up %dB for good. If that is fine, press again.
+로그: %dB를 계속 내주는 거야. 괜찮으면 한 번 더.	Rogue: That's %dB gone for good. If that's fine, press again.
+로그: %dB 넘었어요. 그만큼 지워야 다음 층으로 갈 수 있어요.	Rogue: You are %dB over. Delete that much to reach the next floor.
+로그: %dB 넘었어. 그만큼 지워야 내려가.	Rogue: You're %dB over. Delete that much or we don't go down.
+로그: 전부 지우면 굴릴 게 없어요. 하나는 남겨 둬요.	Rogue: Delete them all and there is nothing to roll. Leave one.
+로그: 전부 지우면 굴릴 게 없어. 하나는 남겨.	Rogue: Delete them all and there's nothing to roll. Leave one.
+로그: 한도 안으로 들어왔어요. 이대로 진행해도 돼요.	Rogue: You are inside the limit now. You can go on.
+로그: 한도 안이야. 이대로 가도 돼.	Rogue: Inside the limit now. We can go.

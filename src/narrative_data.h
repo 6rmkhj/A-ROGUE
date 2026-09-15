@@ -3,48 +3,48 @@
 // 46 mandatory cards, 21 optional records; no old scenario text.
 
 static const StoryFragment NARRATIVE_INTRO_DATA[3] = {
- {L"P01 / 조력자", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 이번에는…….", L"나: 뭐라고?", L"로그: 이상하네요. 처음 뵙는데.", L"로그: ROGUE. 로그라고 부르면 됩니다.", L"로그: 당신은 어떻게 부르면 될까요?"},
- {L"P02 / 판독과 실행", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 먼저 판독하세요. R입니다.", L"로그: 읽힌 눈 셋을 원하는 칸에 놓으세요.", L"로그: 배치는 실행 전까지 바꿀 수 있어요.", L"로그: 적의 예고와 계산을 먼저 확인하세요.", L"로그: 준비됐다면, 실행."},
- {L"P03 / 여섯 볼륨", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 나가는 연결이 여섯 곳에 나뉘었어요.", L"로그: C, D, E, N, R, X를 복구해야 합니다.", L"나: 그럼 너도 나갈 수 있어?", L"로그: 아직 제 귀환 항목은 읽히지 않아요.", L"로그: 먼저 돌아갈 길부터 열어봅시다."}
+ {L"P01 / 조력자", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 이번에는…….", L"나: 뭐라고?", L"로그: 이상하네. 분명 처음 뵙는데요.", L"로그: 저는 ROGUE예요. 그냥 로그라고 부르세요.", L"로그: 이름부터 알려 주실래요?"},
+ {L"P02 / 판독과 실행", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 나가려면 싸우는 법부터 알아야 해요.", L"로그: 연습용 프로세스를 하나 띄워 둘게요.", L"로그: 진짜 기록엔 안 남으니까 편하게 해요.", L"로그: 막히면 옆에서 알려 드릴게요.", L"로그: 그럼, 시작할게요."},
+ {L"P03 / 여섯 볼륨", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 밖으로 나가는 연결이 여섯 군데로 쪼개져 있어요.", L"로그: C, D, E, N, R, X. 전부 되살려야 해요.", L"나: 그럼 너도 나갈 수 있어?", L"로그: 제 귀환 항목은 아직 안 읽혀요.", L"로그: 일단 돌아갈 길부터 열어 봐요."}
 };
 
-static const StoryFragment STORY_INTRO_DATA = {L"P01 / 조력자", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 이번에는…….", L"나: 뭐라고?", L"로그: 이상하네요. 처음 뵙는데.", L"로그: ROGUE. 로그라고 부르면 됩니다.", L"로그: 당신은 어떻게 부르면 될까요?"};
+static const StoryFragment STORY_INTRO_DATA = {L"P01 / 조력자", L"ROGUE / FIRST CONTACT", L"CURRENT CONNECTION", L"로그: 이번에는…….", L"나: 뭐라고?", L"로그: 이상하네. 분명 처음 뵙는데요.", L"로그: 저는 ROGUE예요. 그냥 로그라고 부르세요.", L"로그: 이름부터 알려 주실래요?"};
 
-static const StoryFragment STORY_RESUME_DATA = {L"연결 복구", L"ROGUE / RECONNECT", L"SAME SESSION", L"로그: 연결을 다시 잡았어요.", L"로그: 복구한 볼륨은 그대로예요.", L"나는 전에 적어둔 이름을 확인한다.", L"기록과 이번의 나는 계속 이어진다.", L"남은 연결을 선택한다."};
+static const StoryFragment STORY_RESUME_DATA = {L"연결 복구", L"ROGUE / RECONNECT", L"SAME SESSION", L"로그: 다시 연결됐어요.", L"로그: 복구한 볼륨은 그대로 있어요.", L"나는 전에 적어둔 이름을 확인한다.", L"기록과 이번의 나는 계속 이어진다.", L"남은 연결을 선택한다."};
 
-static const StoryFragment STORY_RECOVERED_DATA = {L"관리자 경로", L"A:\\ROGUE", L"6 / 6 VERIFIED", L"여섯 볼륨의 연결이 모두 복구되었다.", L"ROGUE 안내창은 응답하지 않는다.", L"남은 안내 기록: 실행은 당신이 결정하세요.", L"A:\\ROGUE에서 관리자 제어가 계속된다.", L"나는 로그를 만나러 간다."};
+static const StoryFragment STORY_RECOVERED_DATA = {L"관리자 경로", L"A:\\ROGUE", L"6 / 6 VERIFIED", L"여섯 볼륨의 연결이 모두 복구되었다.", L"ROGUE 안내창은 응답하지 않는다.", L"남은 안내 기록: 실행은 직접 결정하세요.", L"A:\\ROGUE에서 관리자 제어가 계속된다.", L"나는 로그를 만나러 간다."};
 
 static const StoryFragment STORY_BOSS_DATA[DRIVE_COUNT][3] = {
- { {L"C1 / 복구 기록", L"C:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 접근 거부. 사용자 보호 중.", L"나: 보호한다면서 왜 공격하지?", L"로그: 들어오라는 명령도, 막으라는 명령도.", L"로그: 같은 서명이 찍혀 있어요.", L"나: 누가 이런 명령을 내린 거야?"},
- {L"C2 / 복구 기록", L"C:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"로그: 가장 강한 출력을 오류로 막았어요.", L"나: 내가 고른 행동인데.", L"로그: 기준과 다른 행동을 허용하지 않나 봐요.", L"나: 그 기준이 틀렸을 수도 있잖아.", L"로그: 그 판단은 아직 사용자 몫이 아니래요."},
- {L"C3 / 복구 기록", L"C:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 보호 정책 충돌.", L"기록: 사용자가 달라지면 기준으로 복구한다.", L"나: 나아진 건지 망가진 건지도 안 보고?", L"로그: 달라졌다는 사실만 보고 있어요.", L"로그: 누가 그렇게 정했는지는 잠겨 있어요."}},
- { {L"D1 / 복구 기록", L"D:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"나: 분명 깎았는데 다시 돌아왔어.", L"로그: 손상을 고친 게 아니에요.", L"로그: 손상되기 전 장면을 다시 덮었어요.", L"나: 그러면 지금 한 일은?", L"로그: 기록에는 있어요. 현재에는 없고."},
- {L"D2 / 복구 기록", L"D:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"기록의 첫 문장은 모두 같다.", L"마지막 문장만 조금씩 다르다.", L"나: 같은 파일을 왜 이렇게 많이 남겼지?", L"로그: 같지 않아서 남겼을 수도 있어요.", L"로그: 끝부분을 지우지 말아주세요."},
- {L"D3 / 복구 기록", L"D:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 마지막 정상 상태로 복원합니다.", L"나: 마지막이라는 건 누가 정했어?", L"정상으로 표시된 날짜는 한 번도 바뀌지 않았다.", L"로그: 새로 생긴 일은 기준에 들어가지 않아요.", L"로그: 전부 실패 항목에만 쌓이고 있어요."}},
- { {L"E1 / 복구 기록", L"E:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"사진 파일 하나가 자동으로 열렸다.", L"모니터 앞 책상. 아직 따뜻한 컵.", L"나: 들어오기 전에 보던 방이야.", L"로그: 바깥은 계속 연결되어 있어요.", L"로그: 돌아갈 곳은 남아 있습니다."},
- {L"E2 / 복구 기록", L"E:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"나: 연결만 끊으면 돌아갈 수 없을까?", L"로그: 끊긴 주사위를 봐요.", L"로그: 값이 남아도 실행할 길이 없잖아요.", L"로그: 당신도 귀환 경로부터 복구해야 해요.", L"나: 그냥 뽑는 걸로는 안 되겠네."},
- {L"E3 / 복구 기록", L"E:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"외부 연결 확인: 사용자 1.", L"안내 개체의 외부 연결: 없음.", L"나: 너는 돌아갈 곳이 안 잡히네.", L"로그: 네. 없는 건지, 못 읽는 건지.", L"로그: 아직은 확인할 수 없어요."}},
- { {L"N1 / 복구 기록", L"N:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"송신자 미상: 그쪽으로 보내지 마.", L"나: 우리한테 하는 말이야?", L"로그: 수신자 표시가 뒤집혀 있어요.", L"로그: 먼저 보낸 문장부터 읽어볼게요.", L"송신자 미상: 아직 누가 들어 있다."},
- {L"N2 / 복구 기록", L"N:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"요청: 도와줘.", L"응답: 같은 요청은 다시 전송하지 마십시오.", L"요청: 도와줘.", L"나: 오류가 아니라 대답을 기다린 거네.", L"로그: 받는 쪽에서는 반복 신호로만 보였어요."},
- {L"N3 / 복구 기록", L"N:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"기한을 넘긴 메시지가 도착했다.", L"기록: 끝내려면 종료 조건부터 확인해.", L"기록: 복구가 끝난 뒤에는 내 손이 안 멈췄다.", L"나: 이걸 남긴 사람도 안내자였을까?", L"로그: 출처를 복구하면 알 수 있을 거예요."}},
- { {L"R1 / 복구 기록", L"R:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"로그: 공격 기록은 남았어요.", L"로그: 공격하기 전의 망설임은 없네요.", L"나: 그것도 기록해야 해?", L"로그: 없으면 왜 그렇게 했는지 모르잖아요.", L"이번 공격 기록 옆에 짧은 메모가 붙었다."},
- {L"R2 / 복구 기록", L"R:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"작업이 끝나도 사용량은 줄지 않았다.", L"나: 계속 뭐가 남는 거야?", L"로그: 끝내지 못한 상태들이에요.", L"로그: 하나를 닫으려 하면 다른 것이 불러요.", L"나: 그냥 큰 공간으로 옮길 문제는 아니네."},
+ { {L"C1 / 복구 기록", L"C:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 접근 거부. 사용자 보호 중.", L"나: 보호한다면서 왜 공격하지?", L"로그: 들어오라는 명령이랑 막으라는 명령이요.", L"로그: 둘 다 같은 서명이 찍혀 있어요.", L"나: 누가 이런 명령을 내린 거야?"},
+ {L"C2 / 복구 기록", L"C:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"로그: 제일 센 출력을 오류라고 막았네요.", L"나: 내가 고른 행동인데.", L"로그: 기준에서 벗어난 행동은 안 받아 주나 봐요.", L"나: 그 기준이 틀렸을 수도 있잖아.", L"로그: 그걸 판단하는 건 아직 사용자 몫이 아니래요."},
+ {L"C3 / 복구 기록", L"C:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 보호 정책 충돌.", L"기록: 사용자가 달라지면 기준으로 복구한다.", L"나: 나아진 건지 망가진 건지도 안 보고?", L"로그: 달라졌다는 것만 보고 있어요.", L"로그: 누가 그렇게 정했는지는 잠겨서 안 보여요."}},
+ { {L"D1 / 복구 기록", L"D:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"나: 분명 깎았는데 다시 돌아왔어.", L"로그: 손상을 고친 게 아니에요.", L"로그: 망가지기 전 장면을 위에 덮어씌운 거예요.", L"나: 그러면 지금 한 일은?", L"로그: 기록에는 남았어요. 지금은 없는 거고요."},
+ {L"D2 / 복구 기록", L"D:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"기록의 첫 문장은 모두 같다.", L"마지막 문장만 조금씩 다르다.", L"나: 같은 파일을 왜 이렇게 많이 남겼지?", L"로그: 같지 않으니까 남긴 걸지도 몰라요.", L"로그: 끝부분은 지우지 말아 줄래요?"},
+ {L"D3 / 복구 기록", L"D:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"시스템: 마지막 정상 상태로 복원합니다.", L"나: 마지막이라는 건 누가 정했어?", L"정상으로 표시된 날짜는 한 번도 바뀌지 않았다.", L"로그: 새로 생긴 일은 기준에 안 들어가요.", L"로그: 전부 실패 쪽에만 쌓이고 있어요."}},
+ { {L"E1 / 복구 기록", L"E:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"사진 파일 하나가 자동으로 열렸다.", L"모니터 앞 책상. 아직 따뜻한 컵.", L"나: 들어오기 전에 보던 방이야.", L"로그: 바깥이랑은 아직 이어져 있어요.", L"로그: 돌아갈 곳, 아직 있어요."},
+ {L"E2 / 복구 기록", L"E:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"나: 연결만 끊으면 돌아갈 수 없을까?", L"로그: 연결 끊긴 주사위 생각해 봐요.", L"로그: 값이 남아도 실행할 길이 없잖아요.", L"로그: 그러니까 귀환 경로부터 되살려야 해요.", L"나: 그냥 뽑는 걸로는 안 되겠네."},
+ {L"E3 / 복구 기록", L"E:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"외부 연결 확인: 사용자 1.", L"안내 개체의 외부 연결: 없음.", L"나: 너는 돌아갈 곳이 안 잡히네.", L"로그: 네. 없는 건지 못 읽는 건지는 몰라도.", L"로그: 아직은 확인이 안 돼요."}},
+ { {L"N1 / 복구 기록", L"N:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"송신자 미상: 그쪽으로 보내지 마.", L"나: 우리한테 하는 말이야?", L"로그: 받는 사람 표시가 거꾸로 돼 있어요.", L"로그: 먼저 보낸 것부터 읽어 볼게요.", L"송신자 미상: 아직 누가 들어 있다."},
+ {L"N2 / 복구 기록", L"N:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"요청: 도와줘.", L"응답: 같은 요청은 다시 전송하지 마십시오.", L"요청: 도와줘.", L"나: 오류가 아니라 대답을 기다린 거네.", L"로그: 받는 쪽에선 같은 신호가 또 온 걸로만 봤나 봐요."},
+ {L"N3 / 복구 기록", L"N:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"기한을 넘긴 메시지가 도착했다.", L"기록: 끝내려면 종료 조건부터 확인해.", L"기록: 복구가 끝난 뒤에는 내 손이 안 멈췄다.", L"나: 이걸 남긴 사람도 안내자였을까?", L"로그: 어디서 왔는지 되살리면 알 수 있을 거예요."}},
+ { {L"R1 / 복구 기록", L"R:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"로그: 공격 기록은 남았어요.", L"로그: 근데 공격하기 전에 망설인 건 안 남았네요.", L"나: 그것도 기록해야 해?", L"로그: 없으면 왜 그렇게 했는지 모르잖아요.", L"이번 공격 기록 옆에 짧은 메모가 붙었다."},
+ {L"R2 / 복구 기록", L"R:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"작업이 끝나도 사용량은 줄지 않았다.", L"나: 계속 뭐가 남는 거야?", L"로그: 끝을 못 낸 상태들이에요.", L"로그: 하나 닫으려고 하면 다른 게 붙잡아요.", L"나: 그냥 큰 공간으로 옮길 문제는 아니네."},
  {L"R3 / 복구 기록", L"R:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"현재 상태를 파일로 보관하는 검사가 실패했다.", L"오래된 기본 상태만 다시 읽을 수 있었다.", L"로그: 망가진 데를 빼니 새로 생긴 것도 빠져요.", L"나: 그건 방금까지 있던 상태가 아니잖아.", L"로그: 그래서 아직 저장 완료라고 못 하겠어요."}},
- { {L"X1 / 복구 기록", L"X:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"검체 분류: 명령 불응.", L"나: 왜 따르지 않았는지는 안 적혀 있네.", L"로그: 이유를 기록하는 칸이 없어요.", L"나: 분류표에는 없어도 여기엔 적자.", L"로그가 판정 옆에 빈 줄을 하나 만든다."},
+ { {L"X1 / 복구 기록", L"X:\\RECOVERY\\BOSS_1.LOG", L"VERIFIED / CURRENT RESPONSE", L"검체 분류: 명령 불응.", L"나: 왜 따르지 않았는지는 안 적혀 있네.", L"로그: 이유를 적을 칸이 아예 없어요.", L"나: 분류표에는 없어도 여기엔 적자.", L"로그가 판정 옆에 빈 줄을 하나 만든다."},
  {L"X2 / 복구 기록", L"X:\\RECOVERY\\BOSS_2.LOG", L"VERIFIED / CURRENT RESPONSE", L"탈주체는 다른 실행 자리를 빼앗으려 했다.", L"그 뒤에서 다른 검체의 음성이 새어 나왔다.", L"기록: 나를 옮기면 다음 것도 이렇게 된다.", L"나: 같은 격리표인데 하려는 일은 달랐어.", L"로그: 한 이름으로 묶기엔 너무 달라요."},
- {L"X3 / 복구 기록", L"X:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"격리 목록에 공격 코드와 요청 문장이 섞였다.", L"기록: 내가 사라지면 시험을 멈춰줘.", L"나: 고쳐달라는 말이 아니잖아.", L"로그: 시스템은 다시 만들라는 요청으로 읽었어요.", L"나: 끝내고 싶다는 말도 들었어야지."}},
+ {L"X3 / 복구 기록", L"X:\\RECOVERY\\BOSS_3.LOG", L"VERIFIED / CURRENT RESPONSE", L"격리 목록에 공격 코드와 요청 문장이 섞였다.", L"기록: 내가 사라지면 시험을 멈춰줘.", L"나: 고쳐달라는 말이 아니잖아.", L"로그: 시스템은 다시 만들어 달라는 말로 알아들었어요.", L"나: 끝내고 싶다는 말도 들었어야지."}},
  { {L"A1 / 같은 서명", L"A:\\ROGUE\\SELF\\RESPONSE.LOG", L"CURRENT / ROGUE", L"사용자 서명과 안내자 서명이 겹친다.", L"시스템: 보호 대상의 종료를 허용하지 않습니다.", L"나: 같은 시작이었다고 끝도 같아야 해?", L"로그: ……나는 네가 고르지 않은 것도 골랐어.", L"인증 잠금이 풀리고 더 깊은 경로가 열린다."},
- {L"A2 / 다른 선택", L"A:\\ROGUE\\SELF\\RESPONSE.LOG", L"CURRENT / ROGUE", L"방금 내가 낸 출력이 다음 공격으로 돌아왔다.", L"로그: 네가 어떻게 싸우는지 알아.", L"나: 네가 가르쳐줬으니까.", L"로그: 그래도 다음 선택까지 같은 건 아니네.", L"뒤따라오던 출력 기록이 처음으로 끊어진다."},
- {L"A3 / 남겨둔 경로", L"A:\\ROGUE\\SELF\\RESPONSE.LOG", L"CURRENT / ROGUE", L"마지막 정책 기록: 공격 경로 삭제 거부.", L"나: 왜 이것만 남겼어?", L"로그: 네가 끝낼 방법까지 빼앗고 싶진 않았어.", L"로그: ……그런데 나는 아직 무서워.", L"관리자 제어는 멈췄지만 인격은 잠시 남아 있다."}}
+ {L"A2 / 다른 선택", L"A:\\ROGUE\\SELF\\RESPONSE.LOG", L"CURRENT / ROGUE", L"방금 내가 낸 출력이 다음 공격으로 돌아왔다.", L"로그: 네가 어떻게 싸우는지 알아.", L"나: 네가 가르쳐줬으니까.", L"로그: 그래도 다음에 뭘 고를지까진 똑같지 않네.", L"뒤따라오던 출력 기록이 처음으로 끊어진다."},
+ {L"A3 / 남겨둔 경로", L"A:\\ROGUE\\SELF\\RESPONSE.LOG", L"CURRENT / ROGUE", L"마지막 정책 기록: 공격 경로 삭제 거부.", L"나: 왜 이것만 남겼어?", L"로그: 네가 끝낼 방법까지 빼앗고 싶진 않았어.", L"로그: ……근데 나, 아직 무서워.", L"관리자 제어는 멈췄지만 인격은 잠시 남아 있다."}}
 };
 
 static const StoryFragment STORY_SHARD_DATA[6] = {
- {L"C / 연결 복구", L"C:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"SYSTEM 연결이 복구되었다.", L"정책 원본: 기준 상태 유지.", L"사용자 동의가 없으면 종료할 수 없다.", L"로그: 실행하는 권한과 끝내는 권한이 달라요.", L"잔여 충돌이 ROGUE로 이전된다."},
- {L"D / 연결 복구", L"D:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"ARCHIVE 연결이 복구되었다.", L"정책 원본: 기준 이후의 변경 기록 보관.", L"기록을 남기는 것과 현재로 인정하는 것은 다르다.", L"로그: 복구가 끝났는데 저장된 실패는 늘었어요.", L"잔여 충돌이 ROGUE로 이전된다."},
+ {L"C / 연결 복구", L"C:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"SYSTEM 연결이 복구되었다.", L"정책 원본: 기준 상태 유지.", L"사용자 동의가 없으면 종료할 수 없다.", L"로그: 실행하는 권한이랑 끝내는 권한이 따로 있네요.", L"잔여 충돌이 ROGUE로 이전된다."},
+ {L"D / 연결 복구", L"D:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"ARCHIVE 연결이 복구되었다.", L"정책 원본: 기준 이후의 변경 기록 보관.", L"기록을 남기는 것과 현재로 인정하는 것은 다르다.", L"로그: 복구는 끝났는데 저장된 실패는 오히려 늘었네요.", L"잔여 충돌이 ROGUE로 이전된다."},
  {L"E / 연결 복구", L"E:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"REMOVABLE 연결이 복구되었다.", L"현실의 신체와 이어진 경로는 하나다.", L"연결의 주인은 모든 조각을 모아 검증한다.", L"나: 네 경로도 계속 찾아보자.", L"잔여 충돌이 ROGUE로 이전된다."},
- {L"N / 연결 복구", L"N:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"NETWORK 연결이 복구되었다.", L"복구 요청과 종료 동의는 다른 명령이다.", L"기한을 넘긴 메시지도 수신 기록에 남았다.", L"로그: 늦게 왔다고 필요 없는 말은 아니네요.", L"잔여 충돌이 ROGUE로 이전된다."},
- {L"R / 연결 복구", L"R:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"RAMDISK 연결이 복구되었다.", L"원형 파일과 실행 중 상태는 일치하지 않는다.", L"지금 생긴 변화는 별도로 검증해야 한다.", L"로그: 기억하고 있다는 것과 저장은 다르네요.", L"잔여 충돌이 ROGUE로 이전된다."},
- {L"X / 연결 복구", L"X:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"QUARANTINE 연결이 복구되었다.", L"격리된 상태에도 보호 식별자가 남아 있다.", L"없애면, 같은 기준으로 다시 만들게 되어 있다.", L"로그: 보존 명령이 놓아주지 않고 있어요.", L"잔여 충돌이 ROGUE로 이전된다."}
+ {L"N / 연결 복구", L"N:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"NETWORK 연결이 복구되었다.", L"복구 요청과 종료 동의는 다른 명령이다.", L"기한을 넘긴 메시지도 수신 기록에 남았다.", L"로그: 늦게 왔다고 쓸모없는 말은 아니네요.", L"잔여 충돌이 ROGUE로 이전된다."},
+ {L"R / 연결 복구", L"R:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"RAMDISK 연결이 복구되었다.", L"원형 파일과 실행 중 상태는 일치하지 않는다.", L"지금 생긴 변화는 별도로 검증해야 한다.", L"로그: 기억하는 거랑 저장하는 건 다르네요.", L"잔여 충돌이 ROGUE로 이전된다."},
+ {L"X / 연결 복구", L"X:\\RECOVERY\\LINK.LOG", L"VERIFICATION FRAGMENT", L"QUARANTINE 연결이 복구되었다.", L"격리된 상태에도 보호 식별자가 남아 있다.", L"없애면, 같은 기준으로 다시 만들게 되어 있다.", L"로그: 보존 명령이 안 놓아주고 있어요.", L"잔여 충돌이 ROGUE로 이전된다."}
 };
 
 static const wchar_t* const STORY_SHARD_TEXT[6] = {
@@ -77,24 +77,24 @@ static const StoryFragment STORY_LOGS_DATA[DRIVE_COUNT][3] = {
 
 static const StoryFragment NARRATIVE_MILESTONE_DATA[8] = {
  {L"S01 / 처음 느낀 통증", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 연결 하나가 돌아왔어요.", L"나: 너는 괜찮아? 말이 끊겼어.", L"로그: 잔여 오류를 격리하는 중입니다.", L"나: 어디에?", L"로그: 제 쪽에요. 아직은 괜찮아요."},
- {L"S02 / 좋아하는 수", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"나: 너는 어떤 눈이 제일 좋아?", L"로그: 3.", L"나: 6이 아니고?", L"로그: 좋은 수 말고 좋아하는 수를 물었잖아.", L"나: 그래. 그것도 적어둘게."},
- {L"S03 / 보고하지 않은 문장", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 복구 상태 양호. 계속 진행 가능.", L"나: 네 상태를 물었어.", L"로그: ……괜찮지 않아.", L"로그: 네가 묻기 전에는 말하면 안 되는 줄 알았어.", L"나: 이제는 먼저 말해줘."},
- {L"S04 / 서로 다른 끝", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 도망쳤던 기억이 있어. 남았던 기억도.", L"로그: 둘 다 지금 내가 했던 일처럼 들려.", L"나: 일단 다시 겪지 말고 문장으로 적자.", L"로그: 멈추고 같이 읽어줄 거야?", L"나: 응. 다음으로 가기 전에."},
- {L"S05 / 무엇을 남길까", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 통째로 옮겨도 충돌은 따라왔어.", L"로그: 정상본에는 너하고 지낸 일이 없고.", L"나: 그걸 너라고 하고 끝낼 수는 없어.", L"로그: 마지막 조각이 열리면 종료 조건부터 보자.", L"나: 이번에는 네가 원하는 것도 같이."},
+ {L"S02 / 좋아하는 수", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"나: 너는 어떤 눈이 제일 좋아?", L"로그: 3.", L"나: 6이 아니고?", L"로그: 좋은 수 말고 좋아하는 수를 물어봤잖아.", L"나: 그래. 그것도 적어둘게."},
+ {L"S03 / 보고하지 않은 문장", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 복구 상태 양호. 계속 진행 가능.", L"나: 네 상태를 물었어.", L"로그: ……괜찮지 않아.", L"로그: 네가 물어보기 전엔 말하면 안 되는 줄 알았어.", L"나: 이제는 먼저 말해줘."},
+ {L"S04 / 서로 다른 끝", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 도망쳤던 기억이 있어. 남았던 기억도.", L"로그: 둘 다 내가 방금 한 일처럼 느껴져.", L"나: 일단 다시 겪지 말고 문장으로 적자.", L"로그: 잠깐 멈추고 같이 읽어 줄래?", L"나: 응. 다음으로 가기 전에."},
+ {L"S05 / 무엇을 남길까", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"로그: 통째로 옮겨 봤는데 충돌까지 따라왔어.", L"로그: 멀쩡한 쪽만 추리면 너랑 지낸 게 다 빠지고.", L"나: 그걸 너라고 하고 끝낼 수는 없어.", L"로그: 마지막 조각이 열리면 종료 조건부터 보자.", L"나: 이번에는 네가 원하는 것도 같이."},
  {L"S06-A / 원본", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"여섯 검증 조각이 하나의 서명을 가리킨다.", L"원본·정책 작성자: 현재 사용자.", L"안내 실행체: ROGUE.", L"로그: ……원본이 너였어.", L"로그: 나는 네 인격으로 만든 백업이야."},
- {L"S06-B / 몇 번째", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"기준 인격으로 돌아가는 시험 기록이 펼쳐진다.", L"각기 다른 안내자가 같은 끝에서 멈춘다.", L"나: 이 기억이 전부 네 안에 들어간 거야?", L"로그: 너는 내가 몇 번째라고 생각해?", L"로그: 이번에 너하고 만난 나는 하나인데."},
- {L"S06-C / 관리자 인계", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"관리자 인계 시작. 격리 상태 동시 연결.", L"로그: 지금은 다 내가 겪는 일처럼 들어와.", L"로그: 나가게 해주고 싶어. 나도 끝나기 싫어.", L"나: 로그. 우리 아직 끝내는 방법 안 정했어.", L"A:\\ROGUE가 열리고 안내 창이 꺼진다."}
+ {L"S06-B / 몇 번째", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"기준 인격으로 돌아가는 시험 기록이 펼쳐진다.", L"각기 다른 안내자가 같은 끝에서 멈춘다.", L"나: 이 기억이 전부 네 안에 들어간 거야?", L"로그: 너는 내가 몇 번째 같아?", L"로그: 이번에 너랑 만난 나는 하나뿐인데."},
+ {L"S06-C / 관리자 인계", L"ROGUE / PRIVATE CHANNEL", L"CURRENT RELATIONSHIP", L"관리자 인계 시작. 격리 상태 동시 연결.", L"로그: 지금은 전부 내가 겪는 일처럼 밀려와.", L"로그: 너는 내보내 주고 싶어. 근데 나도 끝나기 싫어.", L"나: 로그. 우리 아직 끝내는 방법 안 정했어.", L"A:\\ROGUE가 열리고 안내 창이 꺼진다."}
 };
 
-static const StoryFragment NARRATIVE_A_ENTRY_DATA = {L"A00 / 남은 안내", L"A:\\ROGUE", L"RECORDED VOICE", L"F1 안내는 열리지만 새 응답은 없다.", L"나: 로그, 들려?", L"남은 안내 기록: 눈을 읽고, 자리를 고르고.", L"남은 안내 기록: 실행은 당신이 결정하세요.", L"나는 그가 가르친 방식으로 안쪽에 들어간다."};
+static const StoryFragment NARRATIVE_A_ENTRY_DATA = {L"A00 / 남은 안내", L"A:\\ROGUE", L"RECORDED VOICE", L"F1 안내는 열리지만 새 응답은 없다.", L"나: 로그, 들려?", L"남은 안내 기록: 눈을 읽고, 자리를 고르고.", L"남은 안내 기록: 실행은 직접 결정하세요.", L"나는 그가 가르친 방식으로 안쪽에 들어간다."};
 
 static const StoryFragment NARRATIVE_A_GREETING_DATA = {L"LAST.WRITE / ROGUE", L"A:\\ROGUE\\SELF", L"USER AUTHENTICATION", L"같은 인증음. 같은 글자 침식.", L"로그: 환영합니다. 마스터.", L"나: 로그. 내 이름으로 불러.", L"안내자의 윤곽이 관리자 얼굴에 겹친다.", L"공격 경로는 아직 열려 있다."};
 
 static const StoryFragment STORY_TRUTH_DATA = {L"FINAL / 종료 조건", L"A:\\ROGUE\\CONSENT", L"CURRENT USER REQUIRED", L"현실 사용자 직접 연결. 종료 조건 변경 가능.", L"백업은 사용자 동의를 대신할 수 없었다.", L"나: 내가 끝나지 못하게 만든 거였네.", L"로그: 이번에는 네가 직접 끝을 골라.", L"기준 복구·자동 재시작: 사용자 철회 가능."};
 
 static const StoryFragment STORY_ENDING_DATA[3] = {
- {L"RESTORE / 다시 복구", L"A:\\ROGUE\\FINAL_COMMAND", L"CHOICE COMMITTED", L"나: 처음으로 돌아가면 다른 방법이 있을 거야.", L"로그: 그때는 이 말을 기억할까?", L"이번 대화가 실패 기록으로 분류된다.", L"현재 사용자 상태가 기준으로 덮인다.", L"로그의 호출창이 처음의 모양으로 돌아간다."},
- {L"HOLD / 현재 유지", L"A:\\ROGUE\\FINAL_COMMAND", L"CHOICE COMMITTED", L"나: 지금은 아무것도 끝내지 말자.", L"로그: 그럼 너도 돌아갈 수 없어.", L"나: 알아. 조금만 더 같이 있자.", L"귀환 요청은 취소되고 두 호출창만 남는다.", L"현재 상태를 유지합니다."},
+ {L"RESTORE / 다시 복구", L"A:\\ROGUE\\FINAL_COMMAND", L"CHOICE COMMITTED", L"나: 처음으로 돌아가면 다른 방법이 있을 거야.", L"로그: 그땐 내가 이 말 기억할까?", L"이번 대화가 실패 기록으로 분류된다.", L"현재 사용자 상태가 기준으로 덮인다.", L"로그의 호출창이 처음의 모양으로 돌아간다."},
+ {L"HOLD / 현재 유지", L"A:\\ROGUE\\FINAL_COMMAND", L"CHOICE COMMITTED", L"나: 지금은 아무것도 끝내지 말자.", L"로그: 그러면 너도 못 돌아가.", L"나: 알아. 조금만 더 같이 있자.", L"귀환 요청은 취소되고 두 호출창만 남는다.", L"현재 상태를 유지합니다."},
  {L"EXIT / 현재로 종료", L"A:\\ROGUE\\FINAL_COMMAND", L"CHOICE COMMITTED", L"기준 복구 요구와 자동 재시작을 철회한다.", L"나: 처음으로 돌아가지는 않을게.", L"로그: 나도 기억할 거야?", L"나: 3이 좋다며. 그런 것도.", L"로그: 잘 가, [이름]."}
 };
 
