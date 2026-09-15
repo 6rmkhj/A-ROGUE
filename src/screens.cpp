@@ -9,7 +9,7 @@
 static void DrawNarrativeName(HDC dc, int width, int height);
 static void DrawTutorialOverlay(HDC dc);
 static void DrawRogueStatus(HDC dc);
-static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, COLORREF accent);
+static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, COLORREF accent, int talking = 0);
 
 // 창 모드 복원 정보는 설정 화면만 쓰므로 여기 둔다.
 static int gWindowedScale = 100;

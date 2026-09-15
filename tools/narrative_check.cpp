@@ -6,6 +6,8 @@
 
 static int NFail(const char* reason) { printf("FAIL narrative UI: %s\n", reason); return 1; }
 static void ClickCenter(RECT rect) { HandleClick((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); }
+// A card opens one line per input; press until the card hands over.
+static void FinishStoryCard() { for (int i = 0; i < 6 && gGame.phase == PHASE_STORY; ++i) HandleKey(VK_RETURN); }
 
 #include "narrative_persistence_check.inl"
 
@@ -14,6 +16,10 @@ static int CheckNarrativeInput() {
     ResetPresentation(); gFxLevel = FX_OFF;
     NewRun(&gGame, 100, 0); AttachNarrative(&gGame, &gCampaign.narrative);
     HandleKey(VK_RETURN);
+    if (gGame.phase != PHASE_STORY || StoryShownLine() != 1) return NFail("Enter opens P01's next line, not the next screen");
+    ClickCenter(MakeRect(600, 300, 610, 310));
+    if (gGame.phase != PHASE_STORY || StoryShownLine() != 2) return NFail("a click anywhere opens the next line");
+    FinishStoryCard();
     if (gGame.phase != PHASE_NAME_ENTRY) return NFail("P01 to name entry");
     gWindow = CreateWindowExW(0, L"STATIC", L"Narrative test", WS_POPUP,
         0, 0, BASE_WIDTH, BASE_HEIGHT, 0, 0, GetModuleHandleW(0), 0);
@@ -24,7 +30,16 @@ static int CheckNarrativeInput() {
     ConfirmNarrativeName();
     if (wcscmp(gGame.narrative.playerName, L"민서") || gGame.phase != PHASE_STORY)
         return NFail("native Korean name commit");
+    // With motion on, input first finishes the line being typed, then opens the next.
+    gFxLevel = FX_FULL; gSceneKey = 1; gSceneStart = gCheckTick;
     HandleKey(VK_RETURN);
+    if (StoryShownLine() != 0 || StoryLineElapsed() < StoryLineTypeMs(0)) return NFail("first input completes typing");
+    HandleKey(VK_RETURN);
+    if (StoryShownLine() != 1 || StoryLineElapsed() >= StoryLineTypeMs(1)) return NFail("next input opens a typing line");
+    HandleKey(VK_RETURN);
+    if (StoryShownLine() != 1 || gGame.phase != PHASE_STORY) return NFail("typing line is completed, not skipped");
+    gFxLevel = FX_OFF;
+    FinishStoryCard();
     if (!gGame.tutorial.active || gGame.tutorial.step != TUTORIAL_READ) return NFail("P02 starts training");
     HandleKey(VK_SPACE);
     if (gGame.tutorial.step != TUTORIAL_READ) return NFail("training cannot execute before reading");
@@ -48,7 +63,7 @@ static int CheckNarrativeInput() {
     ClickCenter(TutorialNextRect());
     if (gGame.tutorial.active || !gGame.narrative.tutorialSeen || gGame.phase != PHASE_STORY)
         return NFail("training completion opens P03");
-    HandleKey(VK_RETURN);
+    FinishStoryCard();
     if (gGame.phase != PHASE_DRIVE_SELECT || gGame.selectedDrive != -1 || gGame.combatsWon)
         return NFail("training cannot alter campaign combat state");
     // Rehearsing from an active, already-read combat must restore exact state.
@@ -72,19 +87,9 @@ static int CheckNarrativeInput() {
 static int CheckStoryFrame(HDC dc, void* bits, int w, int h, const char* folder, const char* name, int* frames) {
     GameState before = gGame;
     if (gGame.phase == PHASE_STORY) {
-        const StoryFragment* story = CurrentStoryFragment(&gGame);
-        const wchar_t* source[5] = {story->line1, story->line2, story->line3, story->line4, story->line5};
-        int total = 0;
-        for (int pass = 0; pass < 2; ++pass) {
-            total = 0;
-            for (int i = 0; i < 5; ++i) {
-                wchar_t text[640]; NarrativeText(source[i], text, 640);
-                if (text[0]) total += NarrativeParagraph(dc, MakeRect(0, 0, BASE_WIDTH - 64 - 416 - 74, 0),
-                    text, C_TEXT, pass ? gFontSmall : gFontMedium, 1) + 15;
-            }
-            if (total <= 322) break;
-        }
-        if (total > 322) { printf("Overflow at %s: %d pixels\n", name, total); return NFail("localized dialogue overflow"); }
+        StoryLineView lines[5]; int rows[5], total = 0;
+        StoryDialogueLayout(dc, lines, StoryLines(lines), rows, &total);
+        if (total > STORY_LINE_SPACE) { printf("Overflow at %s: %d pixels\n", name, total); return NFail("localized dialogue overflow"); }
     }
     DrawFixture(dc); GdiFlush();
     uint32_t first = FrameHash(bits, w, h);
@@ -132,7 +137,13 @@ int main(int argc, char** argv) {
                     gGame.story.page = (uint8_t)page;
                     if (!CurrentStoryFragment(&gGame)) return NFail("missing authored story page");
                     gSceneKey = 1; gSceneStart = 10000; gCheckTick = 12800;
-                    char name[90]; sprintf_s(name, "story_%s_%02d_%02d_%d", language ? "en" : "ko", kind, variant, page);
+                    // Mid-typing on the second line (colour split, caret), then the whole card.
+                    gStoryLineKey = StoryLineKey(); gStoryLineTyped = 0; gStoryLineAt = gCheckTick - 120;
+                    gStoryLine = StoryLineCount() > 1 ? 1 : 0;
+                    char name[90]; sprintf_s(name, "story_%s_%02d_%02d_%d_typing", language ? "en" : "ko", kind, variant, page);
+                    if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
+                    gStoryLine = StoryLineCount() - 1; gStoryLineTyped = 1;
+                    sprintf_s(name, "story_%s_%02d_%02d_%d", language ? "en" : "ko", kind, variant, page);
                     if (CheckStoryFrame(dc, bits, w, h, folder, name, &frames)) return 1;
                 }
             }

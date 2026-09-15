@@ -7,11 +7,15 @@ RECT TutorialNextRect() { return MakeRect(1040, 720, 1180, 755); }
 RECT TutorialSkipRect() { return MakeRect(1190, 720, 1324, 755); }
 RECT TutorialReplayRect() { return MakeRect(830, 164, 1238, 206); }
 
+static const wchar_t* NarrativeName() {
+    return gGame.narrative.playerName[0] ? gGame.narrative.playerName : LocalizeText(L"나");
+}
+
 static void NarrativeText(const wchar_t* source, wchar_t* out, int capacity) {
     // Translation must happen before player input is inserted. In particular a
     // Korean name is never passed back through the translation lookup.
     source = LocalizeText(source ? source : L"");
-    const wchar_t* name = gGame.narrative.playerName[0] ? gGame.narrative.playerName : LocalizeText(L"나");
+    const wchar_t* name = NarrativeName();
     int used = 0;
     if ((source[0] == L'나' && source[1] == L':') ||
         (source[0] == L'M' && source[1] == L'e' && source[2] == L':')) {
@@ -34,7 +38,7 @@ static int NarrativeParagraph(HDC dc, const RECT& rect, const wchar_t* text, COL
     HFONT old = (HFONT)SelectObject(dc, font);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color);
     wchar_t wrapped[1024];
-    const wchar_t* value = WrapAtSpaces(dc, text, rect.right - rect.left, wrapped, 1024);
+    const wchar_t* value = WrapAtSpaces(dc, text, rect.right - rect.left, wrapped, 1024, 1);
     RECT draw = rect;
     if (measure) draw.bottom = draw.top;
     DrawTextW(dc, value, -1, &draw, DT_WORDBREAK | DT_NOPREFIX | (measure ? DT_CALCRECT : 0));
@@ -42,39 +46,67 @@ static int NarrativeParagraph(HDC dc, const RECT& rect, const wchar_t* text, COL
     return draw.bottom - draw.top;
 }
 
-static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, COLORREF accent) {
-    const int cx = (rect.left + rect.right) / 2, cy = (rect.top + rect.bottom) / 2;
-    int unit = (rect.right - rect.left) / 28; if (unit < 1) unit = 1;
-    // A recognizable, deliberately spare face: asymmetric fringe, two eyes,
-    // collar and shoulders. Restored regions add detail; corruption occupies
-    // different tiles, so becoming whole is not simply becoming a red bar.
-    const wchar_t* pixels[17] = {
-        L"       #######      ", L"     ##########     ", L"    ####### ####    ",
-        L"    ##         ##   ", L"   ###         ##   ", L"   ##           #   ",
-        L"   ##   #   #   #   ", L"    #           #   ", L"    #     #     #   ",
-        L"    ##         ##   ", L"     ##  ###  ##    ", L"      ##     ##     ",
-        L"       #######      ", L"      ##     ##     ", L"   #####     #####  ",
-        L" ###   ### ###   ###", L"##       ###       #"
-    };
-    int top = cy - 9 * unit, left = cx - 10 * unit;
-    for (int y = 0; y < 17; ++y) for (int x = 0; pixels[y][x]; ++x) {
-        if (pixels[y][x] != L'#') continue;
-        int detail = (x * 7 + y * 3) % 7;
-        COLORREF tone = detail <= restored ? accent : MixColor(C_PANEL, accent, 35);
-        int bad = corrupted && (int)(Hash3(x, y, 33) % 7u) < corrupted;
-        if (bad) tone = MixColor(accent, C_RED, 85);
-        int shift = bad && FxDecorOn() ? ((int)(Hash3(y, GetTickCount() / 180, 4) % 3u) - 1) * unit : 0;
-        Fill(dc, MakeRect(left + x * unit + shift, top + y * unit, left + (x + 1) * unit - 1 + shift, top + (y + 1) * unit - 1), tone);
-    }
-    if (corrupted) {
-        for (int i = 0; i < corrupted; ++i) {
-            int x = rect.left + 12 + i * (rect.right - rect.left - 24) / 6;
-            Fill(dc, MakeRect(x, rect.bottom - 20, x + 16, rect.bottom - 17), C_RED);
+// ROGUE in the enemy sprites' own 16x16 language (see sprites.h): a hood whose
+// bent tip carries the call signal, two lit eyes in the dark opening, and
+// three lights on the cloak (the number ROGUE comes to like). The accent is
+// the base colour, shaded exactly like an enemy's own colour.
+#define ROGUE_SIZE 16
+static const char* const ROGUE_SPRITE[ROGUE_SIZE] = {
+    "...........XX...",
+    ".........XXeX...",
+    ".......XX44X....",
+    "......X5443X....",
+    ".....X544443X...",
+    "...X54444443X...",
+    "...X54XXXX43X...",
+    "..X54XooooX43X..",
+    "..X4XoeooeoX3X..",
+    "..X4XoeooeoX3X..",
+    "..X44XooooX33X..",
+    ".X544XXXXXX433X.",
+    "X54444333333322X",
+    "X4443e3ee3e3222X",
+    "X33332222222211X",
+    "XXXXXXXXXXXXXXXX",
+};
+
+static void DrawRoguePortrait(HDC dc, RECT rect, int restored, int corrupted, COLORREF accent, int talking) {
+    int unit = rect.right - rect.left < rect.bottom - rect.top ? rect.right - rect.left : rect.bottom - rect.top;
+    unit /= ROGUE_SIZE;
+    if (unit < 1) unit = 1;
+    const int left = (rect.left + rect.right - ROGUE_SIZE * unit) / 2, top = (rect.top + rect.bottom - ROGUE_SIZE * unit) / 2;
+    const int decor = FxDecorOn();
+    const DWORD now = decor ? GetTickCount() : 0;
+    // Eyes narrow now and then; a lit mouth flickers while ROGUE's line types.
+    const int blink = decor && now % 3400 < 130, open = talking && decor && (now / 90) % 2;
+    const int lights = restored / 2;   // one cloak light per two recovered volumes
+    // Corruption eats in from the right along a ragged front. The eaten cells
+    // keep their shade but in red, some drop out, and their rows slip.
+    const int front = ROGUE_SIZE - corrupted * 4 / 3;
+    const COLORREF rot = accent == C_RED ? RGB(130, 28, 40) : C_RED;   // still readable on a red ROGUE
+    for (int y = 0; y < ROGUE_SIZE; ++y) {
+        const int edge = corrupted > 0 ? front + (int)(Hash3(y, 0, 77) % 3u) - 1 : ROGUE_SIZE;
+        const int slip = corrupted > 0 && decor && Hash3(y, (int)(now / 140), 5) % 9u < (uint32_t)corrupted
+            ? ((int)(Hash3(y, (int)(now / 140), 6) % 3u) - 1) * unit / 2 : 0;
+        for (int x = 0; x < ROGUE_SIZE; ++x) {
+            char c = ROGUE_SPRITE[y][x];
+            if (blink && y == 8 && c == 'e') c = 'o';
+            if (open && y == 10 && (x == 7 || x == 8)) c = 'e';
+            if (y == 13 && c == 'e' && (x == 5 ? 0 : x == 10 ? 2 : 1) >= lights) c = '2';
+            COLORREF tone;
+            int shift = 0;
+            if (x >= edge) {
+                uint32_t h = Hash3(x, y, (int)(now / 160)) % 10u;
+                if (h == 0) continue;
+                if (!SpriteCellColor(h == 1 && c != '.' ? '5' : c, rot, &tone)) continue;
+                shift = slip;
+            } else if (!SpriteCellColor(c, accent, &tone)) continue;
+            Fill(dc, MakeRect(left + x * unit + shift, top + y * unit, left + (x + 1) * unit + shift, top + (y + 1) * unit), tone);
         }
     }
 }
 
-static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed) {
+static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed, int talking) {
     int kind = gGame.story.kind;
     int milestone = kind == STORY_MILESTONE ? gGame.story.fragment + 1 : count;
     int terminal = kind >= STORY_ENDING_RESTORE && kind <= STORY_ENDING_MERGE;
@@ -152,8 +184,8 @@ static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed) {
     }
     int corruption = antagonist || revelation ? 6 : count > 0 ? count - 1 : 0;
     if (terminal && gGame.story.selectedEnding == 0) corruption = 0;
-    RECT portrait = MakeRect(r.left + 24, r.top + 65, r.right - 24, r.top + 318);
-    DrawRoguePortrait(dc, portrait, milestone, corruption, accent);
+    RECT portrait = MakeRect(r.left + 24, r.top + 52, r.right - 24, r.top + 292);
+    DrawRoguePortrait(dc, portrait, milestone, corruption, accent, talking);
     if (kind == STORY_A_GREETING || (kind == STORY_INTRO && !gGame.story.fragment) || (terminal && !gGame.story.selectedEnding)) {
         RECT welcome = MakeRect(r.left + 8, r.top + 294, r.right - 8, r.top + 340);
         Fill(dc, welcome, RGB(2, 5, 8));
@@ -186,49 +218,220 @@ static void DrawNarrativeDiagram(HDC dc, RECT r, int count, int elapsed) {
     TextRect(dc, MakeRect(r.left + 18, r.bottom - 68, r.right - 18, r.bottom - 14), state, C_TEXT, gFontSmall, DT_CENTER | DT_WORDBREAK);
 }
 
+// ---- Story cutscene ----------------------------------------------------------
+// A card opens one line per input. Every line is measured at its final width
+// before any is shown, so typing and later lines never move text on screen.
+#define STORY_LINE_WIDTH (BASE_WIDTH - 64 - 416 - 74)
+#define STORY_LINE_GAP 15
+#define STORY_LINE_SPACE 322
+#define STORY_CHAR_MS 34
+#define STORY_TYPE_MAX_MS 1500
+
+struct StoryLineView { wchar_t text[640]; int speaker; int who; };
+
+// Non-empty lines of the current card, with the "name:" prefix length and
+// who is speaking. Detection runs on the translated text, so English
+// "ROGUE:" and Korean "로그:" colour alike.
+static int StoryLines(StoryLineView* out) {
+    const StoryFragment* story = CurrentStoryFragment(&gGame);
+    if (!story) return 0;
+    const wchar_t* source[5] = { story->line1, story->line2, story->line3, story->line4, story->line5 };
+    int count = 0;
+    for (int i = 0; i < 5; ++i) {
+        StoryLineView* line = out + count;
+        NarrativeText(source[i], line->text, 640);
+        if (!line->text[0]) continue;
+        const wchar_t* localized = LocalizeText(source[i]);
+        line->who = STORY_WHO_NARRATION; line->speaker = 0;
+        if ((localized[0] == L'나' && localized[1] == L':') ||
+            (localized[0] == L'M' && localized[1] == L'e' && localized[2] == L':')) {
+            line->who = STORY_WHO_PLAYER; line->speaker = lstrlenW(NarrativeName()) + 1;
+        } else for (int c = 1; c < 18 && line->text[c]; ++c) if (line->text[c] == L':' && line->text[c + 1] == L' ') {
+            wchar_t name[18]; lstrcpynW(name, line->text, c + 1);
+            line->speaker = c + 1;
+            line->who = !lstrcmpiW(name, LocalizeText(L"로그")) ? STORY_WHO_ROGUE
+                : !lstrcmpiW(name, LocalizeText(L"시스템")) ? STORY_WHO_SYSTEM : STORY_WHO_OTHER;
+            break;
+        }
+        ++count;
+    }
+    return count;
+}
+
+int StoryLineCount() { StoryLineView lines[5]; int count = StoryLines(lines); return count ? count : 1; }
+
+int StoryLineTypeMs(int line) {
+    StoryLineView lines[5];
+    if (line < 0 || line >= StoryLines(lines)) return 0;
+    int ms = (lstrlenW(lines[line].text) - lines[line].speaker) * STORY_CHAR_MS;
+    return ms < STORY_TYPE_MAX_MS ? ms : STORY_TYPE_MAX_MS;
+}
+
+int StoryLineWho(int line) {
+    StoryLineView lines[5];
+    return line >= 0 && line < StoryLines(lines) ? lines[line].who : STORY_WHO_NARRATION;
+}
+
+static COLORREF StoryWhoColor(int who, COLORREF accent) {
+    return who == STORY_WHO_ROGUE ? accent : who == STORY_WHO_PLAYER ? C_GREEN
+        : who == STORY_WHO_SYSTEM ? C_RED : who == STORY_WHO_OTHER ? C_YELLOW : C_DIM;
+}
+
+// Shared with tools/narrative_check.cpp: the overflow check must measure the
+// exact layout the screen draws.
+static HFONT StoryDialogueLayout(HDC dc, const StoryLineView* lines, int count, int* rows, int* total) {
+    HFONT font = gFontMedium;
+    for (;;) {
+        *total = 0;
+        for (int i = 0; i < count; ++i) {
+            rows[i] = NarrativeParagraph(dc, MakeRect(0, 0, STORY_LINE_WIDTH, 0), lines[i].text, C_TEXT, font, 1);
+            *total += rows[i] + STORY_LINE_GAP;
+        }
+        if (*total <= STORY_LINE_SPACE || font == gFontSmall) return font;
+        font = gFontSmall;
+    }
+}
+
+// Draws the first `typed` characters. The speaker prefix is clipped out of the
+// body pass and drawn alone in its own colour, so no pixel is painted twice.
+// Returns the caret cell: after the last typed character, one text row tall.
+static RECT DrawStoryLine(HDC dc, const RECT& rect, const StoryLineView& line, int typed, HFONT font, COLORREF body, COLORREF tag) {
+    HFONT old = (HFONT)SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    wchar_t wrapped[1024];
+    const wchar_t* value = WrapAtSpaces(dc, line.text, rect.right - rect.left, wrapped, 1024, 1);
+    int length = lstrlenW(value);
+    if (typed < length) length = typed;
+    TEXTMETRICW metric; GetTextMetricsW(dc, &metric);
+    SIZE name = {0, 0};
+    if (line.speaker) GetTextExtentPoint32W(dc, value, line.speaker, &name);
+    for (int pass = 0; pass < (line.speaker ? 2 : 1); ++pass) {
+        int saved = SaveDC(dc);
+        if (line.speaker && pass) IntersectClipRect(dc, rect.left, rect.top, rect.left + name.cx, rect.top + metric.tmHeight);
+        else if (line.speaker) ExcludeClipRect(dc, rect.left, rect.top, rect.left + name.cx, rect.top + metric.tmHeight);
+        SetTextColor(dc, pass ? tag : body);
+        RECT draw = rect;
+        DrawTextW(dc, value, length, &draw, DT_WORDBREAK | DT_NOPREFIX);
+        RestoreDC(dc, saved);
+    }
+    int row = 0, start = 0;
+    for (int i = 0; i < length; ++i) if (value[i] == L'\n') { ++row; start = i + 1; }
+    SIZE tail = {0, 0};
+    GetTextExtentPoint32W(dc, value + start, length - start, &tail);
+    SelectObject(dc, old);
+    int x = rect.left + tail.cx, y = rect.top + row * metric.tmHeight;
+    return MakeRect(x, y, x, y + metric.tmHeight);
+}
+
 static void DrawStory(HDC dc, int width, int height) {
     const StoryFragment* story = CurrentStoryFragment(&gGame);
     if (!story) return;
     const int count = RecoveredShardCount(gGame.clearedMask);
+    const int decor = FxDecorOn();
+    const int scene = decor ? SceneElapsed() : 3000;
     COLORREF accent = gGame.story.kind == STORY_MILESTONE && gGame.story.fragment == 5 ? C_RED : C_BLUE;
     DrawSceneField(dc, PHASE_STORY, accent, width, height);
-    Fill(dc, MakeRect(0, 68, width, 94), RGB(2, 5, 8));
-    Fill(dc, MakeRect(0, height - 32, width, height), RGB(2, 5, 8));
+
+    StoryLineView lines[5];
+    int total = StoryLines(lines), rows[5] = {}, used = 0;
+    int shown = StoryShownLine();
+    if (shown >= total) shown = total - 1;
+    int clock = decor ? StoryLineElapsed() : 60000;
+    int typing = shown >= 0 && clock < StoryLineTypeMs(shown);
+    int who = shown >= 0 ? lines[shown].who : STORY_WHO_NARRATION;
+    COLORREF voice = StoryWhoColor(who, accent);
+
+    // Letterbox bars close in like a film frame when the scene first opens.
+    int frame = decor && SceneArrivalMajor() ? EaseOutCubic(Track(scene, 0, 380)) : 1000;
+    int topBar = 68 + 26 * frame / 1000, bottomBar = height - 32 * frame / 1000;
+    Fill(dc, MakeRect(0, 68, width, topBar), RGB(2, 5, 8));
+    Fill(dc, MakeRect(0, bottomBar, width, height), RGB(2, 5, 8));
+    if (decor) {
+        COLORREF lip = MixColor(C_BG, accent, FxScale(30 + 40 * (1000 - frame) / 1000));
+        Fill(dc, MakeRect(0, topBar, width, topBar + 1), lip);
+        Fill(dc, MakeRect(0, bottomBar - 1, width, bottomBar), lip);
+    }
+
     RECT art = MakeRect(64, 136, 394, 638);
     RECT panel = MakeRect(416, 136, width - 64, 638);
-    DrawNarrativeDiagram(dc, art, count, FxDecorOn() ? SceneElapsed() : 3000);
-    Panel(dc, panel, RGB(10, 19, 28), C_LINE);
-    wchar_t title[128], stamp[128];
-    NarrativeText(story->title, title, 128);
+    const COLORREF panelFill = RGB(10, 19, 28);
+    DrawNarrativeDiagram(dc, art, count, scene, typing && who == STORY_WHO_ROGUE);
+    // The picture tears in with the scene; SYSTEM lines tear it again and flash red.
+    if (decor && scene < 520)
+        DrawBandGlitch(dc, art, scene, FxScale(16 * (520 - scene) / 520), gGame.story.kind * 7 + gGame.story.page, 14);
+    if (decor && who == STORY_WHO_SYSTEM && clock >= 0 && clock < 240) {
+        DrawBandGlitch(dc, art, clock, FxScale(11 * (240 - clock) / 240), shown + 91, 9);
+        Outline(dc, art, MixColor(C_BG, C_RED, FxScale(90 * (240 - clock) / 240)), 2);
+    } else if (decor && typing && who == STORY_WHO_ROGUE) {
+        int glow = 30 + 25 * ((clock / 110) % 3);
+        Outline(dc, MakeRect(art.left - 4, art.top - 4, art.right + 4, art.bottom + 4), MixColor(C_BG, accent, FxScale(glow)), 1);
+    }
+    // Voice link: the bars move only while someone is talking.
+    for (int i = 0; i < 29; ++i) {
+        int x = art.left + 6 + i * 11;
+        int level = decor && typing && who != STORY_WHO_NARRATION ? 1 + (int)(Hash3(i, clock / 70, shown) % 7u) : 1;
+        Fill(dc, MakeRect(x, 656 - level, x + 6, 657 + level), MixColor(C_BG, voice, typing ? 70 : 28));
+    }
+
+    Panel(dc, panel, panelFill, C_LINE);
+    wchar_t title[128], path[128], stamp[128];
+    NarrativeText(story->title, title, 126);
+    int titleLength = lstrlenW(title);
+    int titleShown = decor ? titleLength * EaseOutCubic(Track(scene, 80, 520)) / 1000 : titleLength;
+    if (titleShown < titleLength) { title[titleShown] = L'_'; title[titleShown + 1] = 0; }
     NarrativeParagraph(dc, MakeRect(panel.left + 28, panel.top + 25, panel.right - 28, panel.top + 83), title, accent, gFontLarge, 0);
-    TextRect(dc, MakeRect(panel.left + 28, panel.top + 85, panel.right - 28, panel.top + 111), story->path, C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The record path decodes out of noise, left to right.
+    lstrcpynW(path, LocalizeText(story->path), 128);
+    if (decor && scene < 760) {
+        wchar_t noise[128];
+        CorruptCode(path, noise, 128, gGame.story.kind + 3, (uint32_t)scene);
+        int clear = lstrlenW(path) * Track(scene, 180, 740) / 1000;
+        for (int i = 0; i < clear && noise[i]; ++i) noise[i] = path[i];
+        lstrcpyW(path, noise);
+    }
+    TextRect(dc, MakeRect(panel.left + 28, panel.top + 85, panel.right - 28, panel.top + 111), path, C_DIM, gFontSmall, DT_SINGLELINE | DT_END_ELLIPSIS);
     Fill(dc, MakeRect(panel.left + 28, panel.top + 122, panel.right - 28, panel.top + 123), C_LINE);
-    const wchar_t* source[5] = { story->line1, story->line2, story->line3, story->line4, story->line5 };
-    wchar_t lines[5][640];
-    int row[5], total = 0;
-    HFONT font = gFontMedium;
-    int lineWidth = panel.right - panel.left - 74;
-    for (int i = 0; i < 5; ++i) NarrativeText(source[i], lines[i], 640);
-    for (int pass = 0; pass < 2; ++pass) {
-        total = 0;
-        for (int i = 0; i < 5; ++i) {
-            row[i] = lines[i][0] ? NarrativeParagraph(dc, MakeRect(0, 0, lineWidth, 0), lines[i], C_TEXT, font, 1) : 0;
-            total += row[i] + (row[i] ? 15 : 0);
-        }
-        if (total <= 322) break;
-        font = gFontSmall;
-    }
+
+    HFONT font = StoryDialogueLayout(dc, lines, total, rows, &used);
     int y = panel.top + 146;
-    // Measure the complete localized, substituted lines first. Reveal only the
-    // decorative margin marks; dialogue never reflows during a typewriter FX.
-    for (int i = 0; i < 5; ++i) if (row[i]) {
-        COLORREF tone = i == 4 ? C_YELLOW : C_TEXT;
-        if (lines[i][0] == L'>') tone = C_BLUE;
-        int light = !FxDecorOn() ? 100 : Track(SceneElapsed(), i * 100, i * 100 + 250) / 10;
-        Fill(dc, MakeRect(panel.left + 28, y + 4, panel.left + 31, y + row[i] - 2), MixColor(C_PANEL, accent, light));
-        NarrativeParagraph(dc, MakeRect(panel.left + 46, y, panel.right - 28, y + row[i]), lines[i], tone, font, 0);
-        y += row[i] + 15;
+    for (int i = 0; i <= shown; ++i) {
+        const StoryLineView& line = lines[i];
+        const int current = i == shown, age = current ? clock : 60000;
+        if (age < 0) break;   // The first line waits until the frame has opened.
+        const int length = lstrlenW(line.text), span = StoryLineTypeMs(i);
+        const int typed = !decor || age >= span ? length : line.speaker + (length - line.speaker) * age / span;
+        const int enter = decor && current ? EaseOutCubic(Track(age, 0, 200)) : 1000;
+        COLORREF tag = StoryWhoColor(line.who, accent);
+        COLORREF body = current ? C_TEXT : MixColor(C_PANEL, C_TEXT, 62);
+        if (!current) tag = MixColor(C_PANEL, tag, 62);
+        const int dx = FxScale(16) * (1000 - enter) / 1000;
+        RECT rect = MakeRect(panel.left + 46 + dx, y, panel.right - 28 + dx, y + rows[i]);
+
+        if (current) Fill(dc, MakeRect(panel.left + 1, y - 6, panel.right - 1, y + rows[i] + 6), MixColor(panelFill, tag, 8));
+        COLORREF mark = current ? MixColor(tag, C_TEXT, 70 * (1000 - enter) / 1000) : MixColor(C_PANEL, tag, 40);
+        Fill(dc, MakeRect(panel.left + 28, y + 4, panel.left + 31, y + rows[i] - 2), mark);
+        // A new line lands with a brief colour split; SYSTEM hits harder.
+        if (decor && current && age < 180) {
+            int system = line.who == STORY_WHO_SYSTEM, shift = system ? 4 : 2;
+            int ghost = FxScale((system ? 80 : 45) * (180 - age) / 180);
+            COLORREF red = MixColor(panelFill, C_RED, ghost), blue = MixColor(panelFill, C_BLUE, ghost);
+            DrawStoryLine(dc, MakeRect(rect.left - shift, rect.top, rect.right - shift, rect.bottom), line, typed, font, red, red);
+            DrawStoryLine(dc, MakeRect(rect.left + shift, rect.top, rect.right + shift, rect.bottom), line, typed, font, blue, blue);
+        }
+        RECT caret = DrawStoryLine(dc, rect, line, typed, font, body, tag);
+        if (decor && current && line.who == STORY_WHO_SYSTEM && age < 220)
+            DrawBandGlitch(dc, MakeRect(panel.left + 2, y - 4, panel.right - 2, y + rows[i] + 4), age, FxScale(9 * (220 - age) / 220), i + 51, 3);
+        if (current && typed < length) {
+            Fill(dc, MakeRect(caret.left + 3, caret.top + 5, caret.left + 12, caret.bottom - 4), tag);
+        } else if (current) {
+            // Waiting for input: a small bobbing arrow right after the text.
+            int wave = decor ? (scene / 70) % 8 : 0, bob = wave < 4 ? wave : 8 - wave;
+            int ax = caret.left + 10, ay = (caret.top + caret.bottom) / 2 - 3 + bob;
+            for (int r = 0; r < 5; ++r) Fill(dc, MakeRect(ax + r, ay + r, ax + 9 - r, ay + r + 1), tag);
+        }
+        y += rows[i] + STORY_LINE_GAP;
     }
+
     int pages = StoryPageCount(&gGame);
     if (pages < 1) pages = 1;
     wsprintfW(stamp, L"%s  ·  %d / %d%s", story->stamp ? LocalizeText(story->stamp) : L"ROGUE",
@@ -237,13 +440,21 @@ static void DrawStory(HDC dc, int width, int height) {
     RECT next = StoryNextRect(width, height);
     int hover = Inside(next, gMouse.x, gMouse.y);
     Panel(dc, next, hover ? RGB(28, 60, 69) : C_PANEL, hover ? accent : C_LINE);
-    TextRect(dc, next, gGame.story.page + 1 < pages ? L"다음 장면 [ENTER]" : L"계속 [ENTER]", C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    const wchar_t* label = shown + 1 < total ? L"다음 대사 [ENTER]" : gGame.story.page + 1 < pages ? L"다음 장면 [ENTER]" : L"계속 [ENTER]";
+    TextRect(dc, next, label, C_TEXT, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // One pip per line of this card.
+    for (int i = 0; i < total; ++i) {
+        int x = next.right + 20 + i * 16, cy = (next.top + next.bottom) / 2;
+        RECT pip = MakeRect(x, cy - 4, x + 9, cy + 5);
+        if (i < shown || (i == shown && clock >= 0)) Fill(dc, pip, i == shown ? accent : MixColor(C_PANEL, accent, 45));
+        else Outline(dc, pip, C_LINE, 1);
+    }
 }
 
 static void DrawNarrativeName(HDC dc, int width, int height) {
     DrawSceneField(dc, PHASE_NAME_ENTRY, C_BLUE, width, height);
     TextRect(dc, MakeRect(80, 118, width - 80, 156), L"ROGUE / 첫 번째 질문", C_BLUE, gFontSmall, DT_CENTER | DT_SINGLELINE);
-    DrawRoguePortrait(dc, MakeRect(width / 2 - 78, 173, width / 2 + 78, 322), 0, 0, C_BLUE);
+    DrawRoguePortrait(dc, MakeRect(width / 2 - 78, 160, width / 2 + 78, 320), 0, 0, C_BLUE);
     TextRect(dc, MakeRect(80, 325, width - 80, 375), L"로그: 어떻게 불러드리면 될까요?", C_TEXT, gFontLarge, DT_CENTER | DT_SINGLELINE);
     RECT input = NarrativeNameRect();
     Panel(dc, MakeRect(input.left - 3, input.top - 3, input.right + 3, input.bottom + 3), C_PANEL, C_BLUE);

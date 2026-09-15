@@ -388,6 +388,14 @@ int SceneElapsed(); // visible phase/page entrance, presentation state only
 // 이번 도착이 화면 자체가 바뀐 것인가. 0이면 같은 화면에서 쪽만 넘긴 것이라
 // 도착 연출이 브라운관을 다시 열지 않는다.
 int SceneArrivalMajor();
+// 스토리 대사는 한 줄씩 열린다. 몇 번째 줄까지 열었는지와 그 줄의 시계는
+// main.cpp가 들고, 줄의 길이·화자는 문장을 만드는 화면(narrative_visuals.inl)이 답한다.
+enum StoryWho { STORY_WHO_NARRATION = 0, STORY_WHO_ROGUE, STORY_WHO_PLAYER, STORY_WHO_SYSTEM, STORY_WHO_OTHER };
+int StoryShownLine();          // 타자 중이거나 마지막으로 열린 줄 (0부터)
+int StoryLineElapsed();        // 그 줄이 열린 뒤 지난 ms. 음수면 첫 줄이 아직 서기 전
+int StoryLineCount();
+int StoryLineTypeMs(int line); // 한 줄을 다 치는 데 걸리는 ms
+int StoryLineWho(int line);
 int UiFocusElapsed(); // ms on the current actionable hover target, -1 when absent
 // 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
 // 동안에도 리페인트를 계속 돌려야 노이즈가 멈추지 않는다.
@@ -529,8 +537,8 @@ RECT ReadButtonRect();
 RECT RewardRect(int i, int width);
 RECT FaceGridRect(int die, int face);
 RECT ContinueRect(int width, int height);
-// 스토리 화면의 [다음]. 패널 아무 곳이나 눌러 넘어가지 않도록 진행 입력을
-// 이 버튼 하나로 좁힌다 (엔터·스페이스는 그대로 받는다).
+// 스토리 화면의 [다음]. 입력은 화면 어디를 눌러도 받고, 이 버튼은 무엇이 넘어가는지
+// (다음 대사·다음 장면·계속) 보여 주는 자리다.
 RECT StoryNextRect(int width, int height);
 // Narrative widgets use the same canvas coordinates for drawing and input.
 RECT NarrativeNameRect();

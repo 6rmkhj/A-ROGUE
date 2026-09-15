@@ -77,10 +77,10 @@ void Text(HDC dc, int x, int y, const wchar_t* value, COLORREF color, HFONT font
 // GDI의 DT_WORDBREAK는 한글을 음절 사이 어디서나 끊는다 ("막습니|다"). 한국어는
 // 띄어쓰기에서 줄을 바꾸므로 여기서 먼저 줄을 나누고, DrawText에는 그래도 넘치는
 // 한 낱말만 맡긴다. 폰트는 이미 dc에 골라져 있어야 한다.
-const wchar_t* WrapAtSpaces(HDC dc, const wchar_t* value, int width, wchar_t* out, int cap) {
+const wchar_t* WrapAtSpaces(HDC dc, const wchar_t* value, int width, wchar_t* out, int cap, int anyScript) {
     int n = lstrlenW(value), hangul = 0;
     for (int i = 0; i < n && !hangul; ++i) hangul = value[i] >= 0xAC00 && value[i] <= 0xD7A3;
-    if (!hangul || n >= cap || width <= 0) return value;
+    if ((!hangul && !anyScript) || n >= cap || width <= 0) return value;
     lstrcpyW(out, value);
     int lineStart = 0, lastSpace = -1;
     for (int i = 0; i <= n; ++i) {
@@ -589,7 +589,7 @@ COLORREF MixColor(COLORREF from, COLORREF to, int amount) {
 }
 
 // Sprite cells carry shading only; the enemy color from data.h supplies the hue.
-static int SpriteCellColor(char cell, COLORREF base, COLORREF* out) {
+int SpriteCellColor(char cell, COLORREF base, COLORREF* out) {
     switch (cell) {
     case 'X': *out = MixColor(base, C_INK, 82); return 1;
     case '1': *out = MixColor(base, C_INK, 66); return 1;
