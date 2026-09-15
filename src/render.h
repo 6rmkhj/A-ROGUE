@@ -33,7 +33,9 @@ void Outline(HDC dc, const RECT& rect, COLORREF color, int thickness);
 void Panel(HDC dc, const RECT& rect, COLORREF fillColor, COLORREF borderColor);
 void Text(HDC dc, int x, int y, const wchar_t* value, COLORREF color, HFONT font);
 void TextRect(HDC dc, const RECT& rect, const wchar_t* value, COLORREF color, HFONT font, UINT flags);
-const wchar_t* WrapAtSpaces(HDC dc, const wchar_t* value, int width, wchar_t* out, int cap);
+// anyScript=1이면 한글이 없어도 줄바꿈을 직접 넣는다. 타자로 한 글자씩 그릴 때
+// DrawText의 자동 줄바꿈에 맡기면 쓰던 낱말이 다음 줄로 튄다.
+const wchar_t* WrapAtSpaces(HDC dc, const wchar_t* value, int width, wchar_t* out, int cap, int anyScript = 0);
 void Bar(HDC dc, const RECT& rect, int value, int maximum, COLORREF color);
 int TextWidth(HDC dc, const wchar_t* value, HFONT font);
 COLORREF MixColor(COLORREF from, COLORREF to, int amount);
@@ -94,6 +96,8 @@ void AppendStatus(wchar_t* output, const wchar_t* status);
 // shiftX/bob은 상자는 그대로 두고 도트 그림만 밀어낸다 (달려드는 타격 연출).
 void DrawSpriteArt(HDC dc, const RECT& box, int kind, int alive, int flash, int bob, int shiftX, int sx = 1000, int sy = 1000);
 void DrawPortrait(HDC dc, const RECT& box, int kind, int alive, int selected, int flash, int bob, int shiftX, int sx = 1000, int sy = 1000);
+// 적 스프라이트 한 칸의 색. 로그의 초상도 같은 명암 규칙을 쓴다. 투명 칸이면 0.
+int SpriteCellColor(char cell, COLORREF base, COLORREF* out);
 
 // 섹터를 판독하는 듯한 노이즈 연출. 주사위 판독과 볼륨 진입 화면이 함께 쓴다.
 uint32_t Hash3(int a, int b, int c);

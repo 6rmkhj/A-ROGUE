@@ -344,9 +344,12 @@ static int GimmickShakeAmplitude();
 static int BootShakeAmplitude();
 static int BossIntroShakeAmplitude();
 static int DeathShakeAmplitude();
+static int StoryShakeAmplitude();
 
 static int ShakeAmplitude() {
     int fx = GimmickShakeAmplitude();
+    int story = StoryShakeAmplitude();
+    if (story > fx) fx = story;
     int arrive = BossIntroShakeAmplitude();
     if (arrive > fx) fx = arrive;
     for (int i = 0; i < gGame.combatFxCount; ++i) {
@@ -1161,6 +1164,32 @@ static int VisibleSceneKey() {
         + (phase == PHASE_STORY ? 256 * (gGame.story.kind + 16 * gGame.story.fragment + 256 * gGame.story.page) : 0);
 }
 int SceneElapsed() { return gSceneKey < 0 ? 1200 : (int)(GetTickCount() - gSceneStart); }
+
+// 스토리 대사는 한 줄씩 연다. 규칙 계층의 쪽(page)은 그대로 두고 그 안의 줄만
+// 화면 쪽이 센다 - 검사와 밸런스 러너는 AdvanceStory로 쪽을 넘기므로 줄을 모른다.
+// 어느 쪽의 줄인지 키로 적어 두어, 전투 승리처럼 입력 밖에서 새 기록이 열려도
+// 이전 쪽의 줄 번호가 이어지지 않는다.
+#define STORY_FIRST_LINE_MS 360   // 판이 열린 뒤 첫 줄을 치기 시작하는 자리
+static int gStoryLineKey = -1, gStoryLine, gStoryLineTyped;
+static int gStoryBlipKey = -1, gStoryBlipLine, gStoryBlip;
+static DWORD gStoryLineAt;
+static int StoryLineKey() {
+    if (gGame.phase != PHASE_STORY) return -2;
+    return gGame.story.kind | gGame.story.fragment << 8 | gGame.story.page << 16 | (gGame.story.drive & 15) << 24;
+}
+int StoryShownLine() { return gStoryLineKey == StoryLineKey() ? gStoryLine : 0; }
+int StoryLineElapsed() {
+    if (gStoryLineKey == StoryLineKey() && gStoryLineTyped) return 60000;
+    if (gStoryLineKey == StoryLineKey() && gStoryLine) return (int)(GetTickCount() - gStoryLineAt);
+    return SceneElapsed() - STORY_FIRST_LINE_MS;
+}
+// 시스템이 끼어드는 줄은 화면을 한 번 친다. 로그와 나의 대화는 흔들지 않는다.
+static int StoryShakeAmplitude() {
+    if (gGame.phase != PHASE_STORY || gSceneKey < 0) return 0;
+    int line = StoryShownLine(), t = StoryLineElapsed();
+    if (t < 0 || t >= 240 || StoryLineWho(line) != STORY_WHO_SYSTEM) return 0;
+    return FxScale(6 * (240 - t) / 240);
+}
 void SyncIdleAnimation() {
     SyncNarrativeControls();
     SyncUiFocus();
@@ -1197,6 +1226,19 @@ void SyncIdleAnimation() {
         while (gTitleCue < cueCount && elapsed >= TITLE_CUES[gTitleCue].at) {
             PlaySfxPitched(TITLE_CUES[gTitleCue].sfx, TITLE_CUES[gTitleCue].pitch);
             ++gTitleCue;
+        }
+    }
+    // 대사를 치는 동안의 타자음. 화자마다 음높이가 달라 누가 말하는지 소리로도 갈리고,
+    // 서술은 한 박자 걸러 낮게만 친다. 밀린 박자는 몰아서 내지 않는다.
+    if (gWindow && gGame.phase == PHASE_STORY && gSceneKey >= 0 && FxDecorOn()) {
+        int line = StoryShownLine(), elapsed = StoryLineElapsed();
+        if (gStoryBlipKey != StoryLineKey() || gStoryBlipLine != line) { gStoryBlipKey = StoryLineKey(); gStoryBlipLine = line; gStoryBlip = 0; }
+        int beat = elapsed >= 0 && elapsed < StoryLineTypeMs(line) ? elapsed / 75 + 1 : 0;
+        if (beat > gStoryBlip) {
+            gStoryBlip = beat;
+            int who = StoryLineWho(line);
+            int pitch = who == STORY_WHO_ROGUE ? 5 : who == STORY_WHO_PLAYER ? 1 : who == STORY_WHO_NARRATION ? 0 : 3;
+            if (who != STORY_WHO_NARRATION || beat % 2) PlaySfxPitched(SFX_UI_FOCUS, pitch + (int)(Hash3(line, beat, 7) % 2u));
         }
     }
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
@@ -1352,6 +1394,16 @@ static void AdvanceStoryUi() {
         gVictoryStart = GetTickCount();
         PlaySfx(SFX_VICTORY);
     }
+}
+
+// 첫 입력은 치던 줄을 끝내기만 한다. 줄이 다 선 뒤의 입력이 다음 줄을 열고,
+// 마지막 줄 뒤에서만 쪽을 넘긴다. 그래서 잘못 누른 한 번이 읽지 않은 줄을 건너뛰지 않는다.
+static void AdvanceStoryLineUi() {
+    int key = StoryLineKey();
+    if (gStoryLineKey != key) { gStoryLineKey = key; gStoryLine = 0; gStoryLineTyped = 0; }
+    if (FxDecorOn() && StoryLineElapsed() < StoryLineTypeMs(gStoryLine)) gStoryLineTyped = 1;
+    else if (gStoryLine + 1 < StoryLineCount()) { ++gStoryLine; gStoryLineTyped = 0; gStoryLineAt = GetTickCount(); }
+    else { gStoryLineKey = -1; AdvanceStoryUi(); }
 }
 
 static void SyncAudioScene() {
@@ -1871,10 +1923,9 @@ static void HandleClick(int x, int y) {
     if (RollBlocking()) { StopRead(); InvalidateRect(gWindow, 0, FALSE); return; }
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (Inside(StartButtonRect(BASE_WIDTH, BASE_HEIGHT), x, y)) BeginNewRun(); }
-    // 스토리는 [다음] 버튼에서만 넘어간다. 패널 아무 곳이나 눌러 넘기면
-    // 읽는 중 잘못 누른 클릭으로 기록이 사라진다.
     else if (gGame.phase == PHASE_NAME_ENTRY) { if (Inside(NarrativeNameConfirmRect(), x, y)) ConfirmNarrativeName(); }
-    else if (gGame.phase == PHASE_STORY) { if (Inside(StoryNextRect(BASE_WIDTH, BASE_HEIGHT), x, y)) AdvanceStoryUi(); }
+    // 스토리는 화면 어디를 눌러도 다음 대사로 간다 (AdvanceStoryLineUi가 치던 줄부터 끝낸다).
+    else if (gGame.phase == PHASE_STORY) AdvanceStoryLineUi();
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         // 캠페인 전체에서 가장 되돌릴 수 없는 한 번이다. 카드는 후보만 세우고
         // 실행은 아래 확정 버튼에서만 받는다.
@@ -2102,7 +2153,7 @@ static void HandleKey(WPARAM key) {
     if ((gGame.phase == PHASE_COMBAT || gGame.phase == PHASE_PRUNE) && key == VK_RETURN && ActivateKeyboardFocus()) return;
     int floorBefore = gGame.floor;
     if (gGame.phase == PHASE_TITLE) { if (key == VK_RETURN || key == VK_SPACE) BeginNewRun(); }
-    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryUi(); }
+    else if (gGame.phase == PHASE_STORY) { if (key == VK_RETURN || key == VK_SPACE) AdvanceStoryLineUi(); }
     else if (gGame.phase == PHASE_ENDING_CHOICE) {
         if (key >= '1' && key < '1' + ENDING_COUNT) {
             int pick = (int)(key - '1');
