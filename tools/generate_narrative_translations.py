@@ -468,20 +468,32 @@ def generate():
             'ROGUE: This is a safe rehearsal. Press R to read the dice.',
         '로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.':
             'ROGUE: Put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
-        '로그: 증폭 2는 공격·방어에 1씩 더해요. 스페이스로 실행하세요.':
+        '로그: 증폭 2는 공격과 방어에 1씩 더해요. 스페이스로 실행하세요.':
             'ROGUE: Amplify 2 adds 1 to attack and defense. Press Space to execute.',
-        '로그: R로 주사위 눈을 읽으세요. 이 연습에서는 6·4·2가 나와요.':
-            'ROGUE: Press R to read. This rehearsal gives you 6, 4, and 2.',
-        '로그: 6→공격, 4→방어, 2→증폭. 주사위 셋이라 한 칸은 비워둬요.':
-            'ROGUE: 6 > ATTACK, 4 > DEFEND, 2 > AMPLIFY. Three dice leave one slot empty.',
-        '로그: 예상 피해 7, 방어 5. 적의 공격 4를 막는 계산을 확인하세요.':
-            'ROGUE: Preview: 7 damage, 5 block. Check how that blocks the enemy\'s 4 attack.',
-        '로그: 확인한 배치예요. 스페이스로 실제 실행해보세요.':
-            'ROGUE: You have checked the layout. Press Space to execute it.',
-        '로그: 실제 결과와 계산이 같죠. 연쇄는 공격·방어를 반복해요. 이제 연결을 고릅시다.':
-            'ROGUE: The result matches. CHAIN repeats attack or defense. Choose a connection next.',
-        '로그: 이번에는 6→공격, 4→방어, 2→증폭으로 계산해보세요.':
-            'ROGUE: For this rehearsal, use 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
+        '로그: 먼저 주사위를 읽어야 해요. R을 누르면 이번 턴에 나온 눈이 보여요. 연습이니까 6, 4, 2가 나오게 해뒀어요.':
+            'ROGUE: First you need to read the dice. Press R to see the faces rolled this turn. For practice, I made them come up 6, 4 and 2.',
+        '로그: 이제 눈을 칸에 놓을 차례예요. 6은 공격 칸에, 4는 방어 칸에, 2는 증폭 칸에 놓아 주세요. 주사위를 누른 다음 칸을 누르면 돼요.':
+            'ROGUE: Now place the faces. Put the 6 in ATTACK, the 4 in DEFEND and the 2 in AMPLIFY. Click a die, then click a slot.',
+        '로그: 실행하기 전에 오른쪽 위 예측을 보세요. 증폭 덕분에 공격은 7, 방어는 5가 됐어요. 적이 4만큼 때려도 전부 막아요. 확인했으면 Enter를 눌러 주세요.':
+            'ROGUE: Before executing, look at the forecast at the top right. Amplify raised attack to 7 and defense to 5, so the enemy\'s 4 is fully blocked. Press Enter once you have checked it.',
+        '로그: 방금 본 예측이 맞는지 직접 확인해 봐요. 스페이스를 누르면 이 배치대로 실행돼요.':
+            'ROGUE: Let\'s see whether that forecast holds. Press Space to execute this layout.',
+        '로그: 적이 5만큼 남았어요. 이번 턴에는 연쇄를 써 볼게요. 다시 R을 눌러 새로 나온 눈을 읽어 주세요.':
+            'ROGUE: The enemy has 5 left. This turn we will use CHAIN. Press R again to read the new faces.',
+        '로그: 연쇄는 같은 턴에 먼저 한 공격을 한 번 더 이어서 해요. 4는 공격 칸에, 5는 연쇄 칸에, 1은 방어 칸에 놓아 주세요. 연쇄에 놓은 눈이 클수록 더 많이 이어져요.':
+            'ROGUE: CHAIN follows up the attack you made earlier in the same turn. Put the 4 in ATTACK, the 5 in CHAIN and the 1 in DEFEND. A bigger face in CHAIN carries more of it.',
+        '로그: 공격 4만으로는 적이 1 남아요. 연쇄가 2를 더 이어 주니까 이번 턴에 끝낼 수 있어요. 스페이스로 실행해 보세요.':
+            'ROGUE: Attack 4 alone would leave the enemy at 1. CHAIN adds 2 more, so this turn finishes it. Press Space to execute.',
+        '로그: 잘했어요. 공격이 없는 턴에는 연쇄가 방어를 이어 줘요. 이제 복구할 연결을 고르러 가요.':
+            'ROGUE: Well done. On a turn without an attack, CHAIN follows up your defense instead. Now let\'s choose a connection to restore.',
+        '로그: 두 번째 턴이에요. 다시 R로 눈을 읽으세요.':
+            'ROGUE: Second turn. Press R to read the dice again.',
+        '로그: 4는 공격, 5는 연쇄, 1은 방어에 놓아보세요.':
+            'ROGUE: Put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.',
+        '로그: 이번에는 4를 공격, 5를 연쇄, 1을 방어 칸에 놓아 주세요.':
+            'ROGUE: This time, put 4 in ATTACK, 5 in CHAIN, and 1 in DEFEND.',
+        '로그: 이번 연습에서는 6을 공격, 4를 방어, 2를 증폭 칸에 놓아 주세요.':
+            'ROGUE: For this rehearsal, put 6 in ATTACK, 4 in DEFEND, and 2 in AMPLIFY.',
         '연결 복구': 'Connection restored',
         '관리자 경로': 'Administrator path',
         '로그: 연결을 다시 잡았어요.': 'ROGUE: I have reconnected us.',

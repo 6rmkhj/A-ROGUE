@@ -1421,32 +1421,59 @@ void BeginTutorial(GameState* game) {
 }
 
 void TutorialReadDice(GameState* game) {
-    if (!game || !game->tutorial.active || game->tutorial.step != TUTORIAL_READ) return;
+    if (!game || !game->tutorial.active || !TutorialReadStep(game->tutorial.step)) return;
+    if (game->tutorial.step == TUTORIAL_CHAIN_READ) {
+        game->tutorial.step = TUTORIAL_CHAIN_PLACE;
+        PushLog(game, L"로그: 4는 공격, 5는 연쇄, 1은 방어에 놓아보세요.");
+        return;
+    }
     game->tutorial.step = TUTORIAL_PLACE;
     PushLog(game, L"로그: 6은 공격, 4는 방어, 2는 증폭에 놓아보세요.");
 }
 
+const int* TutorialExpectedSlots(const GameState* game) {
+    static const int first[3] = {SLOT_ATTACK, SLOT_DEFEND, SLOT_AMPLIFY};
+    static const int chain[3] = {SLOT_ATTACK, SLOT_CHAIN, SLOT_DEFEND};
+    return game && game->tutorial.step >= TUTORIAL_CHAIN_READ ? chain : first;
+}
+
 static bool TutorialPlacementComplete(const GameState* game) {
-    return game->dice[0].assignedSlot == SLOT_ATTACK
-        && game->dice[1].assignedSlot == SLOT_DEFEND
-        && game->dice[2].assignedSlot == SLOT_AMPLIFY;
+    const int* expected = TutorialExpectedSlots(game);
+    for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot != expected[d]) return false;
+    return true;
+}
+
+// The second practice turn teaches CHAIN with fixed faces and no gameplay RNG:
+// 4 attacks the 5 HP left, and CHAIN 5 repeats it for 4 x (5 + 4) / 13 = 2.
+// Attack alone leaves 1, so the chain is what finishes the process.
+static void BeginTutorialChainTurn(GameState* game) {
+    ++game->turn;
+    game->playerBlock = game->lastDamage = game->lastBlock = 0;
+    static const uint8_t faces[3] = {3, 4, 0};   // 4, 5, 1
+    for (int d = 0; d < 3; ++d) { game->dice[d].rolledFace = faces[d]; game->dice[d].assignedSlot = -1; }
+    game->selectedDie = -1;
+    game->tutorial.step = TUTORIAL_CHAIN_READ;
+    PushLog(game, L"로그: 두 번째 턴이에요. 다시 R로 눈을 읽으세요.");
 }
 
 void AcknowledgeTutorialPreview(GameState* game) {
     if (!game || !game->tutorial.active || game->tutorial.step != TUTORIAL_PREVIEW
         || !TutorialPlacementComplete(game)) return;
     game->tutorial.step = TUTORIAL_EXECUTE;
-    PushLog(game, L"로그: 증폭 2는 공격·방어에 1씩 더해요. 스페이스로 실행하세요.");
+    PushLog(game, L"로그: 증폭 2는 공격과 방어에 1씩 더해요. 스페이스로 실행하세요.");
 }
 
 const wchar_t* TutorialInstruction(const GameState* game) {
     if (!game || !game->tutorial.active) return L"";
     switch (game->tutorial.step) {
-    case TUTORIAL_READ: return L"로그: R로 주사위 눈을 읽으세요. 이 연습에서는 6·4·2가 나와요.";
-    case TUTORIAL_PLACE: return L"로그: 6→공격, 4→방어, 2→증폭. 주사위 셋이라 한 칸은 비워둬요.";
-    case TUTORIAL_PREVIEW: return L"로그: 예상 피해 7, 방어 5. 적의 공격 4를 막는 계산을 확인하세요.";
-    case TUTORIAL_EXECUTE: return L"로그: 확인한 배치예요. 스페이스로 실제 실행해보세요.";
-    case TUTORIAL_COMPLETE: return L"로그: 실제 결과와 계산이 같죠. 연쇄는 공격·방어를 반복해요. 이제 연결을 고릅시다.";
+    case TUTORIAL_READ: return L"로그: 먼저 주사위를 읽어야 해요. R을 누르면 이번 턴에 나온 눈이 보여요. 연습이니까 6, 4, 2가 나오게 해뒀어요.";
+    case TUTORIAL_PLACE: return L"로그: 이제 눈을 칸에 놓을 차례예요. 6은 공격 칸에, 4는 방어 칸에, 2는 증폭 칸에 놓아 주세요. 주사위를 누른 다음 칸을 누르면 돼요.";
+    case TUTORIAL_PREVIEW: return L"로그: 실행하기 전에 오른쪽 위 예측을 보세요. 증폭 덕분에 공격은 7, 방어는 5가 됐어요. 적이 4만큼 때려도 전부 막아요. 확인했으면 Enter를 눌러 주세요.";
+    case TUTORIAL_EXECUTE: return L"로그: 방금 본 예측이 맞는지 직접 확인해 봐요. 스페이스를 누르면 이 배치대로 실행돼요.";
+    case TUTORIAL_CHAIN_READ: return L"로그: 적이 5만큼 남았어요. 이번 턴에는 연쇄를 써 볼게요. 다시 R을 눌러 새로 나온 눈을 읽어 주세요.";
+    case TUTORIAL_CHAIN_PLACE: return L"로그: 연쇄는 같은 턴에 먼저 한 공격을 한 번 더 이어서 해요. 4는 공격 칸에, 5는 연쇄 칸에, 1은 방어 칸에 놓아 주세요. 연쇄에 놓은 눈이 클수록 더 많이 이어져요.";
+    case TUTORIAL_CHAIN_EXECUTE: return L"로그: 공격 4만으로는 적이 1 남아요. 연쇄가 2를 더 이어 주니까 이번 턴에 끝낼 수 있어요. 스페이스로 실행해 보세요.";
+    case TUTORIAL_COMPLETE: return L"로그: 잘했어요. 공격이 없는 턴에는 연쇄가 방어를 이어 줘요. 이제 복구할 연결을 고르러 가요.";
     default: return L"";
     }
 }
@@ -2186,10 +2213,11 @@ static void BeginTurn(GameState* game) {
 int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
     if (game->phase != PHASE_COMBAT || dieIndex < 0 || dieIndex >= 3 || slotIndex < 0 || slotIndex >= SLOT_COUNT) return 0;
     if (game->tutorial.active) {
-        if (game->tutorial.step == TUTORIAL_READ || game->tutorial.step == TUTORIAL_COMPLETE) return 0;
-        const int expected[3] = {SLOT_ATTACK, SLOT_DEFEND, SLOT_AMPLIFY};
-        if (slotIndex != expected[dieIndex]) {
-            PushLog(game, L"로그: 이번에는 6→공격, 4→방어, 2→증폭으로 계산해보세요.");
+        if (TutorialReadStep(game->tutorial.step) || game->tutorial.step == TUTORIAL_COMPLETE) return 0;
+        if (slotIndex != TutorialExpectedSlots(game)[dieIndex]) {
+            PushLog(game, game->tutorial.step >= TUTORIAL_CHAIN_READ
+                ? L"로그: 이번에는 4를 공격, 5를 연쇄, 1을 방어 칸에 놓아 주세요."
+                : L"로그: 이번 연습에서는 6을 공격, 4를 방어, 2를 증폭 칸에 놓아 주세요.");
             return 0;
         }
     }
@@ -2213,16 +2241,20 @@ int AssignDieToSlot(GameState* game, int dieIndex, int slotIndex) {
         }
     }
     game->selectedDie = dieIndex;
-    if (game->tutorial.active)
-        game->tutorial.step = (uint8_t)(TutorialPlacementComplete(game) ? TUTORIAL_PREVIEW : TUTORIAL_PLACE);
+    if (game->tutorial.active) {
+        int chain = game->tutorial.step >= TUTORIAL_CHAIN_READ;
+        game->tutorial.step = (uint8_t)(TutorialPlacementComplete(game)
+            ? (chain ? TUTORIAL_CHAIN_EXECUTE : TUTORIAL_PREVIEW) : (chain ? TUTORIAL_CHAIN_PLACE : TUTORIAL_PLACE));
+    }
     return 1;
 }
 
 void UnassignDie(GameState* game, int dieIndex) {
     if (dieIndex < 0 || dieIndex >= 3) return;
-    if (game->tutorial.active && (game->tutorial.step == TUTORIAL_READ || game->tutorial.step == TUTORIAL_COMPLETE)) return;
+    if (game->tutorial.active && (TutorialReadStep(game->tutorial.step) || game->tutorial.step == TUTORIAL_COMPLETE)) return;
     game->dice[dieIndex].assignedSlot = -1;
-    if (game->tutorial.active) game->tutorial.step = TUTORIAL_PLACE;
+    if (game->tutorial.active)
+        game->tutorial.step = (uint8_t)(game->tutorial.step >= TUTORIAL_CHAIN_READ ? TUTORIAL_CHAIN_PLACE : TUTORIAL_PLACE);
 }
 
 void SelectEnemy(GameState* game, int enemyIndex) {
@@ -2857,7 +2889,7 @@ void PreviewTurn(const GameState* game, TurnPreview* out) {
     if (assigned == 0) return;
 
     GameState copy = *game;
-    if (copy.tutorial.active) copy.tutorial.step = TUTORIAL_EXECUTE;
+    if (copy.tutorial.active) copy.tutorial.step = TUTORIAL_CHAIN_EXECUTE;   // passes EndTurn without starting a practice turn
     // 읽기 오류는 실행하는 순간 다시 굴러간다. 사본에서 그대로 굴려 보면 실제로 나올 숫자가
     // 미리보기로 새어 나가므로, 재굴림 자체를 빼고 돌린다. 대신 예상은 확정이 아니라고 밝히고,
     // 흔들리는 값이 닿는 슬롯은 산출량을 모른다고 표시한다.
@@ -3041,7 +3073,7 @@ int DebugJumpToBoss(GameState* game, int floor) {
 
 void EndTurn(GameState* game) {
     if (game->phase != PHASE_COMBAT) return;
-    if (game->tutorial.active && game->tutorial.step != TUTORIAL_EXECUTE) return;
+    if (game->tutorial.active && !TutorialExecuteStep(game->tutorial.step)) return;
     int assigned = 0;
     for (int d = 0; d < 3; ++d) if (game->dice[d].assignedSlot >= 0) ++assigned;
     if (assigned == 0) {
@@ -3113,7 +3145,8 @@ void EndTurn(GameState* game) {
         game->lastTurnDamageDealt, game->lastTurnDamageTaken, game->lastTurnBlockGained);
     PushLog(game, result);
     if (game->tutorial.active) {
-        game->tutorial.step = TUTORIAL_COMPLETE;
+        if (game->tutorial.step == TUTORIAL_EXECUTE) BeginTutorialChainTurn(game);
+        else game->tutorial.step = TUTORIAL_COMPLETE;
         return;
     }
     if (game->phase == PHASE_GAMEOVER) return;

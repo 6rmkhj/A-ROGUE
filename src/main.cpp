@@ -1178,10 +1178,24 @@ static int StoryLineKey() {
     return gGame.story.kind | gGame.story.fragment << 8 | gGame.story.page << 16 | (gGame.story.drive & 15) << 24;
 }
 int StoryShownLine() { return gStoryLineKey == StoryLineKey() ? gStoryLine : 0; }
+// 연출은 장식이므로 연출을 끄면 첫 대사부터 바로 시작한다.
+int StoryStageMs() {
+    return gGame.phase == PHASE_STORY && gGame.narrativeEnabled && gGame.story.kind == STORY_INTRO
+        && gGame.story.fragment == 0 && FxDecorOn() ? INTRO_STAGE_MS : 0;
+}
+static int gIntroCue, gIntroBlip;
 int StoryLineElapsed() {
     if (gStoryLineKey == StoryLineKey() && gStoryLineTyped) return 60000;
     if (gStoryLineKey == StoryLineKey() && gStoryLine) return (int)(GetTickCount() - gStoryLineAt);
-    return SceneElapsed() - STORY_FIRST_LINE_MS;
+    return SceneElapsed() - StoryStageMs() - STORY_FIRST_LINE_MS;
+}
+// 튜토리얼 안내 창의 시계. 계산 재생처럼 안내 창이 가려진 동안에는 돌지 않고,
+// 다시 보이는 첫 프레임부터 로그가 그 단계의 설명을 친다.
+static int gTutorialStepShown = -1, gTutorialBlip;
+static DWORD gTutorialStepAt;
+int TutorialStepElapsed() {
+    if (!gGame.tutorial.active || gTutorialStepShown != gGame.tutorial.step) return 60000;
+    return (int)(GetTickCount() - gTutorialStepAt);
 }
 // 시스템이 끼어드는 줄은 화면을 한 번 친다. 로그와 나의 대화는 흔들지 않는다.
 static int StoryShakeAmplitude() {
@@ -1210,6 +1224,7 @@ void SyncIdleAnimation() {
         // 하나로 대신한다.
         gTitleCue = gGame.phase == PHASE_TITLE && FxDecorOn()
             ? 0 : (int)(sizeof(TITLE_CUES) / sizeof(TITLE_CUES[0])) - 1;
+        gIntroCue = gIntroBlip = 0;
         if (gWindow && !gTurnTraceActive && !gCombatClearActive && !gDeathActive) {
             if (gGame.phase == PHASE_COMBAT && gGame.encounter == 2
                 && !(gBossIntroFloor == gGame.floor && gBossIntroDrive == gGame.selectedDrive)) {
@@ -1228,6 +1243,17 @@ void SyncIdleAnimation() {
             ++gTitleCue;
         }
     }
+    // 첫 만남 연출의 소리: 인사를 치는 소리, 글자가 무너지는 소리, 로그가 그려지는 소리.
+    // 건너뛰어 시계가 연출 끝으로 넘어가면 지난 구간은 소리 없이 지나간다.
+    if (gWindow && gSceneKey >= 0 && StoryStageMs()) {
+        static const struct { int at, sfx, pitch; } INTRO_CUES[] = {
+            { INTRO_BREAK_AT, SFX_BOOT_TEAR, 0 }, { INTRO_ROGUE_AT, SFX_READ_START, 0 }, { INTRO_SETTLE_AT, SFX_UI_FOCUS, 5 } };
+        int elapsed = SceneElapsed();
+        for (; gIntroCue < 3 && elapsed >= INTRO_CUES[gIntroCue].at; ++gIntroCue)
+            if (elapsed < INTRO_STAGE_MS) PlaySfxPitched(INTRO_CUES[gIntroCue].sfx, INTRO_CUES[gIntroCue].pitch);
+        int beat = elapsed >= INTRO_TYPE_AT && elapsed < INTRO_TYPE_END ? (elapsed - INTRO_TYPE_AT) / 100 + 1 : 0;
+        if (beat > gIntroBlip) { gIntroBlip = beat; PlaySfxPitched(SFX_UI_FOCUS, 1); }
+    }
     // 대사를 치는 동안의 타자음. 화자마다 음높이가 달라 누가 말하는지 소리로도 갈리고,
     // 서술은 한 박자 걸러 낮게만 친다. 밀린 박자는 몰아서 내지 않는다.
     if (gWindow && gGame.phase == PHASE_STORY && gSceneKey >= 0 && FxDecorOn()) {
@@ -1240,6 +1266,14 @@ void SyncIdleAnimation() {
             int pitch = who == STORY_WHO_ROGUE ? 5 : who == STORY_WHO_PLAYER ? 1 : who == STORY_WHO_NARRATION ? 0 : 3;
             if (who != STORY_WHO_NARRATION || beat % 2) PlaySfxPitched(SFX_UI_FOCUS, pitch + (int)(Hash3(line, beat, 7) % 2u));
         }
+    }
+    int tutorialStep = gGame.tutorial.active && gGame.phase == PHASE_COMBAT && !gTurnTraceActive && !gCombatClearActive
+        ? gGame.tutorial.step : -1;
+    if (tutorialStep != gTutorialStepShown) { gTutorialStepShown = tutorialStep; gTutorialStepAt = GetTickCount(); gTutorialBlip = 0; }
+    if (gWindow && tutorialStep >= 0 && FxDecorOn()) {
+        int elapsed = TutorialStepElapsed() - TUTORIAL_TYPE_DELAY_MS;
+        int beat = elapsed >= 0 && elapsed < TutorialTypeMs() ? elapsed / 75 + 1 : 0;
+        if (beat > gTutorialBlip) { gTutorialBlip = beat; PlaySfxPitched(SFX_UI_FOCUS, 5 + (int)(Hash3(tutorialStep, beat, 9) % 2u)); }
     }
     // 가이드가 열려 있으면 평소엔 리페인트를 멈추지만, 미판독 칸의 노이즈는
     // 계속 흔들려야 하므로 그때만 예외로 타이머를 살려 둔다.
@@ -1399,6 +1433,11 @@ static void AdvanceStoryUi() {
 // 첫 입력은 치던 줄을 끝내기만 한다. 줄이 다 선 뒤의 입력이 다음 줄을 열고,
 // 마지막 줄 뒤에서만 쪽을 넘긴다. 그래서 잘못 누른 한 번이 읽지 않은 줄을 건너뛰지 않는다.
 static void AdvanceStoryLineUi() {
+    // 첫 입력은 첫 만남 연출을 건너뛰기만 한다. 대사는 그다음 입력부터 넘어간다.
+    if (StoryStageMs() && gSceneKey >= 0 && SceneElapsed() < StoryStageMs()) {
+        gSceneStart = GetTickCount() - StoryStageMs();
+        return;
+    }
     int key = StoryLineKey();
     if (gStoryLineKey != key) { gStoryLineKey = key; gStoryLine = 0; gStoryLineTyped = 0; }
     if (FxDecorOn() && StoryLineElapsed() < StoryLineTypeMs(gStoryLine)) gStoryLineTyped = 1;
@@ -1451,7 +1490,7 @@ static void ContinueFromEnd() {
 }
 
 static void ExecuteCombatTurn() {
-    if (gGame.tutorial.active && gGame.tutorial.step != TUTORIAL_EXECUTE) return;
+    if (gGame.tutorial.active && !TutorialExecuteStep(gGame.tutorial.step)) return;
     FinishUiFx();
     int floor = gGame.floor, encounter = gGame.encounter;
     int turn = gGame.turn;
@@ -1757,7 +1796,7 @@ static int HoverId(int x, int y) {
         for (int i = 0; i < SLOT_COUNT; ++i)
             if ((gGame.selectedDie >= 0 ? !SlotLockedThisTurn(&gGame, i) : DieForSlotUI(i) >= 0)
                 && Inside(SlotRect(i), x, y)) return 300 + i;
-        if ((!gGame.tutorial.active || gGame.tutorial.step == TUTORIAL_EXECUTE) && Inside(EndTurnRect(), x, y)) return 400;
+        if ((!gGame.tutorial.active || TutorialExecuteStep(gGame.tutorial.step)) && Inside(EndTurnRect(), x, y)) return 400;
         if (IsTsrInstalled(&gGame, TSR_KEYB) && !gGame.keybUsedThisTurn && gGame.selectedDie >= 0
             && Inside(KeybButtonRect(), x, y)) return 410;
         return -1;

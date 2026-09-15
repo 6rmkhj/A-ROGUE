@@ -47,8 +47,11 @@ struct StoryRuntime {
     int8_t drive;         // A story source is not necessarily a mounted volume.
 };
 
+// The second practice turn (CHAIN_*) teaches the chain slot with fixed faces.
 enum TutorialStep { TUTORIAL_READ = 0, TUTORIAL_PLACE, TUTORIAL_PREVIEW,
-    TUTORIAL_EXECUTE, TUTORIAL_COMPLETE };
+    TUTORIAL_EXECUTE, TUTORIAL_CHAIN_READ, TUTORIAL_CHAIN_PLACE, TUTORIAL_CHAIN_EXECUTE, TUTORIAL_COMPLETE };
+inline bool TutorialExecuteStep(int step) { return step == TUTORIAL_EXECUTE || step == TUTORIAL_CHAIN_EXECUTE; }
+inline bool TutorialReadStep(int step) { return step == TUTORIAL_READ || step == TUTORIAL_CHAIN_READ; }
 
 struct TutorialRuntime {
     uint8_t active;
@@ -337,6 +340,8 @@ bool SubmitNarrativeName(GameState* game, const wchar_t* name);
 void BeginTutorial(GameState* game);
 void TutorialReadDice(GameState* game);
 void AcknowledgeTutorialPreview(GameState* game);
+// Die 0..2 must go to these slots in the current practice turn.
+const int* TutorialExpectedSlots(const GameState* game);
 const wchar_t* TutorialInstruction(const GameState* game);
 void FinishTutorial(GameState* game);
 void SkipTutorial(GameState* game);

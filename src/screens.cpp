@@ -1853,7 +1853,7 @@ static void DrawCombatControls(HDC dc) {
     DrawCardMotion(dc, read, C_GREEN, 0, canRead);
     TextRect(dc, read, L"판독 [R]", canRead ? C_GREEN : C_DIM, gFontMedium, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     RECT end = EndTurnRect();
-    int canRun = !tracing && gRolled && !gReadActive && (!gGame.tutorial.active || gGame.tutorial.step == TUTORIAL_EXECUTE);
+    int canRun = !tracing && gRolled && !gReadActive && (!gGame.tutorial.active || TutorialExecuteStep(gGame.tutorial.step));
     int hover = canRun && Inside(end, gMouse.x, gMouse.y);
     Panel(dc, end, hover ? RGB(71, 42, 42) : canRun ? RGB(40, 25, 28) : C_PANEL,
         hover ? C_RED : canRun ? MixColor(C_LINE, C_RED, 55) : C_LINE);

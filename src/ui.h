@@ -396,6 +396,20 @@ int StoryLineElapsed();        // 그 줄이 열린 뒤 지난 ms. 음수면 첫
 int StoryLineCount();
 int StoryLineTypeMs(int line); // 한 줄을 다 치는 데 걸리는 ms
 int StoryLineWho(int line);
+// 튜토리얼 안내 창. 단계가 보이기 시작한 뒤 흐른 ms는 main.cpp가, 그 설명을
+// 다 치는 데 걸리는 ms는 문장을 만드는 화면이 답한다.
+#define TUTORIAL_TYPE_DELAY_MS 250
+// 첫 만남(P01) 앞의 짧은 연출. 인사가 혼자 쳐지고, 가장자리부터 무너지고, 그 자리에
+// 로그가 그려진 뒤 대화 화면의 초상 자리로 옮겨 앉는다. 그림과 소리가 같은 경계를 본다.
+#define INTRO_TYPE_AT   300
+#define INTRO_TYPE_END  1300
+#define INTRO_BREAK_AT  1900
+#define INTRO_ROGUE_AT  2500
+#define INTRO_SETTLE_AT 3300
+#define INTRO_STAGE_MS  3700
+int StoryStageMs();   // 지금 장면 앞에 붙은 연출 길이. 없거나 연출을 껐으면 0
+int TutorialStepElapsed();
+int TutorialTypeMs();
 int UiFocusElapsed(); // ms on the current actionable hover target, -1 when absent
 // 가이드 2페이지에 아직 미판독 칸이 남아 있는가. 남아 있으면 가이드가 열려 있는
 // 동안에도 리페인트를 계속 돌려야 노이즈가 멈추지 않는다.
