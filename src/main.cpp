@@ -942,65 +942,54 @@ static void BeginBossIntro() {
     SetTimer(gWindow, BOSS_INTRO_TIMER_ID, FX_TIMER_MS, 0);
 }
 
-// ---- 새 게임 삽입 연출 -----------------------------------------------------
-// 새 게임은 즉시 넘어가지 않는다. 지금 화면이 돌면서 줄어들어 플로피 한 장의
-// 라벨이 되고, 그 디스크가 컴퓨터의 3.5인치 드라이브에 꽂힌 뒤 드라이브가 읽고
-// 나서야 런이 만들어진다. 런을 끝에서 만드는 이유는 두 가지다. 연출이 붙잡는
-// 스냅샷이 "누르기 직전의 화면"이어야 하고, 건너뛰어도 결과가 같아야 한다.
+// ---- 새 게임 인트로 -------------------------------------------------------
+// 새 게임은 즉시 넘어가지 않는다. 디스크가 드라이브에 물리고 제목이 박힌 뒤에야
+// 런이 만들어진다. 런을 끝에서 만드는 이유는 건너뛰어도 결과가 같아야 하기
+// 때문이다 (FinishBootIntro).
 int gBootActive;
 DWORD gBootStart;
 static uint32_t gBootSeed;
 
-// 구간이 바뀌는 시점마다 한 번씩 울린다. 그림은 경과 시간만 보고 그려지므로
-// 타이머가 할 일은 이 소리와 리페인트뿐이다.
-//
-// 예전에는 주사위·보상 효과음을 빌려 썼다. 4초짜리 연출의 모든 사건이 판때기를
-// 놓는 소리로 들렸다는 뜻이다. 지금은 사건마다 그 물건의 소리가 따로 있고,
-// 큰 사건에는 둘을 겹쳐 쌓는다 (걸쇠 + 모터, 돌진 + 점등).
-#define BOOT_RISER_AT (BOOT_FLIP_AT - ScenePace(1200))
-// 표는 시각 순서여야 한다. SCENE_PACE_PCT를 크게 바꿔 상승음이 이웃을 넘으면 여기서 멈춘다.
-static_assert(BOOT_SURGE_AT <= BOOT_RISER_AT && BOOT_RISER_AT <= BOOT_SUCK_AT, "BOOT_RISER_AT out of order");
+// 구간이 바뀌는 시점마다 한 번씩 울린다. ★표가 음이고, 나머지는 물건의 소리다.
+// 상승음은 샘플 길이가 시계를 따라 늘지 않으므로 끝나는 자리에서 거꾸로 잡는다.
+#define BOOT_RISER_AT (BOOT_CLUNK_AT - ScenePace(1200))
+static_assert(BOOT_OPEN_AT <= BOOT_RISER_AT, "BOOT_RISER_AT out of order");
 static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
-    // ★표가 음이다. 기계 소리만 있을 때는 사건이 열한 번 일어날 뿐 아무것도
-    // 시작되고 끝나지 않았다 - 상승이 없으니 긴장이 쌓이지 않고, 닫는 화음이
-    // 없으니 끝난 것이 아니라 그냥 멈춘 것이었다.
-    { BOOT_SURGE_AT,        SFX_BOOT_TEAR,    0 },   // 과전압. 화면이 찢어진다
-    // 샘플 길이는 시계를 따라 늘지 않으므로 끝나는 자리에서 거꾸로 잡는다.
-    { BOOT_RISER_AT,        SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 정확히 벼림에서 끝난다
-    { BOOT_SUCK_AT,         SFX_BOOT_VORTEX,  0 },   // 감겨 들어가기 시작한다
-    { BOOT_FLIP_AT,         SFX_BOOT_STINGER, 0 },   // ★ 벼림 = A단조 화음이 선다
-    { BOOT_FLIP_AT,         SFX_BOOT_FORGE,   0 },   // 그 위에 얹히는 금속 타격
-    // 몸통은 25ms 먼저 들어간다 - 겹쳐 쌓으면 전이음이 같은 샘플에서 더해져
-    // 합이 천장을 넘고, 어긋나면 "쿵-깡"으로 두 겹이 다 들린다.
-    { BOOT_FLIP_AT - 25,    SFX_BOOT_LATCH,   4 },
-    { BOOT_FLIP_AT + 90,    SFX_BOOT_FLIP,    0 },   // 공중에서 한 바퀴
-    { BOOT_FLIP_AT + 240,   SFX_BOOT_PULSE,   7 },   // ★ E4 - 가장 높은 자리
-    { BOOT_FLY_AT,          SFX_BOOT_FLIP,    3 },   // 카메라가 물러난다
-    { BOOT_FLY_AT,          SFX_BOOT_REVEAL,  0 },   // ★ 방이 열린다. 상승의 반대로 내려간다
-    { BOOT_FLY_AT + 60,     SFX_BOOT_PULSE,   3 },   // ★ C4 - 내려온다
-    // 방이 열리는 400ms가 소리로는 거의 비어 있었다 (재 보니 2,000ms 부근의
-    // RMS가 989로 연출 전체의 바닥이었다). 세 번째 음을 여기에 놓아 E-C-A가
-    // 끊기지 않게 하고, 그 끝을 슬롯이 받는다.
-    { BOOT_FLY_AT + 260,    SFX_BOOT_PULSE,   0 },   // ★ A3 - 하강이 근음에 닿는다
-    { BOOT_PUSH_AT,         SFX_BOOT_SLIDE,   0 },   // 플라스틱이 슬롯을 긁는다
-    { BOOT_PUSH_AT + 210,   SFX_BOOT_SLIDE,   2 },   // 중간에 한 번 걸렸다 다시 들어간다
-    { BOOT_CLUNK_AT - 90,   SFX_BOOT_SLIDE,   5 },   // 판이 자리를 잡는다 (걸쇠의 예비 동작)
-    { BOOT_CLUNK_AT,        SFX_BOOT_LATCH,   0 },   // 철컥
-    { BOOT_CLUNK_AT,        SFX_BOOT_TOLL,    0 },   // ★ 낮은 A. 물린 자리의 근음
-    { BOOT_CLUNK_AT + 40,   SFX_BOOT_MOTOR,   0 },   // 스핀들이 회전수에 오른다
-    { BOOT_CLUNK_AT + 120,  SFX_BOOT_POWER,   0 },   // 브라운관이 켜진다
-    { BOOT_CLUNK_AT + 320,  SFX_BOOT_CHATTER, 0 },   // 판을 읽는 동안 깔리는 잔딸깍
-    { BOOT_CLUNK_AT + 330,  SFX_BOOT_SEEK,    0 },   // 헤드가 트랙을 옮긴다
-    { BOOT_CLUNK_AT + 500,  SFX_BOOT_SEEK,    3 },
-    { BOOT_SEEK_END - 110,  SFX_BOOT_SEEK,    6 },   // 마지막 트랙까지 읽었다
-    { BOOT_SEEK_END,        SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 런으로 넘어가며 계속 울린다
-    { BOOT_SEEK_END,        SFX_BOOT_LOCK,    0 },   // ★ 화면 둘레의 18칸이 차례로 잠긴다
-    { BOOT_SEEK_END,        SFX_BOOT_SWALLOW, 0 },   // 기계가 덮쳐 오며 화면 속으로 빨려 든다
-    { BOOT_INSERT_MS - 120, SFX_BOOT_FORGE,   2 },   // 다 삼킨 순간의 섬광
+    { 0,                      SFX_BOOT_POWER,   0 },   // 조명이 켜진다
+    { 120,                    SFX_BOOT_FLIP,    0 },   // 돌며 떠오른다
+    { 480,                    SFX_BOOT_FLIP,    3 },
+    { BOOT_OPEN_AT - 40,      SFX_BOOT_PULSE,   0 },   // ★ A3 - 정면에 선다
+    { BOOT_OPEN_AT + 80,      SFX_BOOT_SLIDE,   6 },   // 셔터가 미끄러진다
+    { BOOT_OPEN_AT + 260,     SFX_BOOT_LATCH,   4 },   // 끝까지 열려 걸린다
+    { BOOT_OPEN_AT + 300,     SFX_BOOT_MOTOR,   0 },   // 원판이 돈다
+    { BOOT_OPEN_AT + 520,     SFX_BOOT_PULSE,   3 },   // ★ C4
+    { BOOT_TURN_AT - 160,     SFX_BOOT_LATCH,   2 },   // 셔터가 닫힌다
+    { BOOT_TURN_AT,           SFX_BOOT_FLIP,    2 },   // 공중제비
+    { BOOT_TURN_AT + 300,     SFX_BOOT_SWALLOW, 2 },   // 카메라가 물러난다
+    { BOOT_TURN_AT + 420,     SFX_BOOT_FLIP,    5 },
+    { BOOT_RISER_AT,          SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 철컥에서 끝난다
+    { BOOT_FEED_AT + 380,     SFX_BOOT_SLIDE,   0 },   // 슬롯 입구에 닿는다
+    { BOOT_FEED_AT + 700,     SFX_BOOT_SLIDE,   4 },   // 빨려 들어간다
+    { BOOT_CLUNK_AT,          SFX_BOOT_LATCH,   0 },   // 철컥
+    { BOOT_CLUNK_AT,          SFX_BOOT_FORGE,   0 },
+    { BOOT_CLUNK_AT,          SFX_BOOT_TOLL,    0 },   // ★ 낮은 A
+    { BOOT_CLUNK_AT + 80,     SFX_BOOT_CHATTER, 0 },   // 드라이브가 읽는다
+    { BOOT_POWER_AT,          SFX_BOOT_SEEK,    0 },
+    { BOOT_POWER_AT + 40,     SFX_BOOT_POWER,   2 },   // 브라운관이 끊겼다 붙는다
+    { BOOT_POWER_AT + 160,    SFX_BOOT_STINGER, 0 },   // ★ 화면이 켜진다
+    { BOOT_POWER_AT + 160,    SFX_BOOT_REVEAL,  0 },
+    { BOOT_POWER_AT + 180,    SFX_BOOT_POWER,   5 },
+    { BOOT_POWER_AT + 320,    SFX_BOOT_POWER,   3 },
+    { BOOT_POWER_AT + 460,    SFX_BOOT_LOCK,    0 },   // ★ 제목이 선다
+    { BOOT_DIVE_AT,           SFX_BOOT_TEAR,    2 },   // 숨을 들이켠다
+    { BOOT_DIVE_AT + 180,     SFX_BOOT_SWALLOW, 0 },   // 빨려 든다
+    { BOOT_DIVE_AT + 180,     SFX_BOOT_VORTEX,  0 },
+    { BOOT_INTRO_MS - 200,    SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 런으로 넘어가며 계속 운다
+    { BOOT_INTRO_MS - 140,    SFX_BOOT_FORGE,   2 },
 };
 static int gBootCue;
 
-static void FinishBootInsert() {
+static void FinishBootIntro() {
     if (!gBootActive) return;
     gBootActive = 0;
     KillTimer(gWindow, 10);
@@ -1015,18 +1004,16 @@ static void FinishBootInsert() {
     InvalidateRect(gWindow, 0, FALSE);
 }
 
-static void BeginBootInsert() {
+static void BeginBootIntro() {
     if (gBootActive) return;
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
-    // 다른 연출이 붙잡아 둔 판이 남아 있으면 삽입 연출이 그 낡은 그림을 디스크에
-    // 싣게 된다. 놓아 주고 첫 프레임에서 지금 화면을 새로 잡는다.
+    // 인트로는 지난 화면을 쓰지 않는다. 다른 연출이 붙잡아 둔 판이 남아 있으면 놓아 준다.
     if (FxSnapshotHeld()) FxSnapshotRelease();
     gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
     gBootCue = 0;
     gBootStart = GetTickCount();
     gBootActive = 1;
-    // 누른 즉시 나는 소리. 전원 스위치를 젖힌 것이고, 여기서 시작된 과전압이
-    // 190ms 뒤에 화면을 찢는다 (BOOT_SURGE_AT의 BOOT_TEAR).
+    // 누른 즉시 나는 소리. 전원 스위치를 젖힌 것이다.
     PlaySfxPitched(SFX_BOOT_LATCH, 2);
     SetTimer(gWindow, 10, FX_TIMER_MS, 0);
 }
@@ -1038,35 +1025,9 @@ static int BootKick(int elapsed, int at, int life, int peak) {
     return peak * (life - since) / life;
 }
 
-// 화면이 갈라지는 동안 조금씩 세지고, 사건마다 한 번씩 크게 튄다.
-static int BootShakeAmplitude() {
-    if (!gBootActive) return 0;
-    int elapsed = ScenePace((int)(GetTickCount() - gBootStart));
-    if (elapsed < BOOT_SUCK_AT) {
-        // 붕괴. 바닥이 계속 올라가고, 과전압이 터지는 순간 한 번 크게 튄다.
-        int amp = 1 + elapsed * 5 / BOOT_GLITCH_MS;
-        int surge = BootKick(elapsed, BOOT_SURGE_AT, 170, 9);
-        return FxScale(surge > amp ? surge : amp);
-    }
-    // 마지막 돌진: 기계가 가까워질수록 떨림이 세진다. 다가오는 것이 무거워 보인다.
-    if (elapsed >= BOOT_SEEK_END) return FxScale(1 + Track(elapsed, BOOT_SEEK_END, BOOT_INSERT_MS) * 6 / 1000);
-    // 벼림 · 카메라 후퇴의 착지 · 철컥 · 점등 · 헤드 이동 둘.
-    // 후퇴가 멈추는 순간에 충격을 주면 카메라가 미끄러진 것이 아니라 그 자리에
-    // 가서 선 것으로 읽힌다 - 이것 하나로 후퇴 구간의 무게가 달라진다.
-    int amp = BootKick(elapsed, BOOT_FLIP_AT, 260, 12);
-    const int events[5][3] = {
-        {BOOT_PUSH_AT - 40,    200,  7},
-        {BOOT_CLUNK_AT,        280, 12},
-        {BOOT_CLUNK_AT + 120,  150,  5},
-        {BOOT_CLUNK_AT + 330,  100,  3},
-        {BOOT_CLUNK_AT + 500,  100,  3},
-    };
-    for (int i = 0; i < 5; ++i) {
-        int kick = BootKick(elapsed, events[i][0], events[i][1], events[i][2]);
-        if (kick > amp) amp = kick;
-    }
-    return FxScale(amp);
-}
+// 흔들림은 그림 쪽 카메라가 직접 맡는다 (DrawBootIntro의 kick). 창 전체까지 흔들면
+// 3D 카메라의 흔들림과 겹쳐 두 번 흔들린다.
+static int BootShakeAmplitude() { return 0; }
 
 static int ReadElapsed() { return (int)(GetTickCount() - gReadStart); }
 static int DieReadEnd(int die) { return die * NOISE_STAGGER_MS + NOISE_TOTAL_MS; }
@@ -1510,7 +1471,7 @@ static void BeginNewRun() {
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
     // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
-    BeginBootInsert(); InvalidateRect(gWindow, 0, FALSE);
+    BeginBootIntro(); InvalidateRect(gWindow, 0, FALSE);
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
 }
 
@@ -1949,7 +1910,7 @@ static void HandleClick(int x, int y) {
     int skippedOne = 0;
     // The click that skips the entrance belongs to that cinematic. Consuming it
     // here prevents the same click from dismissing ROGUE's first spoken line.
-    if (gBootActive) { FinishBootInsert(); return; }
+    if (gBootActive) { FinishBootIntro(); return; }
     else if (gTurnTraceActive) { FinishTurnTrace(); skippedOne = 1; }
     else if (gDescentActive) { FinishDescent(); skippedOne = 1; }
     else if (gDirEnterActive) { FinishDirectoryEnter(); skippedOne = 1; }
@@ -2200,7 +2161,7 @@ static void HandleKey(WPARAM key) {
         return;
     }
     if (gDeathActive) { if (DeathElapsed() >= DEATH_DARK_AT) FinishDeath(); return; }
-    if (gBootActive) { FinishBootInsert(); return; }
+    if (gBootActive) { FinishBootIntro(); return; }
     if (UiFxBlocksInput()) return;
     if (gTurnTraceActive) {
         if (key == VK_SPACE || key == VK_RETURN) FinishTurnTrace();
@@ -2458,7 +2419,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
                 PlaySfxPitched(BOOT_CUES[gBootCue].sfx, BOOT_CUES[gBootCue].pitch);
                 ++gBootCue;
             }
-            if (bootElapsed >= BOOT_INSERT_MS) FinishBootInsert();
+            if (bootElapsed >= BOOT_INTRO_MS) FinishBootIntro();
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == BOSS_INTRO_TIMER_ID) {

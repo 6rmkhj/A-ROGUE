@@ -604,33 +604,33 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: boss intro mutated game\n"); return 0; }
     }
     gBossIntroActive = 0;
-    // 삽입 연출은 타이틀 판을 붙잡아 디스크 라벨로 삼킨다. 회전용 축소본을 프레임마다
-    // 한 단계씩 만들므로 픽셀 재현은 보지 않고 판 불변만 본다.
+    // 인트로는 판을 붙잡지 않는다. 경과 ms의 순수 함수이므로 막마다 한 장씩
+    // 그려 보고, 같은 시각에 두 번 그린 결과가 같은지와 판 불변만 본다.
     ResetPresentation(); InitTitle(&gGame, 0, 0);
-    DrawFixture(dc); GdiFlush(); FxSnapshotCapture(dc, w, h);
-    if (!FxSnapshotHeld()) return 0;
     GameState title = gGame;
-    // 연출의 막마다 하나씩. 예전에는 셋뿐이라 붕괴·소용돌이·점등을 한 번도
-    // 그려 보지 않고 통과했다.
     static const int bootAges[] = {
-        BOOT_SURGE_AT + 90,                  // 과전압으로 화면이 찢어진다
-        BOOT_SUCK_AT + 300,                  // 감겨 들어간다
-        BOOT_FLIP_AT + 40,                   // 디스크 한 장이 벼려진다 (파열)
-        BOOT_FLIP_AT + 200,                  // 공중에서 뒤집힌다
-        BOOT_PUSH_AT + 250,                  // 슬롯에 반쯤 걸린다
-        BOOT_CLUNK_AT + 140,                 // 브라운관이 열린다
-        BOOT_CLUNK_AT + BOOT_POWER_MS + 400, // 섹터를 읽는다
-        BOOT_SEEK_END - 120,                 // 마지막 트랙
-        BOOT_SEEK_END + 340,                 // 기계가 덮쳐 온다
+        400,                      // 돌며 떠오른다
+        BOOT_OPEN_AT + 500,       // 셔터가 열리고 원판이 돈다
+        BOOT_TURN_AT + 400,       // 공중제비, 컴퓨터가 드러난다
+        BOOT_FEED_AT + 550,       // 슬롯 앞에서 물러난다
+        BOOT_FEED_AT + 880,       // 꽂힌다
+        BOOT_CLUNK_AT + 80,       // 철컥
+        BOOT_POWER_AT + 700,      // 화면이 켜진다
+        BOOT_DIVE_AT + 300,       // 화면 속으로
     };
     for (int i = 0; i < (int)(sizeof(bootAges) / sizeof(bootAges[0])); ++i) {
         gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i] * SCENE_PACE_PCT / 100;
-        DrawFixture(dc); DrawBootInsert(dc, BASE_WIDTH, BASE_HEIGHT, w, h); GdiFlush(); ++*frames;
+        unsigned expected = 0;
+        for (int pass = 0; pass < 2; ++pass) {
+            DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush(); ++*frames;
+            if (pass == 0) expected = FrameHash(bits, w, h);
+            else if (FrameHash(bits, w, h) != expected) { printf("FAIL: boot intro is not a fixed-time draw\n"); return 0; }
+        }
         if (folder) {
             char name[96]; sprintf_s(name, "stage_boot_%d", i);
             if (!SaveFrame(folder, name, w, h, bits)) return 0;
         }
-        if (memcmp(&gGame, &title, sizeof(gGame))) { printf("FAIL: boot insert mutated game\n"); return 0; }
+        if (memcmp(&gGame, &title, sizeof(gGame))) { printf("FAIL: boot intro mutated game\n"); return 0; }
     }
     gBootActive = 0;
     ResetPresentation();
