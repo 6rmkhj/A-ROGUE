@@ -202,30 +202,24 @@ constexpr inline int ScenePace(int realMs) { return realMs * 100 / SCENE_PACE_PC
 #define TITLE_HINT_AT   (1280 + TITLE_NAME_HOLD_MS)   // 맨 아래 조작 안내
 #define TITLE_SETTLE_AT (1560 + TITLE_NAME_HOLD_MS)   // 여기부터는 헤드가 계속 판을 읽는 유휴 상태다
 
-// ---- 새 게임 삽입 연출 -----------------------------------------------------
-// 새 게임을 누르면 지금 화면이 먼저 갈라지고, 소용돌이에 감겨 빨려 들어가 플로피
-// 한 장이 되고, 그 디스크가 공중에서 한 바퀴 뒤집힌 뒤 책상 위 컴퓨터의 3.5인치
-// 드라이브에 꽂힌다. 구간 경계는 그리기와 소리·흔들림이 같은 값을 봐야 하므로
-// 여기 모아 둔다.
-#define BOOT_GLITCH_MS 460     // 판이 띠로 어긋나고 고리가 조여 온다
-#define BOOT_SUCK_MS   860     // 화면이 세 바퀴 돌며 디스크 라벨로 빨려 들어간다
-#define BOOT_FLIP_MS   470     // 클로즈업 안에서 한 바퀴 뒤집힌다
-#define BOOT_FLY_MS    400     // 카메라가 물러나며 책상·기계·바닥이 드러난다
-#define BOOT_PUSH_MS   380     // 슬롯 안으로 밀려 들어간다 (중간에 한 번 걸린다)
-#define BOOT_SEEK_MS   660     // 드라이브가 읽는다 (점등·헤드 이동·신호 전송)
-#define BOOT_ZOOM_MS   520     // 기계 전체가 덮쳐 오고 그 화면 속으로 들어간다
-// 붕괴 직전의 예비 동작. 여기서부터 화면이 과전압으로 하얗게 부풀었다가 찢어진다.
-// 무너지는 구간 안에 무너지기 전이 있어야 첫 소리가 허공에서 나지 않는다.
-#define BOOT_SURGE_AT  (BOOT_GLITCH_MS - 190)
-// 디스크가 물린 뒤 브라운관이 켜지는 시간. 가로 한 줄이 세로로 열린다.
-#define BOOT_POWER_MS  300
-#define BOOT_SUCK_AT   BOOT_GLITCH_MS
-#define BOOT_FLIP_AT   (BOOT_SUCK_AT + BOOT_SUCK_MS)   // 디스크 한 장이 완성되는 순간
-#define BOOT_FLY_AT    (BOOT_FLIP_AT + BOOT_FLIP_MS)
-#define BOOT_PUSH_AT   (BOOT_FLY_AT + BOOT_FLY_MS)
-#define BOOT_CLUNK_AT  (BOOT_PUSH_AT + BOOT_PUSH_MS)   // 다 들어가 철컥 물리는 순간
-#define BOOT_SEEK_END  (BOOT_CLUNK_AT + BOOT_SEEK_MS)
-#define BOOT_INSERT_MS (BOOT_SEEK_END + BOOT_ZOOM_MS)
+// ---- 새 게임 인트로 -------------------------------------------------------
+// 조명 아래 디스크가 돌며 떠오르고, 셔터를 열어 원판을 보이고, 공중제비를 돌며
+// 컴퓨터 앞으로 날아가 드라이브에 꽂힌다. 모니터가 켜지면 카메라가 화면 속으로
+// 뛰어든다. 구간 경계는 그리기와 소리·흔들림이 같은 값을 본다.
+#define BOOT_SUMMON_MS 1200     // 조명 아래에서 한 바퀴 돌며 떠오른다
+#define BOOT_OPEN_MS   1000     // 셔터가 열리고 원판이 돈다
+#define BOOT_TURN_MS   1000     // 공중제비 한 번에 드라이브 위로. 카메라가 물러난다
+#define BOOT_FEED_MS   1000     // 눕혀 내려와 한 번 물러났다가 꽂힌다
+#define BOOT_CLUNK_MS  300      // 철컥
+#define BOOT_POWER_MS  1000     // 모니터가 켜진다
+#define BOOT_DIVE_MS   820      // 한 번 물러났다가 화면 속으로 빨려 든다
+#define BOOT_OPEN_AT   BOOT_SUMMON_MS
+#define BOOT_TURN_AT   (BOOT_OPEN_AT + BOOT_OPEN_MS)
+#define BOOT_FEED_AT   (BOOT_TURN_AT + BOOT_TURN_MS)
+#define BOOT_CLUNK_AT  (BOOT_FEED_AT + BOOT_FEED_MS)
+#define BOOT_POWER_AT  (BOOT_CLUNK_AT + BOOT_CLUNK_MS)
+#define BOOT_DIVE_AT   (BOOT_POWER_AT + BOOT_POWER_MS)
+#define BOOT_INTRO_MS  (BOOT_DIVE_AT + BOOT_DIVE_MS)
 
 // ---- 보스 조우 연출 --------------------------------------------------------
 // 일반전 앞에는 디렉터리 2택과 진입 연출이 있지만 보스 구역에는 둘 다 없다.
@@ -516,7 +510,7 @@ extern int gTermInputLen;
 void DrawTerminal(HDC dc, int width, int height);
 
 // 새 게임 삽입 연출. 붙잡아 둔 판을 돌려 얹으므로 캔버스의 실제 픽셀 크기가 필요하다.
-void DrawBootInsert(HDC dc, int width, int height, int deviceW, int deviceH);
+void DrawBootIntro(HDC dc, int width, int height);
 void DrawBossIntro(HDC dc, int width, int height);
 
 // ---- 16:9 레이아웃 ---------------------------------------------------------
