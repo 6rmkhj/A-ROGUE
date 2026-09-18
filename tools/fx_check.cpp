@@ -35,6 +35,7 @@ static int CheckTiming() {
         if (FxEventElapsed(game, i, at + 80, 0) != 80) return 5;
     }
     if (memcmp(&game, &before, sizeof(game))) return 6;
+    if (BOOT_INTRO_MS * BOOT_PACE_PCT / 100 > 6500) return 7;
     return 0;
 }
 
@@ -604,12 +605,18 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         if (memcmp(&gGame, &before, sizeof(gGame))) { printf("FAIL: boss intro mutated game\n"); return 0; }
     }
     gBossIntroActive = 0;
-    // 인트로는 판을 붙잡지 않는다. 경과 ms의 순수 함수이므로 막마다 한 장씩
-    // 그려 보고, 같은 시각에 두 번 그린 결과가 같은지와 판 불변만 본다.
+    // 인트로는 누르기 직전의 판을 첫 연결부에서 실제로 사용한다. 타이틀을 한 번
+    // 붙잡은 뒤 막마다 그려 보고, 같은 시각에 두 번 그린 결과가 같은지와 판
+    // 불변을 본다.
     ResetPresentation(); InitTitle(&gGame, 0, 0);
     GameState title = gGame;
+    gSceneKey = PHASE_TITLE; gSceneStart = 7000; gCheckTick = 10000;
+    DrawFixture(dc); FxSnapshotCapture(dc, w, h);
     static const int bootAges[] = {
-        400,                      // 돌며 떠오른다
+        80,                       // 시작 버튼이 입력을 받는다
+        340,                      // 타이틀 판이 가운데로 접힌다
+        650,                      // 18개 섹터가 디스크 라벨로 모인다
+        980,                      // 라벨을 드러내며 정면에 선다
         BOOT_OPEN_AT + 500,       // 셔터가 열리고 원판이 돈다
         BOOT_TURN_AT + 400,       // 공중제비, 컴퓨터가 드러난다
         BOOT_FEED_AT + 550,       // 슬롯 앞에서 물러난다
@@ -617,9 +624,13 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         BOOT_CLUNK_AT + 80,       // 철컥
         BOOT_POWER_AT + 700,      // 화면이 켜진다
         BOOT_DIVE_AT + 300,       // 화면 속으로
+        BOOT_INTRO_MS - 240,      // 돌입 쟔상이 줄고 덮개가 닫히기 시작한다
+        BOOT_INTRO_MS - 120,      // 플레어가 식으며 중앙선으로 모인다
+        BOOT_INTRO_MS - 32,       // 완전히 닫힌 판을 짧게 유지한다
+        BOOT_INTRO_MS,            // 다음 판의 도착 연출과 같은 마지막 프레임
     };
     for (int i = 0; i < (int)(sizeof(bootAges) / sizeof(bootAges[0])); ++i) {
-        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i] * SCENE_PACE_PCT / 100;
+        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + bootAges[i] * BOOT_PACE_PCT / 100;
         unsigned expected = 0;
         for (int pass = 0; pass < 2; ++pass) {
             DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush(); ++*frames;
@@ -632,6 +643,57 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         }
         if (memcmp(&gGame, &title, sizeof(gGame))) { printf("FAIL: boot intro mutated game\n"); return 0; }
     }
+    // 첫 연결부는 연출 강도와 무관하게 직전 판을 이어야 한다. 장식만 줄고
+    // 타이틀을 접는 뼈대가 사라지지 않는지 세 모드에서 고정 시각으로 확인한다.
+    for (int mode = 0; mode < FX_LEVEL_COUNT; ++mode) {
+        gFxLevel = mode; gSceneKey = PHASE_TITLE; gSceneStart = 7000; gCheckTick = 10000;
+        DrawFixture(dc); FxSnapshotCapture(dc, w, h);
+        gBootActive = 1; gBootStart = 10000; gCheckTick = 10000 + 340 * BOOT_PACE_PCT / 100;
+        DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush();
+        uint32_t expected = FrameHash(bits, w, h); ++*frames;
+        DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush(); ++*frames;
+        if (FrameHash(bits, w, h) != expected) { printf("FAIL: boot handoff mode is not a fixed-time draw\n"); return 0; }
+        if (folder) {
+            char name[96]; sprintf_s(name, "stage_boot_mode_%d", mode);
+            if (!SaveFrame(folder, name, w, h, bits)) return 0;
+        }
+        if (memcmp(&gGame, &title, sizeof(gGame))) { printf("FAIL: boot handoff mode mutated game\n"); return 0; }
+    }
+    // 기본·축소 모드의 마지막 프레임은 실제 새 런의 첫 프레임에
+    // DrawSceneArrival(0)을 얹은 것과 픽셀 단위로 같아야 한다. 수작업으로
+    // 복제한 헤더에서 버튼이 빠지거나 주사선 순서가 바뀌면 여기서 즉시 잡힌다.
+    size_t seamBytes = (size_t)w * h * 4;
+    unsigned char* bootExit = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, seamBytes);
+    if (!bootExit) return 0;
+    for (int mode = FX_REDUCED; mode <= FX_FULL; ++mode) {
+        ResetPresentation(); InitTitle(&gGame, 0, 0); gFxLevel = mode;
+        gSceneKey = PHASE_TITLE; gSceneStart = 7000; gCheckTick = 10000;
+        DrawFixture(dc); FxSnapshotCapture(dc, w, h);
+        gBootActive = 1; gBootStart = 10000;
+        gCheckTick = 10000 + BOOT_INTRO_MS * BOOT_PACE_PCT / 100;
+        DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); GdiFlush(); ++*frames;
+        memcpy(bootExit, bits, seamBytes);
+        if (folder) {
+            char name[96]; sprintf_s(name, "stage_boot_exit_mode_%d", mode);
+            if (!SaveFrame(folder, name, w, h, bits)) { HeapFree(GetProcessHeap(), 0, bootExit); return 0; }
+        }
+
+        gBootActive = 0; FxSnapshotRelease();
+        NewRun(&gGame, 12345u, 0);
+        gSceneKey = VisibleSceneKey(); gSceneStart = 20000; gCheckTick = 20000;
+        DrawFixture(dc); DrawSceneArrival(dc, C_GREEN, 1); GdiFlush(); ++*frames;
+        if (folder) {
+            char name[96]; sprintf_s(name, "stage_boot_arrival_mode_%d", mode);
+            if (!SaveFrame(folder, name, w, h, bits)) { HeapFree(GetProcessHeap(), 0, bootExit); return 0; }
+        }
+        if (memcmp(bootExit, bits, seamBytes)) {
+            HeapFree(GetProcessHeap(), 0, bootExit);
+            printf("FAIL: boot exit does not match scene arrival in mode %d\n", mode);
+            return 0;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, bootExit);
+    gFxLevel = FX_FULL;
     gBootActive = 0;
     ResetPresentation();
     FxSnapshotDestroy();

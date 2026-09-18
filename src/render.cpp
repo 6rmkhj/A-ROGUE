@@ -167,7 +167,16 @@ int EaseInCubic(int p) {
     return p * p / 1000 * p / 1000;
 }
 
-// 셔터는 천천히 풀렸다 가속해 바닥을 치고, 반동으로 두 번 작게 튄 뒤 멈춘다.
+// Quintic smoothstep: both velocity and acceleration are zero at the ends.
+int EaseSmoothStep(int p) {
+    if (p <= 0) return 0;
+    if (p >= 1000) return 1000;
+    long long x = p;
+    long long shape = 10000000LL - 15000LL * x + 6LL * x * x;
+    return (int)(x * x * x * shape / 1000000000000LL);
+}
+
+// Accelerating shutter fall with two small settling bounces.
 int ShutterFall(int p) {
     if (p <= 0) return 0;
     if (p >= 1000) return 1000;
@@ -355,6 +364,28 @@ int SinMille(int deci) {
     return sign * (a + (b - a) * rest / 10);
 }
 int CosMille(int deci) { return SinMille(deci + 900); }
+
+void FxSnapshotStretch(HDC dc, int deviceW, int deviceH, int cx, int cy,
+                       int scaleXMille, int scaleYMille) {
+    if (!gSnapHeld || !gSnapDc || deviceW <= 0 || deviceH <= 0
+        || scaleXMille <= 0 || scaleYMille <= 0) return;
+    int px = cx * deviceW / BASE_WIDTH, py = cy * deviceH / BASE_HEIGHT;
+    int hw = deviceW * scaleXMille / 2000, hh = deviceH * scaleYMille / 2000;
+    if (hw <= 0 || hh <= 0) return;
+
+    SetMapMode(dc, MM_TEXT);
+    SetMapMode(gSnapDc, MM_TEXT);
+    int oldStretch = SetStretchBltMode(dc, COLORONCOLOR);
+    StretchBlt(dc, px - hw, py - hh, hw * 2, hh * 2,
+               gSnapDc, 0, 0, gSnapW, gSnapH, SRCCOPY);
+    SetStretchBltMode(dc, oldStretch);
+    SetMapMode(gSnapDc, MM_ANISOTROPIC);
+    SetWindowExtEx(gSnapDc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(gSnapDc, gSnapW, gSnapH, 0);
+    SetMapMode(dc, MM_ANISOTROPIC);
+    SetWindowExtEx(dc, BASE_WIDTH, BASE_HEIGHT, 0);
+    SetViewportExtEx(dc, deviceW, deviceH, 0);
+}
 
 // PlgBlt는 평행사변형 세 꼭짓점(좌상·우상·좌하)을 받는다. 두 DC의 매핑 모드를
 // 잠시 MM_TEXT로 되돌려 장치 픽셀로 셈하고, 끝나면 원래 논리 좌표계를 돌려준다.

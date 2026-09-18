@@ -186,7 +186,7 @@ inline void DrawSceneArrival(HDC dc, COLORREF tone, int major = 1) {
     // 브라운관이 켜진다. 가운데 한 줄에서 위아래로 벌어지고 바깥은 잉크로 덮여
     // 있다. 뒤의 판은 그동안에도 계속 그려져 있으므로 다 열린 순간 이어 붙는
     // 자리가 없다 - 열리는 것은 덮개뿐이다.
-    int open = major ? EaseOutCubic(Track(t, 0, SCENE_ARRIVE_OPEN_MS)) : 1000;
+    int open = major ? EaseSmoothStep(Track(t, 0, SCENE_ARRIVE_OPEN_MS)) : 1000;
     if (open < 1000) {
         int gap = half * open / 1000;
         // 덮개는 처음 한순간 아직 달아올라 있다. 삽입 연출이 캔버스를 하얗게
