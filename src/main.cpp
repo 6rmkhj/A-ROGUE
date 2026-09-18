@@ -952,7 +952,7 @@ static uint32_t gBootSeed;
 
 // 구간이 바뀌는 시점마다 한 번씩 울린다. ★표가 음이고, 나머지는 물건의 소리다.
 // 상승음은 샘플 길이가 시계를 따라 늘지 않으므로 끝나는 자리에서 거꾸로 잡는다.
-#define BOOT_RISER_AT (BOOT_CLUNK_AT - ScenePace(1200))
+#define BOOT_RISER_AT (BOOT_CLUNK_AT - BootPace(1200))
 static_assert(BOOT_OPEN_AT <= BOOT_RISER_AT, "BOOT_RISER_AT out of order");
 static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
     { 0,                      SFX_BOOT_POWER,   0 },   // 조명이 켜진다
@@ -1006,23 +1006,21 @@ static void FinishBootIntro() {
 
 static void BeginBootIntro() {
     if (gBootActive) return;
+    // 입력을 받은 바로 그 프레임을 먼저 보관한다. gBootActive를 세운 뒤 다음
+    // WM_PAINT에서 잡으면 장면 시계가 초기화되어 타이틀의 진입 마스크가 다시
+    // 나타난 판을 붙잡게 된다.
+    if (!FxSnapshotHeld()) CaptureUiFxSnapshot();
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
-    // 인트로는 지난 화면을 쓰지 않는다. 다른 연출이 붙잡아 둔 판이 남아 있으면 놓아 준다.
-    if (FxSnapshotHeld()) FxSnapshotRelease();
     gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
     gBootCue = 0;
     gBootStart = GetTickCount();
     gBootActive = 1;
+    // 연출 끄기는 장식만 빼고 6초를 기다리는 모드가 아니다. 부트 자체를
+    // 즉시 완료해 마지막 중앙선에서 스토리 완성판으로 튀는 하드컷도 남기지 않는다.
+    if (gFxLevel == FX_OFF) { FinishBootIntro(); return; }
     // 누른 즉시 나는 소리. 전원 스위치를 젖힌 것이다.
     PlaySfxPitched(SFX_BOOT_LATCH, 2);
     SetTimer(gWindow, 10, FX_TIMER_MS, 0);
-}
-
-// 한 사건이 지나가며 남기는 충격. 같은 프레임에 겹치면 큰 쪽이 이긴다.
-static int BootKick(int elapsed, int at, int life, int peak) {
-    int since = elapsed - at;
-    if (since < 0 || since >= life) return 0;
-    return peak * (life - since) / life;
 }
 
 // 흔들림은 그림 쪽 카메라가 직접 맡는다 (DrawBootIntro의 kick). 창 전체까지 흔들면
@@ -1471,6 +1469,7 @@ static void BeginNewRun() {
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
     // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
+    CaptureUiFxSnapshot();
     BeginBootIntro(); InvalidateRect(gWindow, 0, FALSE);
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
 }
@@ -2413,7 +2412,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
             else InvalidateRect(window, 0, FALSE);
         }
         else if (wParam == 10u) {
-            int bootElapsed = ScenePace((int)(GetTickCount() - gBootStart));
+            int bootElapsed = BootPace((int)(GetTickCount() - gBootStart));
             int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
             while (gBootCue < cueCount && bootElapsed >= BOOT_CUES[gBootCue].at) {
                 PlaySfxPitched(BOOT_CUES[gBootCue].sfx, BOOT_CUES[gBootCue].pitch);

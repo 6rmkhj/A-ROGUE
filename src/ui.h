@@ -178,12 +178,18 @@ inline const wchar_t* MediaName(int media) {
 // 실제 속도는 그리기가 정한다 (WM_TIMER는 밀린 만큼 쌓이지 않는다).
 #define FX_TIMER_MS 8
 
-// 새 게임 삽입 · 볼륨 마운트 · 층 하강이 흐르는 속도(100 = 설계한 길이 그대로).
+// 볼륨 마운트 · 층 하강이 흐르는 속도(100 = 설계한 길이 그대로).
 // 구간 길이를 하나씩 늘리면 그 안에 박힌 짧은 오프셋(섬광 120ms, 큐 +240ms 등)이
 // 제자리에 남아 구간 끝에 빈 정지 화면이 생긴다. 그래서 시계를 늦춘다 - 그림·소리·
 // 타이머가 모두 이 함수로 경과 시간을 읽으므로 셋이 같은 비율로 느려진다.
 #define SCENE_PACE_PCT 130
 constexpr inline int ScenePace(int realMs) { return realMs * 100 / SCENE_PACE_PCT; }
+
+// 새 게임은 클릭 직후의 한 장면이라 다른 이동 연출처럼 30% 늘이면 첫 대사까지
+// 호흡이 지나치게 길어진다. 그림·효과음·종료 타이머가 모두 이 시계를 읽어
+// 설계한 6.32초 안에서 같은 박자로 끝난다.
+#define BOOT_PACE_PCT 100
+constexpr inline int BootPace(int realMs) { return realMs * 100 / BOOT_PACE_PCT; }
 
 // ---- 타이틀 진입 연출 ------------------------------------------------------
 // 전원이 들어오고 18개 섹터가 타 들어가면 그 불이 지나간 자리에서 서명 → 제목 →
