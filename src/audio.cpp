@@ -555,6 +555,7 @@ struct AudioGuard {
 static MusicState gMusic;
 static int gMusicEnabled = 1;
 static int gDuckFrames;
+static int gDuckGainQ = 1000 << 12;
 
 // 기본값을 최대치로 두지 않는다. 효과음이 스무 종 넘게 겹쳐 울리는 게임이라
 // 100%는 실제로 시끄럽다. 필요하면 설정에서 올린다.
@@ -606,9 +607,21 @@ static void MixFrames(short* out, int frames) {
         if (mv->position >= mv->length) mv->length = 0;
     }
     for (int i = 0; i < frames; ++i) {
-        int musicDuck = gDuckFrames > 0 ? 65 : 100;
+        // 효과음이 시작될 때 25ms에 걸쳐 자리를 내주고, 끝난 뒤에는 160ms 동안
+        // 천천히 돌아온다. 65↔100%를 한 샘플에 바꾸면 연속된 부트 큐마다 음악이
+        // 펌프처럼 출렁인다.
+        int targetQ = (gDuckFrames > 0 ? 650 : 1000) << 12;
+        int step = (350 << 12) / (SFX_RATE * (gDuckFrames > 0 ? 25 : 160) / 1000);
+        if (gDuckGainQ > targetQ) {
+            gDuckGainQ -= step;
+            if (gDuckGainQ < targetQ) gDuckGainQ = targetQ;
+        } else if (gDuckGainQ < targetQ) {
+            gDuckGainQ += step;
+            if (gDuckGainQ > targetQ) gDuckGainQ = targetQ;
+        }
+        int musicDuck = gDuckGainQ >> 12;
         int32_t sfx = accumulator[i] * gSfxVolume / 100;
-        int32_t bgm = music[i] * 26 / 100 * musicDuck / 100 * gMusicVolume / 100;
+        int32_t bgm = music[i] * 26 / 100 * musicDuck / 1000 * gMusicVolume / 100;
         int s = (sfx + bgm) * gAudioVolume / 100;
         if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
         out[i] = (short)s;
@@ -643,6 +656,7 @@ static DWORD WINAPI AudioThread(void*) {
 void AudioOpen(HWND window) {
     InitializeCriticalSection(&gAudioLock);
     MusicInit(&gMusic);
+    gDuckGainQ = 1000 << 12;
     WAVEFORMATEX format;
     ZeroMemory(&format, sizeof(format));
     format.wFormatTag = WAVE_FORMAT_PCM; format.nChannels = 1;

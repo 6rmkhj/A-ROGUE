@@ -125,7 +125,6 @@ VOLUME %s%s  ·  난이도 %s  ·  %s	VOLUME %s%s  ·  DIFFICULTY %s  ·  %s
 계산 %d / %d	CALCULATING %d / %d
 계산 완료 · 클릭 / Space로 계속	COMPLETE · Click / Space to continue
 클릭 / Space로 재생 건너뛰기	Click / Space to skip playback
-클릭 / 아무 키로 건너뛰기	Click or press any key to skip
 누적 피해 %d   ·   방어 +%d	TOTAL DAMAGE %d   ·   ARMOR +%d
 적 체력 %d → %d	ENEMY HP %d → %d
 내 체력 -%d	MY HP -%d
@@ -1667,3 +1666,4 @@ ROGUE / 연결됨	ROGUE / CONNECTED
 로그: 전부 지우면 굴릴 게 없어. 하나는 남겨.	Rogue: Delete them all and there's nothing to roll. Leave one.
 로그: 한도 안으로 들어왔어요. 이대로 진행해도 돼요.	Rogue: You are inside the limit now. You can go on.
 로그: 한도 안이야. 이대로 가도 돼.	Rogue: Inside the limit now. We can go.
+ESC / CLICK  건너뛰기	ESC / CLICK  SKIP

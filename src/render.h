@@ -47,7 +47,8 @@ int Track(int t, int fromMs, int toMs);   // 구간 진행도. 구간 밖은 0/1
 int Lerp(int a, int b, int p);
 int EaseOutCubic(int p);
 int EaseInCubic(int p);
-int EaseSmoothStep(int p);               // quintic: 양끝의 속도·가속도가 0
+// 양 끝에서 속도와 가속도가 모두 0인 5차 보간. 카메라 컷 사이를 이을 때 쓴다.
+int EaseSmoothStep(int p);
 int ShutterFall(int p);                   // 가속 낙하 뒤 두 번 작게 튀는 셔터 곡선
 // 정수 삼각함수. 각도는 1/10도, 결과는 천분율(-1000~1000)이다. 회전·소용돌이처럼
 // 각도가 필요한 연출이 부동소수 없이 쓸 수 있게 한다.
@@ -67,10 +68,9 @@ int  FxSnapshotHeld();
 // 구간에서 프레임마다 부르면, 정작 돌기 시작할 때 만들 것이 남아 있지 않다.
 void FxSnapshotWarm();
 void FxSnapshotBlit(HDC dc, const RECT& area, int dx, int dy, int keepPercent);
-// 회전 없이 화면 전체를 지정한 중심·가로세로 배율로 눌러 그린다.
-// 립 준비 상태에 의존하지 않아 임의의 고정 시각을 첫 프레임으로 그려도 결과가 같다.
-void FxSnapshotStretch(HDC dc, int deviceW, int deviceH, int cx, int cy,
-                       int scaleXMille, int scaleYMille);
+// 붙잡아 둔 판의 지정 영역을 목적 사각형에 그대로 접어 넣는다. 타이틀 화면이
+// 디스크 라벨의 신호선으로 수렴하는 매치 컷에 쓴다.
+void FxSnapshotStretch(HDC dc, const RECT& dest, const RECT& source);
 // 붙잡아 둔 판을 돌리면서 줄여 다시 얹는다 (돌리줌). 중심은 논리 좌표, 각도는
 // 1/10도, 배율은 천분율이고 가로·세로를 따로 주면 눌린다 (디스크가 뒤집힐 때 쓴다).
 // 회전은 장치 픽셀로 해야 어긋나지 않으므로 캔버스의 실제 크기를 함께 받는다.

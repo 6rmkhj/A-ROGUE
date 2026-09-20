@@ -179,8 +179,7 @@ inline void DrawTitleDisk(HDC dc, int x, int y, int back, COLORREF tone) {
 #define SCENE_ARRIVE_OPEN_MS 200
 #define SCENE_ARRIVE_MS      520
 
-inline void DrawSceneArrival(HDC dc, COLORREF tone, int major = 1) {
-    int t = SceneElapsed();
+inline void DrawSceneArrivalAt(HDC dc, COLORREF tone, int major, int t) {
     if (!FxDecorOn() || t < 0 || t >= SCENE_ARRIVE_MS) return;
     int stageTop = 68, cy = (stageTop + BASE_HEIGHT) / 2, half = (BASE_HEIGHT - stageTop) / 2;
     // 브라운관이 켜진다. 가운데 한 줄에서 위아래로 벌어지고 바깥은 잉크로 덮여
@@ -192,25 +191,38 @@ inline void DrawSceneArrival(HDC dc, COLORREF tone, int major = 1) {
         // 덮개는 처음 한순간 아직 달아올라 있다. 삽입 연출이 캔버스를 하얗게
         // 삼키며 끝나는데 다음 판이 곧장 잉크로 시작하면 그 사이가 흰색에서
         // 검은색으로 한 프레임에 튀어, 가장 큰 사건 바로 뒤에 깜빡임이 남는다.
-        COLORREF veil = MixColor(C_INK, C_TEXT, FxScale(26 * (1000 - Track(t, 0, 140)) / 1000));
+        // 회색 판으로 번쩍이지 않게 장면의 색을 품은 어두운 형광막으로 시작한다.
+        COLORREF veil = MixColor(C_INK, tone, FxScale(8 * (1000 - Track(t, 0, 140)) / 1000));
         Fill(dc, MakeRect(0, stageTop, BASE_WIDTH, cy - gap), veil);
         Fill(dc, MakeRect(0, cy + gap, BASE_WIDTH, BASE_HEIGHT), veil);
-        COLORREF lip = MixColor(C_INK, tone, FxScale(42 + 58 * (1000 - open) / 1000));
-        Fill(dc, MakeRect(0, cy - gap - 2, BASE_WIDTH, cy - gap), lip);
-        Fill(dc, MakeRect(0, cy + gap, BASE_WIDTH, cy + gap + 2), lip);
+        COLORREF lip = MixColor(C_INK, tone, FxScale(34 + 44 * (1000 - open) / 1000));
+        int lipWidth = t < 40 ? 1 : 2;
+        Fill(dc, MakeRect(0, cy - gap - lipWidth, BASE_WIDTH, cy - gap), lip);
+        Fill(dc, MakeRect(0, cy + gap, BASE_WIDTH, cy + gap + lipWidth), lip);
     }
     // 켜지는 순간의 번짐. 주사선 사이로만 밝히므로 판이 계속 보인다 - 통째로
     // 덮으면 이 채우기에는 알파가 없어 아무리 옅게 섞어도 판이 사라진다.
-    int bloom = 1000 - Track(t, 0, major ? 300 : 150);
+    // 닫힌 첫 프레임부터 전면 주사선을 밝히면 CRT가 아니라 회색 테스트 패턴으로
+    // 읽힌다. 중앙 심지가 선 뒤 32ms 숨을 두고 번짐이 올라왔다가 부드럽게 빠진다.
+    int bloomIn = EaseSmoothStep(Track(t, major ? 32 : 12, major ? 72 : 36));
+    int bloomOut = 1000 - EaseSmoothStep(Track(t, major ? 72 : 36, major ? 300 : 150));
+    int bloom = bloomIn * bloomOut / 1000;
     if (bloom > 0) {
-        COLORREF surge = MixColor(C_BG, C_TEXT, FxScale((major ? 44 : 18) * bloom / 1000));
+        COLORREF surge = MixColor(C_INK, tone, FxScale((major ? 30 : 18) * bloom / 1000));
         for (int y = stageTop + ((t / 40) & 1); y < BASE_HEIGHT; y += 3)
             Fill(dc, MakeRect(0, y, BASE_WIDTH, y + 1), surge);
     }
     // 머리띠를 훑고 지나가는 판독 헤드.
-    int p = EaseOutCubic(Track(t, 0, 420)), fade = 1000 - Track(t, 160, SCENE_ARRIVE_MS);
+    int headWake = EaseSmoothStep(Track(t, 24, 72));
+    int p = EaseOutCubic(Track(t, 24, 420)), fade = 1000 - Track(t, 160, SCENE_ARRIVE_MS);
     int head = Lerp(24, BASE_WIDTH - 24, p);
-    DrawLine(dc, head - 18, 71, head, 71, MixColor(C_BG, tone, FxScale(50 * fade / 1000)), 1);
+    if (headWake > 0)
+        DrawLine(dc, head - 18, 71, head, 71,
+                 MixColor(C_BG, tone, FxScale(50 * fade / 1000 * headWake / 1000)), 1);
+}
+
+inline void DrawSceneArrival(HDC dc, COLORREF tone, int major = 1) {
+    DrawSceneArrivalAt(dc, tone, major, SceneElapsed());
 }
 
 // Procedural reward emblems read as objects before the description is read.

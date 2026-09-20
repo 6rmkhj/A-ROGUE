@@ -965,27 +965,24 @@ static const struct BootCue { int at; int sfx; int pitch; } BOOT_CUES[] = {
     { BOOT_OPEN_AT + 520,     SFX_BOOT_PULSE,   3 },   // ★ C4
     { BOOT_TURN_AT - 160,     SFX_BOOT_LATCH,   2 },   // 셔터가 닫힌다
     { BOOT_TURN_AT,           SFX_BOOT_FLIP,    2 },   // 공중제비
-    { BOOT_TURN_AT + 300,     SFX_BOOT_SWALLOW, 2 },   // 카메라가 물러난다
+    { BOOT_TURN_AT + 80,      SFX_BOOT_REVEAL,  2 },   // 방과 기계가 한 번에 열린다
     { BOOT_TURN_AT + 420,     SFX_BOOT_FLIP,    5 },
     { BOOT_RISER_AT,          SFX_BOOT_RISER,   0 },   // ★ 1200ms 상승. 철컥에서 끝난다
     { BOOT_FEED_AT + 380,     SFX_BOOT_SLIDE,   0 },   // 슬롯 입구에 닿는다
     { BOOT_FEED_AT + 700,     SFX_BOOT_SLIDE,   4 },   // 빨려 들어간다
-    { BOOT_CLUNK_AT,          SFX_BOOT_LATCH,   0 },   // 철컥
-    { BOOT_CLUNK_AT,          SFX_BOOT_FORGE,   0 },
-    { BOOT_CLUNK_AT,          SFX_BOOT_TOLL,    0 },   // ★ 낮은 A
-    { BOOT_CLUNK_AT + 80,     SFX_BOOT_CHATTER, 0 },   // 드라이브가 읽는다
+    { BOOT_CLUNK_AT,          SFX_BOOT_LATCH,   0 },   // 철컥: 접점→몸통→근음 순서
+    { BOOT_CLUNK_AT + 18,     SFX_BOOT_FORGE,   0 },
+    { BOOT_CLUNK_AT + 42,     SFX_BOOT_TOLL,    0 },   // ★ 낮은 A
+    { BOOT_CLUNK_AT + 100,    SFX_BOOT_CHATTER, 0 },   // 드라이브가 읽는다
     { BOOT_POWER_AT,          SFX_BOOT_SEEK,    0 },
     { BOOT_POWER_AT + 40,     SFX_BOOT_POWER,   2 },   // 브라운관이 끊겼다 붙는다
-    { BOOT_POWER_AT + 160,    SFX_BOOT_STINGER, 0 },   // ★ 화면이 켜진다
-    { BOOT_POWER_AT + 160,    SFX_BOOT_REVEAL,  0 },
-    { BOOT_POWER_AT + 180,    SFX_BOOT_POWER,   5 },
-    { BOOT_POWER_AT + 320,    SFX_BOOT_POWER,   3 },
-    { BOOT_POWER_AT + 460,    SFX_BOOT_LOCK,    0 },   // ★ 제목이 선다
+    { BOOT_POWER_AT + 150,    SFX_BOOT_STINGER, 0 },   // ★ 화면이 켜진다
+    { BOOT_POWER_AT + 300,    SFX_BOOT_POWER,   3 },
+    { BOOT_POWER_AT + 440,    SFX_BOOT_LOCK,    0 },   // ★ 18개 섹터와 제목이 선다
     { BOOT_DIVE_AT,           SFX_BOOT_TEAR,    2 },   // 숨을 들이켠다
-    { BOOT_DIVE_AT + 180,     SFX_BOOT_SWALLOW, 0 },   // 빨려 든다
-    { BOOT_DIVE_AT + 180,     SFX_BOOT_VORTEX,  0 },
-    { BOOT_INTRO_MS - 200,    SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 런으로 넘어가며 계속 운다
-    { BOOT_INTRO_MS - 140,    SFX_BOOT_FORGE,   2 },
+    { BOOT_INTRO_MS - 780,    SFX_BOOT_VORTEX,  0 },
+    { BOOT_INTRO_MS - 720,    SFX_BOOT_SWALLOW, 0 },   // 빨려 든다
+    { BOOT_INTRO_MS - 264,    SFX_BOOT_RESOLVE, 0 },   // ★ 닫는 화음. 브리지 전체에 남는다
 };
 static int gBootCue;
 
@@ -1000,27 +997,37 @@ static void FinishBootIntro() {
     AttachNarrative(&gGame, &gCampaign.narrative);
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
     SyncNarrativeControls();
-    PlaySfx(SFX_BOOT);
     InvalidateRect(gWindow, 0, FALSE);
 }
 
 static void BeginBootIntro() {
     if (gBootActive) return;
-    // 입력을 받은 바로 그 프레임을 먼저 보관한다. gBootActive를 세운 뒤 다음
-    // WM_PAINT에서 잡으면 장면 시계가 초기화되어 타이틀의 진입 마스크가 다시
-    // 나타난 판을 붙잡게 된다.
-    if (!FxSnapshotHeld()) CaptureUiFxSnapshot();
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
+    // 누른 바로 그 프레임을 디스크 라벨로 접는다. 이벤트 시점에 캔버스가 아직
+    // 없다면 첫 페인트에서 잡는 기존 경로가 안전망이 된다.
+    if (!FxSnapshotHeld()) CaptureUiFxSnapshot();
     gBootSeed = GetTickCount() ^ (uint32_t)(ULONG_PTR)gWindow;
     gBootCue = 0;
     gBootStart = GetTickCount();
     gBootActive = 1;
-    // 연출 끄기는 장식만 빼고 6초를 기다리는 모드가 아니다. 부트 자체를
-    // 즉시 완료해 마지막 중앙선에서 스토리 완성판으로 튀는 하드컷도 남기지 않는다.
+    // 움직이는 장식을 끈 사용자는 긴 검은 연출을 기다리지 않고 곧장 진입한다.
     if (gFxLevel == FX_OFF) { FinishBootIntro(); return; }
     // 누른 즉시 나는 소리. 전원 스위치를 젖힌 것이다.
     PlaySfxPitched(SFX_BOOT_LATCH, 2);
     SetTimer(gWindow, 10, FX_TIMER_MS, 0);
+}
+
+static void RequestBootSkip() {
+    if (!gBootActive) return;
+    DWORD now = GetTickCount();
+    int bridgeAt = BOOT_INTRO_MS - 264;
+    int elapsed = BootPace((int)(now - gBootStart));
+    if (elapsed < bridgeAt) {
+        gBootStart = now - bridgeAt * BOOT_PACE_PCT / 100;
+        int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
+        while (gBootCue < cueCount && BOOT_CUES[gBootCue].at < bridgeAt) ++gBootCue;
+    }
+    InvalidateRect(gWindow, 0, FALSE);
 }
 
 // 흔들림은 그림 쪽 카메라가 직접 맡는다 (DrawBootIntro의 kick). 창 전체까지 흔들면
@@ -1468,8 +1475,10 @@ static void BeginNewRun() {
     FinishUiFx();
     gStrikeFired = 0; gFxSfxFired = 0; gPlayerHitAt = 0; gLastGaspAt = 0;
     for (int i = 0; i < 3; ++i) { gEnemyStrikeAt[i] = 0; gEnemyStrikeDamage[i] = 0; }
-    // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
+    // 입력 직전 캔버스를 먼저 붙잡는다. 다음 WM_PAINT까지 미루면 hover가 풀리거나
+    // 장면 시계가 재설정된 한 프레임이 들어와 매치 컷의 첫 장이 튄다.
     CaptureUiFxSnapshot();
+    // 판을 갈아엎는 것은 연출이 끝날 때다. 그때까지 화면에는 누르기 직전의 판이 남는다.
     BeginBootIntro(); InvalidateRect(gWindow, 0, FALSE);
     for (int i = 0; i < ENEMY_KIND_COUNT; ++i) if (gCodex[i]) gGame.enemyScanned[i] = 1;
 }
@@ -1909,7 +1918,7 @@ static void HandleClick(int x, int y) {
     int skippedOne = 0;
     // The click that skips the entrance belongs to that cinematic. Consuming it
     // here prevents the same click from dismissing ROGUE's first spoken line.
-    if (gBootActive) { FinishBootIntro(); return; }
+    if (gBootActive) { RequestBootSkip(); return; }
     else if (gTurnTraceActive) { FinishTurnTrace(); skippedOne = 1; }
     else if (gDescentActive) { FinishDescent(); skippedOne = 1; }
     else if (gDirEnterActive) { FinishDirectoryEnter(); skippedOne = 1; }
@@ -2160,7 +2169,7 @@ static void HandleKey(WPARAM key) {
         return;
     }
     if (gDeathActive) { if (DeathElapsed() >= DEATH_DARK_AT) FinishDeath(); return; }
-    if (gBootActive) { FinishBootIntro(); return; }
+    if (gBootActive) { RequestBootSkip(); return; }
     if (UiFxBlocksInput()) return;
     if (gTurnTraceActive) {
         if (key == VK_SPACE || key == VK_RETURN) FinishTurnTrace();
