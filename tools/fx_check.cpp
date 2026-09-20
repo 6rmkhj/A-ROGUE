@@ -121,7 +121,8 @@ static uint32_t FrameHash(void* bits, int width, int height) {
 
 static void ResetPresentation() {
     gReadActive = gTurnTraceActive = gDeathActive = gCombatClearActive = 0;
-    gDescentActive = gDirEnterActive = gBootActive = gFxActive = 0;
+    gDescentActive = gDirEnterActive = gBootActive = gBootSkipping = gFxActive = 0;
+    gBootCue = 0;
     gGuideOpen = gSettingsOpen = gDeckOpen = 0;
     gUiFx.kind = UIFX_NONE; gRolled = 0;
     gUiFocus = {-1, -1, -1, -1, 0, 0};
@@ -655,7 +656,7 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
     if (FrameHash(bits, w, h) != finalBootHash) {
         printf("FAIL: boot exit does not match scene arrival\n"); return 0;
     }
-    for (int mode = FX_REDUCED; mode <= FX_FULL; ++mode) {
+    for (int mode = FX_FULL; mode <= FX_REDUCED; ++mode) {
         ResetPresentation(); InitTitle(&gGame, 0, 0); gFxLevel = mode;
         gCheckTick = 10000; gSceneKey = VisibleSceneKey();
         gSceneStart = gCheckTick - (TITLE_SETTLE_AT + 600); DrawFixture(dc);
@@ -677,8 +678,66 @@ static int CheckWideStageFrames(HDC dc, void* bits, int w, int h, const char* fo
         }
         *frames += 3;
     }
+    // 소환·비행·점등 중 실제 입력 경로로 건너뛴다. 첫 프레임은 입력 직전의
+    // 캔버스여야 하며, 닫힌 마지막 프레임만 새 런의 도착 프레임과 같아야 한다.
+    static const int skipAges[] = {520, BOOT_TURN_AT + 400, BOOT_POWER_AT + 700};
+    for (int mode = FX_FULL; mode <= FX_REDUCED; ++mode) {
+        for (int i = 0; i < (int)(sizeof(skipAges) / sizeof(skipAges[0])); ++i) {
+            ResetPresentation(); InitTitle(&gGame, 0, 0); gFxLevel = mode;
+            gCheckTick = 10000; gSceneKey = VisibleSceneKey();
+            gSceneStart = gCheckTick - (TITLE_SETTLE_AT + 600); DrawFixture(dc);
+            FxSnapshotCapture(dc, w, h);
+            gBootActive = 1; gBootStart = 10000; gBootSeed = 12345u;
+            gCheckTick = 10000 + skipAges[i] * BOOT_PACE_PCT / 100;
+            GameState beforeSkip = gGame;
+            DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); ++*frames;
+            uint32_t skipHash = FrameHash(bits, w, h);
+            // CaptureUiFxSnapshot은 실제 페인트 캔버스를 읽는다. offscreen DIB를
+            // 잠시 그 자리에 연결하여 RequestBootSkip의 캡처까지 검증한다.
+            HDC canvas = gCanvasDc;
+            int canvasW = gCanvasW, canvasH = gCanvasH;
+            gCanvasDc = dc; gCanvasW = w; gCanvasH = h;
+            RequestBootSkip();
+            gCanvasDc = canvas; gCanvasW = canvasW; gCanvasH = canvasH;
+            if (!gBootSkipping || !FxSnapshotHeld()
+                || BootPace((int)(gCheckTick - gBootStart)) != BOOT_INTRO_MS - 264) {
+                printf("FAIL: boot skip mode %d age %d did not begin its bridge\n", mode, skipAges[i]); return 0;
+            }
+            DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); ++*frames;
+            if (FrameHash(bits, w, h) != skipHash) {
+                printf("FAIL: boot skip mode %d age %d changed the input frame\n", mode, skipAges[i]); return 0;
+            }
+            DWORD skipStart = gBootStart;
+            gCheckTick += 96 * BOOT_PACE_PCT / 100;
+            RequestBootSkip();
+            if (gBootStart != skipStart) {
+                printf("FAIL: repeated boot skip restarted its bridge\n"); return 0;
+            }
+            DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); ++*frames;
+            if (folder && mode == FX_FULL) {
+                char name[96]; sprintf_s(name, "stage_boot_skip_%d", i);
+                if (!SaveFrame(folder, name, w, h, bits)) return 0;
+            }
+            gCheckTick = gBootStart + BOOT_INTRO_MS * BOOT_PACE_PCT / 100;
+            DrawFixture(dc); DrawBootIntro(dc, BASE_WIDTH, BASE_HEIGHT); ++*frames;
+            uint32_t skipExitHash = FrameHash(bits, w, h);
+            if (memcmp(&gGame, &beforeSkip, sizeof(gGame))) {
+                printf("FAIL: boot skip mutated game before completion\n"); return 0;
+            }
+            FinishBootIntro();
+            if (gBootActive || gBootSkipping || FxSnapshotHeld()) {
+                printf("FAIL: boot skip completion left presentation state active\n"); return 0;
+            }
+            gSceneKey = VisibleSceneKey(); gSceneStart = gCheckTick;
+            DrawFixture(dc); DrawSceneArrivalAt(dc, C_GREEN, 1, 0); ++*frames;
+            if (FrameHash(bits, w, h) != skipExitHash) {
+                printf("FAIL: boot skip mode %d age %d exit seam\n", mode, skipAges[i]); return 0;
+            }
+        }
+    }
     ResetPresentation();
     FxSnapshotDestroy();
+    DestroyBootFilm();
     return 1;
 }
 

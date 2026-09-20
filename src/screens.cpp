@@ -1,6 +1,7 @@
 #include <windows.h>
 #include "ui.h"
 #include "render.h"
+#include "boot_film.h"
 #include "audio.h"
 #include "fx_draw.h"
 #include "presentation.h"
@@ -4249,6 +4250,37 @@ void DrawBootIntro(HDC dc, int width, int height) {
     if (t < 0) t = 0;
     if (t > BOOT_INTRO_MS) t = BOOT_INTRO_MS;
     RECT full = MakeRect(0, 0, width, height);
+    // 건너뛰기는 방금 보고 있던 판 위에서 닫는다. 타임라인만 돌입 끝으로
+    // 옮기면 클릭 순간에 아직 보지 않은 미래 CRT 프레임으로 튀게 된다.
+    if (gBootSkipping && FxSnapshotHeld()) {
+        FxSnapshotStretch(dc, full, full);
+        DrawBootArrivalBridge(dc, full, t);
+        return;
+    }
+    // Higgsfield의 조명/재질 렌더도 같은 시계와 HDC를 쓴다. 양 끝 합성은
+    // 게임이 직접 맡아 실제 클릭 화면과 다음 장면의 픽셀 연결을 유지한다.
+    if (FxDecorOn() && DrawBootFilm(dc, width, height, t, gFxLevel == FX_REDUCED)) {
+        // Exported camera-space label centres, in 1/10000 of the master.
+        // Follow the same 30 fps sample as the film, including its rising disk.
+        static const POINT labelTrack[] = {
+            {4949,9554},{4949,9538},{4950,9494},{4950,9424},{4951,9331},
+            {4952,9216},{4953,9083},{4954,8934},{4956,8772},{4958,8599},
+            {4960,8417},{4963,8230},{4966,8041},{4969,7851},{4973,7664},
+            {4976,7484},{4980,7312},{4983,7152},{4987,7006},{4990,6880},
+            {4993,6774},{4995,6693},{4997,6641},{4998,6619},{4999,6626}
+        };
+        int labelFrame = t * 30 / 1000;
+        if (labelFrame > 24) labelFrame = 24;
+        POINT label = {width * labelTrack[labelFrame].x / 10000,
+                       height * labelTrack[labelFrame].y / 10000};
+        DrawBootHandoff(dc, full, t, label);
+        if (t > 900 && t < BOOT_INTRO_MS - 420)
+            TextRect(dc, MakeRect(width - 286, height - 34, width - 18, height - 10),
+                     L"ESC / CLICK  건너뛰기", MixColor(C_INK, C_DIM, 58), gFontSmall,
+                     DT_RIGHT | DT_SINGLELINE);
+        DrawBootArrivalBridge(dc, full, t);
+        return;
+    }
     DrawBootRoom(dc, width, height, t);
 
     // ---- 구간 진행도 ----

@@ -1,3 +1,6 @@
 // 앱 아이콘. src/arogue.ico 는 tools/gen_icon.py 가 도트 그림에서 생성한다.
 // 리소스 ID 1 — main.cpp 의 창 클래스가 MAKEINTRESOURCE(1) 로 읽는다.
 1 ICON "arogue.ico"
+
+// Silent, independently decodable JPEG frames; no external video runtime.
+201 RCDATA "../assets/boot_intro.arvf"

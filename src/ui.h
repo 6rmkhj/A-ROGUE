@@ -369,7 +369,7 @@ extern int gBossIntroActive;
 extern DWORD gBossIntroStart;
 // 새 게임: 화면이 디스크로 빨려 들어가 드라이브에 꽂힐 때까지. 이 연출이 도는
 // 동안 판은 아직 누르기 직전 그대로다 (런은 연출이 끝날 때 만들어진다).
-extern int gBootActive;
+extern int gBootActive, gBootSkipping;
 extern DWORD gBootStart;
 // 체력 0 이후의 사망 연출. 끝나면 그 마지막 프레임이 사망 화면으로 남는다.
 extern int gDeathActive;

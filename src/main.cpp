@@ -5,6 +5,7 @@
 #include "ui.h"
 #include "render.h"
 #include "audio.h"
+#include "boot_film.h"
 #include "music.h"
 #include "localization.h"
 #include "campaign.h"
@@ -946,7 +947,7 @@ static void BeginBossIntro() {
 // 새 게임은 즉시 넘어가지 않는다. 디스크가 드라이브에 물리고 제목이 박힌 뒤에야
 // 런이 만들어진다. 런을 끝에서 만드는 이유는 건너뛰어도 결과가 같아야 하기
 // 때문이다 (FinishBootIntro).
-int gBootActive;
+int gBootActive, gBootSkipping;
 DWORD gBootStart;
 static uint32_t gBootSeed;
 
@@ -988,7 +989,7 @@ static int gBootCue;
 
 static void FinishBootIntro() {
     if (!gBootActive) return;
-    gBootActive = 0;
+    gBootActive = gBootSkipping = 0;
     KillTimer(gWindow, 10);
     FxSnapshotRelease();
     NewRun(&gGame, gBootSeed, CampaignClearedMask(&gCampaign));
@@ -1002,6 +1003,7 @@ static void FinishBootIntro() {
 
 static void BeginBootIntro() {
     if (gBootActive) return;
+    gBootSkipping = 0;
     gGuideOpen = 0; gSettingsOpen = 0; gDeckOpen = 0; gRestartArmed = 0; gCampaignResetArmed = 0;
     // 누른 바로 그 프레임을 디스크 라벨로 접는다. 이벤트 시점에 캔버스가 아직
     // 없다면 첫 페인트에서 잡는 기존 경로가 안전망이 된다.
@@ -1023,6 +1025,10 @@ static void RequestBootSkip() {
     int bridgeAt = BOOT_INTRO_MS - 264;
     int elapsed = BootPace((int)(now - gBootStart));
     if (elapsed < bridgeAt) {
+        // 건너뛴 순간의 완성 프레임 위에서 셔터를 닫는다. 시간만 옮기면
+        // 아직 보지 않은 CRT 돌입 장면으로 먼저 잘려 들어간다.
+        CaptureUiFxSnapshot();
+        gBootSkipping = 1;
         gBootStart = now - bridgeAt * BOOT_PACE_PCT / 100;
         int cueCount = (int)(sizeof(BOOT_CUES) / sizeof(BOOT_CUES[0]));
         while (gBootCue < cueCount && BOOT_CUES[gBootCue].at < bridgeAt) ++gBootCue;
@@ -2468,6 +2474,7 @@ static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam
         KillTimer(window, 6); KillTimer(window, 7); KillTimer(window, 8); KillTimer(window, 9);
         KillTimer(window, 10); KillTimer(window, UIFX_TIMER_ID); KillTimer(window, BOSS_INTRO_TIMER_ID);
         if (gNarrativeNameBrush) { DeleteObject(gNarrativeNameBrush); gNarrativeNameBrush = 0; }
+        DestroyBootFilm();
         DestroyRenderFonts();
         AudioClose(); PostQuitMessage(0); return 0;
     }
