@@ -1,0 +1,4 @@
+# Local-only: regenerable extraction cache and machine-specific interpreter/root paths
+cache/
+.graphify_python
+.graphify_root
